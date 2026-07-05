@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Account, Party, Item, Voucher, VoucherLine, StockLine, Company } from '@/types'
+import { normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
@@ -110,7 +111,27 @@ export async function updateItem(id: string, updates: Partial<Item>) {
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
-  const { data, error } = await supabase
+  const query = supabase
+    .from('vouchers')
+    .select(`
+      *,
+      lines:voucher_lines(*),
+      stock_lines:stock_lines(*),
+      invoice_items:invoice_items(*)
+    `)
+    .eq('company_id', company_id)
+
+  const { data, error } = await query
+    .order('date_bs_key', { ascending: false })
+    .order('seq', { ascending: false })
+
+  if (!error) {
+    return (data || [])
+      .map(v => normalizeVoucherDates(v) as Voucher)
+      .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
+  }
+
+  const { data: legacyData, error: legacyError } = await supabase
     .from('vouchers')
     .select(`
       *,
@@ -121,8 +142,10 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
     .eq('company_id', company_id)
     .order('date', { ascending: false })
     .order('seq', { ascending: false })
-  if (error) throw error
-  return data || []
+  if (legacyError) throw legacyError
+  return (legacyData || [])
+    .map(v => normalizeVoucherDates(v) as Voucher)
+    .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
 }
 
 export async function getNextSeq(company_id: string): Promise<number> {

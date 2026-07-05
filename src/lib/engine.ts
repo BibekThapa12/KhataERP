@@ -2,6 +2,7 @@ import type {
   Account, AccountType, Voucher, VoucherLine, StockLine,
   TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item
 } from '@/types'
+import { makeBsKey } from '@/lib/nepaliDate'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -46,7 +47,7 @@ export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balan
 export function recomputeAllBalances(accounts: Account[], vouchers: Voucher[]): Account[] {
   const byId = new Map(accounts.map(a => [a.id, { ...a, balance: a.opening_balance || 0 }]))
   const sorted = [...vouchers].sort((a, b) =>
-    new Date(a.date).getTime() - new Date(b.date).getTime() || a.seq - b.seq
+    (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
   )
   for (const v of sorted) {
     if (v.cancelled || !v.lines) continue
@@ -71,7 +72,7 @@ export function recomputeStock(items: Item[], vouchers: Voucher[]): StockEntry[]
     value: round2((i.opening_qty || 0) * (i.opening_rate || 0)),
   }]))
   const sorted = [...vouchers].sort((a, b) =>
-    new Date(a.date).getTime() - new Date(b.date).getTime() || a.seq - b.seq
+    (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
   )
   for (const v of sorted) {
     if (v.cancelled || !v.stock_lines) continue
@@ -103,7 +104,8 @@ interface InvoiceParams {
   vat_rate: number
   discount?: number
   narration?: string
-  date: string
+  date?: string
+  date_bs?: string
   invoice_no?: string
 }
 
@@ -204,7 +206,12 @@ export function computeBalanceSheet(accounts: Account[], net_profit: number, clo
 }
 
 export function computeVatReport(vouchers: Voucher[], from_date: string, to_date: string): VatReport {
-  const in_range = vouchers.filter(v => !v.cancelled && v.date >= from_date && v.date <= to_date)
+  const fromKey = makeBsKey(from_date)
+  const toKey = makeBsKey(to_date)
+  const in_range = vouchers.filter(v => {
+    const key = v.date_bs_key || makeBsKey(v.date_bs)
+    return !v.cancelled && key >= fromKey && key <= toKey
+  })
   const sales = in_range.filter(v => v.type === 'Sales')
   const purchases = in_range.filter(v => v.type === 'Purchase')
   const output_vat = round2(sales.reduce((s, v) => s + (v.vat_amount || 0), 0))

@@ -62,6 +62,9 @@ create table if not exists vouchers (
   company_id       uuid not null references companies(id) on delete cascade,
   type             text not null check (type in ('Sales','Purchase','Receipt','Payment','Journal')),
   date             date not null,
+  date_ad          date not null,
+  date_bs          text not null,
+  date_bs_key      integer not null,
   invoice_no       text,
   narration        text,
   party_account_id text references accounts(id),
@@ -75,6 +78,14 @@ create table if not exists vouchers (
   seq              integer not null,
   created_at       timestamptz not null default now()
 );
+
+-- Existing databases created before Nepali-date support can run this file again.
+-- Old rows may keep date_bs/date_bs_key null until re-saved/imported; the app
+-- normalizes them from the legacy AD date while displaying.
+alter table vouchers add column if not exists date_ad date;
+alter table vouchers add column if not exists date_bs text;
+alter table vouchers add column if not exists date_bs_key integer;
+update vouchers set date_ad = coalesce(date_ad, date) where date_ad is null;
 
 -- ── Voucher Lines (double-entry ledger rows) ──────────────────────────────────
 create table if not exists voucher_lines (
@@ -109,6 +120,7 @@ create index if not exists idx_accounts_company   on accounts(company_id);
 create index if not exists idx_parties_company    on parties(company_id);
 create index if not exists idx_items_company      on items(company_id);
 create index if not exists idx_vouchers_company   on vouchers(company_id, date desc, seq desc);
+create index if not exists idx_vouchers_company_bs on vouchers(company_id, date_bs_key desc, seq desc);
 create index if not exists idx_vlines_voucher     on voucher_lines(voucher_id);
 create index if not exists idx_slines_voucher     on stock_lines(voucher_id);
 create index if not exists idx_iitems_voucher     on invoice_items(voucher_id);

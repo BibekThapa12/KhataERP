@@ -1,11 +1,13 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { fmtMoney, todayISO } from '@/lib/utils'
+import { fmtMoney } from '@/lib/utils'
+import { todayBs } from '@/lib/nepaliDate'
 import { round2 } from '@/lib/engine'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import type { Item } from '@/types'
@@ -104,7 +106,7 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
   const partyType = isReceipt ? 'customer' : 'supplier'
   const partyList = parties.filter(p => p.type === partyType)
 
-  const [date, setDate] = useState(todayISO())
+  const [dateBs, setDateBs] = useState(todayBs())
   const [partyAccountId, setPartyAccountId] = useState('')
   const [amount, setAmount] = useState('')
   const [mode, setMode] = useState<'cash' | 'bank'>('cash')
@@ -113,7 +115,7 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!open) { setDate(todayISO()); setPartyAccountId(''); setAmount(''); setMode('cash'); setNarration(''); setError('') }
+    if (!open) { setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMode('cash'); setNarration(''); setError('') }
   }, [open])
 
   const handleSave = async () => {
@@ -122,8 +124,8 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
     if (!amt || amt <= 0) { setError('Enter a valid amount.'); return }
     setSaving(true)
     try {
-      if (isReceipt) await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date })
-      else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date })
+      if (isReceipt) await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
+      else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -137,7 +139,7 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Date</Label>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+            <NepaliDateInput value={dateBs} onChange={setDateBs} />
           </div>
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Received from' : 'Paid to'}</Label>
@@ -189,7 +191,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
   const { accounts, saveJournal } = useAppStore()
   const nonPartyAccounts = accounts.filter(a => !a.is_party)
 
-  const [date, setDate] = useState(todayISO())
+  const [dateBs, setDateBs] = useState(todayBs())
   const [jLines, setJLines] = useState<JLine[]>([
     { account_id: '', debit: 0, credit: 0 },
     { account_id: '', debit: 0, credit: 0 },
@@ -200,7 +202,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
 
   useEffect(() => {
     if (!open) {
-      setDate(todayISO())
+      setDateBs(todayBs())
       setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
       setNarration('')
       setError('')
@@ -226,7 +228,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
     setSaving(true)
     try {
-      await saveJournal({ lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date })
+      await saveJournal({ lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs })
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -243,7 +245,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Date</Label>
-            <Input type="date" value={date} onChange={e => setDate(e.target.value)} className="max-w-[180px]" />
+            <NepaliDateInput value={dateBs} onChange={setDateBs} className="max-w-[180px]" />
           </div>
 
           {/* Lines header */}

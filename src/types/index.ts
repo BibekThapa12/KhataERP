@@ -78,6 +78,9 @@ export interface Voucher {
   company_id: string
   type: VoucherType
   date: string
+  date_ad: string
+  date_bs: string
+  date_bs_key: number
   invoice_no?: string
   narration?: string
   party_account_id?: string

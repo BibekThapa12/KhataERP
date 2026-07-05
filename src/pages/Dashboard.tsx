@@ -2,7 +2,7 @@ import { useMemo } from 'react'
 import { TrendingUp, TrendingDown, Wallet, Package } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeVatReport } from '@/lib/engine'
-import { fmtMoney, fmtDate } from '@/lib/utils'
+import { fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
@@ -32,7 +32,7 @@ export function Dashboard() {
   const netVat = vatPayable - vatReceivable
 
   const recent = [...vouchers].filter(v => !v.cancelled)
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
     .slice(0, 10)
 
   const lowStockItems = useAppStore(s => s.items).filter(item => {

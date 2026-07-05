@@ -23,6 +23,7 @@ export function fmtMoney(n: number | undefined | null): string {
 
 export function fmtDate(d: string | undefined): string {
   if (!d) return ''
+  if (/^\d{4}-\d{2}-\d{2}$/.test(d)) return d
   return new Date(d).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
 }
 

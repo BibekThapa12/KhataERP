@@ -2,14 +2,15 @@
 import { useState, useMemo } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport } from '@/lib/engine'
-import { fmtMoney, fmtDate, firstOfMonthISO, todayISO } from '@/lib/utils'
+import { fmtMoney } from '@/lib/utils'
+import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import type { Account } from '@/types'
 
 function ReportTable({
@@ -218,9 +219,9 @@ export function BalanceSheetPage() {
 // ─── VAT Report ───────────────────────────────────────────────────────────────
 export function VatReportPage() {
   const vouchers = useAppStore(s => s.vouchers)
-  const [from, setFrom] = useState(firstOfMonthISO())
-  const [to, setTo] = useState(todayISO())
-  const [applied, setApplied] = useState({ from: firstOfMonthISO(), to: todayISO() })
+  const [from, setFrom] = useState(firstOfCurrentBsMonth())
+  const [to, setTo] = useState(todayBs())
+  const [applied, setApplied] = useState({ from: firstOfCurrentBsMonth(), to: todayBs() })
 
   const vat = useMemo(() => computeVatReport(vouchers, applied.from, applied.to), [vouchers, applied])
 
@@ -234,11 +235,11 @@ export function VatReportPage() {
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1.5">
                 <Label>From</Label>
-                <Input type="date" value={from} onChange={e => setFrom(e.target.value)} className="w-40" />
+                <NepaliDateInput value={from} onChange={setFrom} className="w-40" />
               </div>
               <div className="space-y-1.5">
                 <Label>To</Label>
-                <Input type="date" value={to} onChange={e => setTo(e.target.value)} className="w-40" />
+                <NepaliDateInput value={to} onChange={setTo} className="w-40" />
               </div>
               <Button onClick={() => setApplied({ from, to })}>Apply</Button>
             </div>
@@ -263,7 +264,7 @@ export function VatReportPage() {
           <CardHeader className="pb-2"><CardTitle className="text-base">Transactions in range</CardTitle></CardHeader>
           <CardContent className="p-0 pb-2">
             <VoucherTable
-              vouchers={[...vat.sales, ...vat.purchases].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())}
+              vouchers={[...vat.sales, ...vat.purchases].sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)}
               showActions={false}
             />
           </CardContent>

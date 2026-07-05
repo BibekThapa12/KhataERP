@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Plus } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -7,11 +7,21 @@ import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import type { VoucherType } from '@/types'
+
+function useVouchersByType(type: VoucherType) {
+  const allVouchers = useAppStore(s => s.vouchers)
+  return useMemo(
+    () => allVouchers
+      .filter(v => v.type === type)
+      .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq),
+    [allVouchers, type]
+  )
+}
 
 // ─── Sales ────────────────────────────────────────────────────────────────────
 export function SalesPage() {
-  const vouchers = useAppStore(s => s.vouchers.filter(v => v.type === 'Sales'))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.seq - a.seq)
+  const vouchers = useVouchersByType('Sales')
   const [open, setOpen] = useState(false)
   return (
     <div>
@@ -27,8 +37,7 @@ export function SalesPage() {
 
 // ─── Purchase ─────────────────────────────────────────────────────────────────
 export function PurchasePage() {
-  const vouchers = useAppStore(s => s.vouchers.filter(v => v.type === 'Purchase'))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.seq - a.seq)
+  const vouchers = useVouchersByType('Purchase')
   const [open, setOpen] = useState(false)
   return (
     <div>
@@ -44,8 +53,7 @@ export function PurchasePage() {
 
 // ─── Receipts ─────────────────────────────────────────────────────────────────
 export function ReceiptsPage() {
-  const vouchers = useAppStore(s => s.vouchers.filter(v => v.type === 'Receipt'))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.seq - a.seq)
+  const vouchers = useVouchersByType('Receipt')
   const [open, setOpen] = useState(false)
   return (
     <div>
@@ -61,8 +69,7 @@ export function ReceiptsPage() {
 
 // ─── Payments ─────────────────────────────────────────────────────────────────
 export function PaymentsPage() {
-  const vouchers = useAppStore(s => s.vouchers.filter(v => v.type === 'Payment'))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.seq - a.seq)
+  const vouchers = useVouchersByType('Payment')
   const [open, setOpen] = useState(false)
   return (
     <div>
@@ -78,8 +85,7 @@ export function PaymentsPage() {
 
 // ─── Journal ──────────────────────────────────────────────────────────────────
 export function JournalPage() {
-  const vouchers = useAppStore(s => s.vouchers.filter(v => v.type === 'Journal'))
-    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime() || b.seq - a.seq)
+  const vouchers = useVouchersByType('Journal')
   const [open, setOpen] = useState(false)
   return (
     <div>

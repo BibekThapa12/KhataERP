@@ -11,6 +11,7 @@ import {
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
   validateBalanced,
 } from '@/lib/engine'
+import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
 
 interface AppState {
   // Auth
@@ -45,12 +46,22 @@ interface AppState {
   addItem: (data: { name: string; unit: string; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number }) => Promise<Item>
   addAccount: (data: { name: string; type: Account['type']; group: string }) => Promise<Account>
 
-  saveSalesVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date: string }) => Promise<void>
-  savePurchaseVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date: string }) => Promise<void>
-  saveReceipt: (params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date: string }) => Promise<void>
-  savePayment: (params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date: string }) => Promise<void>
-  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date: string }) => Promise<void>
+  saveSalesVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  savePurchaseVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  saveReceipt: (params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
+  savePayment: (params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
+  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
   cancelV: (id: string) => Promise<void>
+}
+
+function voucherDateFields(date_bs: string) {
+  const date_ad = bsToAd(date_bs)
+  return {
+    date: date_ad,
+    date_ad,
+    date_bs,
+    date_bs_key: makeBsKey(date_bs),
+  }
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -167,8 +178,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextInvoiceNo(company.id, 'Sales')
+    const dateFields = voucherDateFields(params.date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, date: params.date, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,
@@ -186,8 +198,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildPurchaseVoucherData(params)
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextInvoiceNo(company.id, 'Purchase')
+    const dateFields = voucherDateFields(params.date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, date: params.date, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,
@@ -199,13 +212,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Receipt ────────────────────────────────────────────────────────────────
-  saveReceipt: async ({ party_account_id, amount, deposit_to, narration, date }) => {
+  saveReceipt: async ({ party_account_id, amount, deposit_to, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
     const data = buildReceiptData(party_account_id, amount, deposit_to)
     const seq = await getNextSeq(company.id)
+    const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Receipt', seq, date, narration, party_account_id, is_cash: deposit_to === 'cash', total: amount, cancelled: false },
+      voucher: { company_id: company.id, type: 'Receipt', seq, ...dateFields, narration, party_account_id, is_cash: deposit_to === 'cash', total: amount, cancelled: false },
       lines: data.lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -214,13 +228,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Payment ────────────────────────────────────────────────────────────────
-  savePayment: async ({ party_account_id, amount, paid_from, narration, date }) => {
+  savePayment: async ({ party_account_id, amount, paid_from, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
     const data = buildPaymentData(party_account_id, amount, paid_from)
     const seq = await getNextSeq(company.id)
+    const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Payment', seq, date, narration, party_account_id, is_cash: paid_from === 'cash', total: amount, cancelled: false },
+      voucher: { company_id: company.id, type: 'Payment', seq, ...dateFields, narration, party_account_id, is_cash: paid_from === 'cash', total: amount, cancelled: false },
       lines: data.lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -229,14 +244,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Journal ────────────────────────────────────────────────────────────────
-  saveJournal: async ({ lines, narration, date }) => {
+  saveJournal: async ({ lines, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
     if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
     const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
     const seq = await getNextSeq(company.id)
+    const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', seq, date, narration, is_cash: false, total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Journal', seq, ...dateFields, narration, is_cash: false, total, cancelled: false },
       lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]

@@ -1,10 +1,12 @@
 import { useState, useEffect } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { fmtMoney, todayISO } from '@/lib/utils'
+import { fmtMoney } from '@/lib/utils'
+import { todayBs } from '@/lib/nepaliDate'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { PartyForm } from './PartyForm'
@@ -24,7 +26,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
   const isSales = type === 'Sales'
   const { items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher } = useAppStore()
 
-  const [date, setDate] = useState(todayISO())
+  const [dateBs, setDateBs] = useState(todayBs())
   const [isCash, setIsCash] = useState(false)
   const [partyAccountId, setPartyAccountId] = useState('')
   const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0 }])
@@ -48,7 +50,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
 
   useEffect(() => {
     if (!open) {
-      setDate(todayISO()); setIsCash(false); setPartyAccountId('')
+      setDateBs(todayBs()); setIsCash(false); setPartyAccountId('')
       setLines([{ item_id: '', qty: 1, rate: 0 }]); setVatRate(13)
       setDiscount(0); setNarration(''); setError('')
     }
@@ -92,7 +94,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
 
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: vatRate, discount, narration: narration.trim(), date }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: vatRate, discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) await saveSalesVoucher(params)
       else await savePurchaseVoucher(params)
       onClose()
@@ -116,7 +118,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
                 <Label>Date</Label>
-                <Input type="date" value={date} onChange={e => setDate(e.target.value)} />
+                <NepaliDateInput value={dateBs} onChange={setDateBs} />
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 mb-1.5">

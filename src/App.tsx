@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { Component, useEffect, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
@@ -20,51 +20,105 @@ import { VatReportPage } from '@/pages/reports/VatReport'
 import { StockReportPage } from '@/pages/reports/StockReport'
 import { SettingsPage } from '@/pages/Settings'
 
-function ProtectedRoute({ children }: { children: React.ReactNode }) {
+class AppErrorBoundary extends Component<
+  { children: React.ReactNode },
+  { error: Error | null }
+> {
+  state: { error: Error | null } = { error: null }
+
+  static getDerivedStateFromError(error: Error) {
+    return { error }
+  }
+
+  render() {
+    if (this.state.error) {
+      return (
+        <div className="min-h-screen bg-background flex items-center justify-center p-6">
+          <div className="max-w-lg rounded-lg border bg-card p-5 shadow-sm">
+            <h1 className="font-serif text-xl font-bold text-destructive">Something went wrong</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              The app hit a runtime error while opening this page.
+            </p>
+            <pre className="mt-4 overflow-auto rounded bg-muted p-3 text-xs text-foreground">
+              {this.state.error.message}
+            </pre>
+          </div>
+        </div>
+      )
+    }
+
+    return this.props.children
+  }
+}
+
+function FullPageStatus({ message }: { message: string }) {
+  return (
+    <div className="min-h-screen bg-background flex items-center justify-center p-4 text-sm text-muted-foreground">
+      {message}
+    </div>
+  )
+}
+
+function ProtectedRoute({ children, authReady }: { children: React.ReactNode; authReady: boolean }) {
   const userId = useAppStore(s => s.userId)
+  if (!authReady) return <FullPageStatus message="Checking session..." />
   if (!userId) return <Navigate to="/login" replace />
   return <>{children}</>
 }
 
 export default function App() {
   const { userId, setUserId, loadAll } = useAppStore()
+  const [authReady, setAuthReady] = useState(false)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       const uid = session?.user?.id ?? null
       setUserId(uid)
       if (uid) loadAll(uid)
+      setAuthReady(true)
     })
     const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
       const uid = session?.user?.id ?? null
       setUserId(uid)
       if (uid) loadAll(uid)
+      setAuthReady(true)
     })
     return () => subscription.unsubscribe()
   }, [])
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={userId ? <Navigate to="/" replace /> : <LoginPage />} />
-        <Route path="/" element={<ProtectedRoute><AppShell /></ProtectedRoute>}>
-          <Route index element={<Dashboard />} />
-          <Route path="sales" element={<SalesPage />} />
-          <Route path="purchase" element={<PurchasePage />} />
-          <Route path="receipts" element={<ReceiptsPage />} />
-          <Route path="payments" element={<PaymentsPage />} />
-          <Route path="journal" element={<JournalPage />} />
-          <Route path="parties" element={<PartiesPage />} />
-          <Route path="items" element={<ItemsPage />} />
-          <Route path="accounts" element={<AccountsPage />} />
-          <Route path="trial-balance" element={<TrialBalancePage />} />
-          <Route path="profit-loss" element={<ProfitLossPage />} />
-          <Route path="balance-sheet" element={<BalanceSheetPage />} />
-          <Route path="vat-report" element={<VatReportPage />} />
-          <Route path="stock-report" element={<StockReportPage />} />
-          <Route path="settings" element={<SettingsPage />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <AppErrorBoundary>
+      <BrowserRouter>
+        <Routes>
+          <Route path="/login" element={!authReady ? <FullPageStatus message="Checking session..." /> : userId ? <Navigate to="/" replace /> : <LoginPage />} />
+          <Route path="/" element={<ProtectedRoute authReady={authReady}><AppShell /></ProtectedRoute>}>
+            <Route index element={<Dashboard />} />
+            <Route path="sales" element={<SalesPage />} />
+            <Route path="purchase" element={<PurchasePage />} />
+            <Route path="purchases" element={<PurchasePage />} />
+            <Route path="receipts" element={<ReceiptsPage />} />
+            <Route path="payments" element={<PaymentsPage />} />
+            <Route path="journal" element={<JournalPage />} />
+            <Route path="transactions" element={<Navigate to="/sales" replace />} />
+            <Route path="transactions/sales" element={<SalesPage />} />
+            <Route path="transactions/purchase" element={<PurchasePage />} />
+            <Route path="transactions/purchases" element={<PurchasePage />} />
+            <Route path="transactions/receipts" element={<ReceiptsPage />} />
+            <Route path="transactions/payments" element={<PaymentsPage />} />
+            <Route path="transactions/journal" element={<JournalPage />} />
+            <Route path="parties" element={<PartiesPage />} />
+            <Route path="items" element={<ItemsPage />} />
+            <Route path="accounts" element={<AccountsPage />} />
+            <Route path="trial-balance" element={<TrialBalancePage />} />
+            <Route path="profit-loss" element={<ProfitLossPage />} />
+            <Route path="balance-sheet" element={<BalanceSheetPage />} />
+            <Route path="vat-report" element={<VatReportPage />} />
+            <Route path="stock-report" element={<StockReportPage />} />
+            <Route path="settings" element={<SettingsPage />} />
+          </Route>
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </BrowserRouter>
+    </AppErrorBoundary>
   )
 }

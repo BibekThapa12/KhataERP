@@ -25,7 +25,7 @@ function VoucherDetail({ voucher }: { voucher: Voucher }) {
   return (
     <div className="space-y-4">
       <div className="grid grid-cols-3 gap-3 text-sm">
-        <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.date)}</p></div>
+        <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.date_bs)}</p></div>
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Party</p><p className="font-medium mt-0.5">{partyName}</p></div>
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Total</p><p className="font-serif font-bold mt-0.5 num">{fmtMoney(voucher.total)}</p></div>
       </div>
@@ -137,7 +137,7 @@ export function VoucherTable({ vouchers, showActions = true }: VoucherTableProps
                 : v.is_cash ? 'Cash' : '—'
               return (
                 <tr key={v.id} className={`border-t border-border hover:bg-muted/30 transition-colors ${v.cancelled ? 'opacity-50' : ''}`}>
-                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date)}</td>
+                  <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date_bs)}</td>
                   <td className="px-4 py-3">
                     <Badge variant={voucherBadgeVariant(v.type, v.cancelled)}>{v.type}</Badge>
                   </td>
@@ -164,7 +164,7 @@ export function VoucherTable({ vouchers, showActions = true }: VoucherTableProps
                               <AlertDialogHeader>
                                 <AlertDialogTitle>Cancel this voucher?</AlertDialogTitle>
                                 <AlertDialogDescription>
-                                  This will reverse <strong>{v.type} {v.invoice_no}</strong> dated {fmtDate(v.date)} for {fmtMoney(v.total)}.
+                                  This will reverse <strong>{v.type} {v.invoice_no}</strong> dated {fmtDate(v.date_bs)} for {fmtMoney(v.total)}.
                                   All affected balances and stock will be reversed. The voucher stays in history marked cancelled.
                                 </AlertDialogDescription>
                               </AlertDialogHeader>

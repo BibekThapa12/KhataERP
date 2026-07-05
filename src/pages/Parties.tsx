@@ -16,7 +16,7 @@ function PartyLedger({ party }: { party: Party }) {
   const account = getAccount(party.account_id)
   const related = vouchers
     .filter(v => !v.cancelled && v.party_account_id === party.account_id)
-    .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime() || a.seq - b.seq)
+    .sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
 
   const isCustomer = party.type === 'customer'
   let running = account?.opening_balance ?? 0
@@ -52,7 +52,7 @@ function PartyLedger({ party }: { party: Party }) {
               running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 100) / 100
               return (
                 <tr key={v.id} className="border-t border-border hover:bg-muted/30">
-                  <td className="px-3 py-2.5 text-muted-foreground">{fmtDate(v.date)}</td>
+                  <td className="px-3 py-2.5 text-muted-foreground">{fmtDate(v.date_bs)}</td>
                   <td className="px-3 py-2.5">{v.type}</td>
                   <td className="px-3 py-2.5 text-muted-foreground num text-xs">{v.invoice_no}</td>
                   <td className="px-3 py-2.5 text-right num">{dr ? <span className="debit-amt">{fmtMoney(dr)}</span> : '—'}</td>
