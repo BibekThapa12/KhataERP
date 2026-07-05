@@ -1,0 +1,42 @@
+@import url('https://fonts.googleapis.com/css2?family=Tinos:ital,wght@0,400;0,700;1,400&family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 40 33% 97%;
+    --foreground: 0 0% 17%;
+    --card: 0 0% 100%;
+    --card-foreground: 0 0% 17%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 0 0% 17%;
+    --primary: 220 46% 19%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 38 33% 93%;
+    --secondary-foreground: 220 46% 19%;
+    --muted: 38 20% 90%;
+    --muted-foreground: 38 8% 42%;
+    --accent: 38 33% 93%;
+    --accent-foreground: 220 46% 19%;
+    --destructive: 15 61% 45%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 38 20% 83%;
+    --input: 38 20% 83%;
+    --ring: 42 44% 54%;
+    --radius: 0.5rem;
+  }
+}
+
+@layer base {
+  * { @apply border-border; }
+  body { @apply bg-background text-foreground font-sans antialiased; }
+  h1, h2, h3, h4 { @apply font-serif; }
+}
+
+@layer components {
+  .num { @apply font-mono tabular-nums; }
+  .debit-amt { @apply text-terracotta font-semibold; }
+  .credit-amt { @apply text-forest font-semibold; }
+}

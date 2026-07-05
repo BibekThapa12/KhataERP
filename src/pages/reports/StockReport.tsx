@@ -1,0 +1,1 @@
+export { StockReportPage } from './index'

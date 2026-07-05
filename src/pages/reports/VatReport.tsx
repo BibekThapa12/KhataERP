@@ -1,0 +1,1 @@
+export { VatReportPage } from './index'
