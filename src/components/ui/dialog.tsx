@@ -23,12 +23,35 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => (
+>(({ className, children, onInteractOutside, onPointerDownOutside, onFocusOutside, ...props }, ref) => {
+  const shouldIgnoreSelectOutsideEvent = (event: Event) => {
+    const target = event.target instanceof HTMLElement ? event.target : null
+    const path = event.composedPath()
+    const isSelectEvent = path.some(
+      node => node instanceof HTMLElement && node.closest('[data-khata-select-content], [data-radix-popper-content-wrapper]')
+    )
+    const hasOpenSelect = !!document.querySelector('[data-khata-select-content][data-state="open"]')
+    return isSelectEvent || hasOpenSelect || !!target?.closest('[data-khata-select-content], [data-radix-popper-content-wrapper]')
+  }
+
+  return (
   <DialogPortal>
     <DialogOverlay />
     <DialogPrimitive.Content
       ref={ref}
       className={cn('fixed left-[50%] top-[50%] z-50 grid w-full max-w-lg translate-x-[-50%] translate-y-[-50%] gap-4 border bg-background p-6 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=open]:slide-in-from-left-1/2 sm:rounded-lg', className)}
+      onInteractOutside={(event) => {
+        onInteractOutside?.(event)
+        if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()
+      }}
+      onPointerDownOutside={(event) => {
+        onPointerDownOutside?.(event)
+        if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()
+      }}
+      onFocusOutside={(event) => {
+        onFocusOutside?.(event)
+        if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()
+      }}
       {...props}
     >
       {children}
@@ -38,7 +61,8 @@ const DialogContent = React.forwardRef<
       </DialogPrimitive.Close>
     </DialogPrimitive.Content>
   </DialogPortal>
-))
+  )
+})
 DialogContent.displayName = DialogPrimitive.Content.displayName
 
 const DialogHeader = ({ className, ...props }: React.HTMLAttributes<HTMLDivElement>) => (

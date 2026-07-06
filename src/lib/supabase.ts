@@ -25,6 +25,7 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
     email,
     password,
     options: {
+      emailRedirectTo: `${window.location.origin}/login`,
       data: {
         company_name: company.name,
         company_address: company.address,
@@ -207,6 +208,14 @@ interface InsertVoucherPayload {
   invoice_items?: { item_id: string; qty: number; rate: number }[]
 }
 
+interface UpdateVoucherPayload {
+  id: string
+  voucher: Partial<Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'party'>>
+  lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
+  stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
+  invoice_items?: { item_id: string; qty: number; rate: number }[]
+}
+
 export async function insertVoucher({ voucher, lines, stock_lines, invoice_items }: InsertVoucherPayload): Promise<Voucher> {
   const { data: v, error: ve } = await supabase
     .from('vouchers')
@@ -215,26 +224,87 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     .single()
   if (ve) throw ve
 
-  const { error: le } = await supabase
+  const { data: newLines, error: le } = await supabase
     .from('voucher_lines')
     .insert(lines.map(l => ({ ...l, voucher_id: v.id })))
+    .select()
   if (le) throw le
 
+  let newStockLines: StockLine[] = []
   if (stock_lines?.length) {
-    const { error: se } = await supabase
+    const { data, error: se } = await supabase
       .from('stock_lines')
       .insert(stock_lines.map(s => ({ ...s, voucher_id: v.id })))
+      .select()
     if (se) throw se
+    newStockLines = data || []
   }
 
+  let newInvoiceItems: { item_id: string; qty: number; rate: number }[] = []
   if (invoice_items?.length) {
-    const { error: ie } = await supabase
+    const { data, error: ie } = await supabase
       .from('invoice_items')
       .insert(invoice_items.map(i => ({ ...i, voucher_id: v.id })))
+      .select()
     if (ie) throw ie
+    newInvoiceItems = data || []
   }
 
-  return v
+  return {
+    ...normalizeVoucherDates(v),
+    lines: newLines || [],
+    stock_lines: newStockLines,
+    invoice_items: newInvoiceItems,
+  } as Voucher
+}
+
+export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items }: UpdateVoucherPayload): Promise<Voucher> {
+  const { data: v, error: ve } = await supabase
+    .from('vouchers')
+    .update(voucher)
+    .eq('id', id)
+    .select()
+    .single()
+  if (ve) throw ve
+
+  const childTables = ['voucher_lines', 'stock_lines', 'invoice_items'] as const
+  for (const table of childTables) {
+    const { error } = await supabase.from(table).delete().eq('voucher_id', id)
+    if (error) throw error
+  }
+
+  const { data: newLines, error: le } = await supabase
+    .from('voucher_lines')
+    .insert(lines.map(l => ({ ...l, voucher_id: id })))
+    .select()
+  if (le) throw le
+
+  let newStockLines: StockLine[] = []
+  if (stock_lines?.length) {
+    const { data, error: se } = await supabase
+      .from('stock_lines')
+      .insert(stock_lines.map(s => ({ ...s, voucher_id: id })))
+      .select()
+    if (se) throw se
+    newStockLines = data || []
+  }
+
+  let newInvoiceItems: { item_id: string; qty: number; rate: number }[] = []
+  if (invoice_items?.length) {
+    const { data, error: ie } = await supabase
+      .from('invoice_items')
+      .insert(invoice_items.map(i => ({ ...i, voucher_id: id })))
+      .select()
+    if (ie) throw ie
+    newInvoiceItems = data || []
+  }
+
+  return {
+    ...normalizeVoucherDates(v),
+    lines: newLines || [],
+    stock_lines: newStockLines,
+    invoice_items: newInvoiceItems,
+  } as Voucher
 }
 
 export async function cancelVoucher(id: string) {

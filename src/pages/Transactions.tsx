@@ -7,7 +7,7 @@ import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
-import type { VoucherType } from '@/types'
+import type { Voucher, VoucherType } from '@/types'
 
 function useVouchersByType(type: VoucherType) {
   const allVouchers = useAppStore(s => s.vouchers)
@@ -23,14 +23,15 @@ function useVouchersByType(type: VoucherType) {
 export function SalesPage() {
   const vouchers = useVouchersByType('Sales')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
       <PageHeader title="Sales Invoices" description="VAT-ready sales to customers"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} /></Card>
+        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
-      <InvoiceForm type="Sales" open={open} onClose={() => setOpen(false)} />
+      <InvoiceForm type="Sales" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
 }
@@ -39,14 +40,15 @@ export function SalesPage() {
 export function PurchasePage() {
   const vouchers = useVouchersByType('Purchase')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
       <PageHeader title="Purchase Bills" description="Goods bought from suppliers"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Purchase</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} /></Card>
+        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
-      <InvoiceForm type="Purchase" open={open} onClose={() => setOpen(false)} />
+      <InvoiceForm type="Purchase" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
 }
@@ -55,14 +57,15 @@ export function PurchasePage() {
 export function ReceiptsPage() {
   const vouchers = useVouchersByType('Receipt')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
       <PageHeader title="Receipts" description="Money received from customers"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Receipt</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} /></Card>
+        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
-      <ReceiptPaymentForm type="Receipt" open={open} onClose={() => setOpen(false)} />
+      <ReceiptPaymentForm type="Receipt" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
 }
@@ -71,14 +74,15 @@ export function ReceiptsPage() {
 export function PaymentsPage() {
   const vouchers = useVouchersByType('Payment')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
       <PageHeader title="Payments" description="Money paid to suppliers"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Payment</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} /></Card>
+        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
-      <ReceiptPaymentForm type="Payment" open={open} onClose={() => setOpen(false)} />
+      <ReceiptPaymentForm type="Payment" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
 }
@@ -87,14 +91,15 @@ export function PaymentsPage() {
 export function JournalPage() {
   const vouchers = useVouchersByType('Journal')
   const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
       <PageHeader title="Journal Entries" description="Manual adjustments — depreciation, write-offs, opening balances"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Journal</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} /></Card>
+        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
-      <JournalForm open={open} onClose={() => setOpen(false)} />
+      <JournalForm open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
 }

@@ -1,4 +1,4 @@
-import { Component, useEffect, useState } from 'react'
+import { Component, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
@@ -69,6 +69,7 @@ function ProtectedRoute({ children, authReady }: { children: React.ReactNode; au
 export default function App() {
   const { userId, setUserId, loadAll } = useAppStore()
   const [authReady, setAuthReady] = useState(false)
+  const refreshTimer = useRef<number | null>(null)
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
@@ -85,6 +86,38 @@ export default function App() {
     })
     return () => subscription.unsubscribe()
   }, [])
+
+  useEffect(() => {
+    if (!userId) return
+
+    const scheduleRefresh = () => {
+      if (refreshTimer.current) window.clearTimeout(refreshTimer.current)
+      refreshTimer.current = window.setTimeout(() => {
+        loadAll(userId)
+        refreshTimer.current = null
+      }, 500)
+    }
+
+    const channel = supabase
+      .channel(`company-sync-${userId}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vouchers' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_lines' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_lines' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_items' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parties' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, scheduleRefresh)
+      .subscribe()
+
+    return () => {
+      if (refreshTimer.current) {
+        window.clearTimeout(refreshTimer.current)
+        refreshTimer.current = null
+      }
+      supabase.removeChannel(channel)
+    }
+  }, [userId, loadAll])
 
   return (
     <AppErrorBoundary>

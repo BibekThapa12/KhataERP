@@ -4,7 +4,7 @@ import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, insertParty, insertItem,
   insertVoucher, cancelVoucher, updateCompany, updateItem, updateParty,
-  getNextSeq, getNextInvoiceNo, getOrCreateCompany,
+  updateVoucher, getNextSeq, getNextInvoiceNo, getOrCreateCompany,
 } from '@/lib/supabase'
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
@@ -51,6 +51,11 @@ interface AppState {
   saveReceipt: (params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   savePayment: (params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
+  updateSalesVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  updatePurchaseVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  updateReceipt: (id: string, params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
+  updatePayment: (id: string, params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
+  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
   cancelV: (id: string) => Promise<void>
 }
 
@@ -62,6 +67,10 @@ function voucherDateFields(date_bs: string) {
     date_bs,
     date_bs_key: makeBsKey(date_bs),
   }
+}
+
+function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
+  return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -261,6 +270,89 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Cancel ─────────────────────────────────────────────────────────────────
+  updateSalesVoucher: async (id, params) => {
+    const existing = get().vouchers.find(v => v.id === id)
+    if (!existing) throw new Error('Voucher not found')
+    const data = buildSalesVoucherData(params)
+    if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
+    const dateFields = voucherDateFields(params.date_bs)
+    const updated = await updateVoucher({
+      id,
+      voucher: { ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
+      stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
+      invoice_items: data.invoice_items,
+    })
+    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
+    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    const stock = recomputeStock(get().items, vouchers)
+    set({ vouchers, accounts, stock })
+  },
+
+  updatePurchaseVoucher: async (id, params) => {
+    const existing = get().vouchers.find(v => v.id === id)
+    if (!existing) throw new Error('Voucher not found')
+    const data = buildPurchaseVoucherData(params)
+    const dateFields = voucherDateFields(params.date_bs)
+    const updated = await updateVoucher({
+      id,
+      voucher: { ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
+      stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
+      invoice_items: data.invoice_items,
+    })
+    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
+    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    const stock = recomputeStock(get().items, vouchers)
+    set({ vouchers, accounts, stock })
+  },
+
+  updateReceipt: async (id, { party_account_id, amount, deposit_to, narration, date_bs }) => {
+    const existing = get().vouchers.find(v => v.id === id)
+    if (!existing) throw new Error('Voucher not found')
+    const data = buildReceiptData(party_account_id, amount, deposit_to)
+    const dateFields = voucherDateFields(date_bs)
+    const updated = await updateVoucher({
+      id,
+      voucher: { ...dateFields, narration, party_account_id, is_cash: deposit_to === 'cash', total: amount, cancelled: false },
+      lines: data.lines,
+    })
+    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
+    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    set({ vouchers, accounts })
+  },
+
+  updatePayment: async (id, { party_account_id, amount, paid_from, narration, date_bs }) => {
+    const existing = get().vouchers.find(v => v.id === id)
+    if (!existing) throw new Error('Voucher not found')
+    const data = buildPaymentData(party_account_id, amount, paid_from)
+    const dateFields = voucherDateFields(date_bs)
+    const updated = await updateVoucher({
+      id,
+      voucher: { ...dateFields, narration, party_account_id, is_cash: paid_from === 'cash', total: amount, cancelled: false },
+      lines: data.lines,
+    })
+    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
+    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    set({ vouchers, accounts })
+  },
+
+  updateJournal: async (id, { lines, narration, date_bs }) => {
+    const existing = get().vouchers.find(v => v.id === id)
+    if (!existing) throw new Error('Voucher not found')
+    if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
+    const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
+    const dateFields = voucherDateFields(date_bs)
+    const updated = await updateVoucher({
+      id,
+      voucher: { ...dateFields, narration, is_cash: false, total, cancelled: false },
+      lines,
+    })
+    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
+    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    set({ vouchers, accounts })
+  },
+
   cancelV: async (id) => {
     await cancelVoucher(id)
     const vouchers = get().vouchers.map(v => v.id === id ? { ...v, cancelled: true } : v)
@@ -268,4 +360,5 @@ export const useAppStore = create<AppState>((set, get) => ({
     const stock = recomputeStock(get().items, vouchers)
     set({ vouchers, accounts, stock })
   },
+
 }))

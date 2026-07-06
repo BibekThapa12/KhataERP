@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import type { Item } from '@/types'
+import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
 // ─── Item Form ────────────────────────────────────────────────────────────────
@@ -98,13 +98,15 @@ interface ReceiptPaymentFormProps {
   type: 'Receipt' | 'Payment'
   open: boolean
   onClose: () => void
+  voucher?: Voucher | null
 }
 
-export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormProps) {
-  const { parties, saveReceipt, savePayment, accounts } = useAppStore()
+export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaymentFormProps) {
+  const { parties, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
   const isReceipt = type === 'Receipt'
   const partyType = isReceipt ? 'customer' : 'supplier'
   const partyList = parties.filter(p => p.type === partyType)
+  const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
   const [partyAccountId, setPartyAccountId] = useState('')
@@ -115,8 +117,17 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!open) { setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMode('cash'); setNarration(''); setError('') }
-  }, [open])
+    if (open && voucher) {
+      setDateBs(voucher.date_bs)
+      setPartyAccountId(voucher.party_account_id || '')
+      setAmount(String(voucher.total || ''))
+      setMode(voucher.is_cash ? 'cash' : 'bank')
+      setNarration(voucher.narration || '')
+      setError('')
+    } else if (!open) {
+      setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMode('cash'); setNarration(''); setError('')
+    }
+  }, [open, voucher])
 
   const handleSave = async () => {
     if (!partyAccountId) { setError(`Select a ${partyType}.`); return }
@@ -124,8 +135,13 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
     if (!amt || amt <= 0) { setError('Enter a valid amount.'); return }
     setSaving(true)
     try {
-      if (isReceipt) await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
-      else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
+      if (isReceipt) {
+        if (voucher) await updateReceipt(voucher.id, { party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
+        else await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
+      } else {
+        if (voucher) await updatePayment(voucher.id, { party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
+        else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
+      }
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -135,7 +151,7 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-md">
-        <DialogHeader><DialogTitle>New {type}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Date</Label>
@@ -174,7 +190,7 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : `Save ${type}`}</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} ${type}`}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -183,13 +199,14 @@ export function ReceiptPaymentForm({ type, open, onClose }: ReceiptPaymentFormPr
 
 // ─── Journal Form ─────────────────────────────────────────────────────────────
 
-interface JournalFormProps { open: boolean; onClose: () => void }
+interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Voucher | null }
 
 interface JLine { account_id: string; debit: number; credit: number }
 
-export function JournalForm({ open, onClose }: JournalFormProps) {
-  const { accounts, saveJournal } = useAppStore()
+export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
+  const { accounts, saveJournal, updateJournal } = useAppStore()
   const nonPartyAccounts = accounts.filter(a => !a.is_party)
+  const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
   const [jLines, setJLines] = useState<JLine[]>([
@@ -201,13 +218,22 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!open) {
+    if (open && voucher) {
+      setDateBs(voucher.date_bs)
+      setJLines((voucher.lines || []).map(l => ({
+        account_id: l.account_id,
+        debit: l.debit || 0,
+        credit: l.credit || 0,
+      })))
+      setNarration(voucher.narration || '')
+      setError('')
+    } else if (!open) {
       setDateBs(todayBs())
       setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
       setNarration('')
       setError('')
     }
-  }, [open])
+  }, [open, voucher])
 
   const totalDebit = round2(jLines.reduce((s, l) => s + (l.debit || 0), 0))
   const totalCredit = round2(jLines.reduce((s, l) => s + (l.credit || 0), 0))
@@ -228,7 +254,9 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
     setSaving(true)
     try {
-      await saveJournal({ lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs })
+      const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs }
+      if (voucher) await updateJournal(voucher.id, params)
+      else await saveJournal(params)
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -238,7 +266,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>New Journal Entry</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground -mt-2">
           Use this for adjustments not covered by other voucher types: depreciation, write-offs, opening balances, etc.
         </p>
@@ -292,7 +320,7 @@ export function JournalForm({ open, onClose }: JournalFormProps) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || !balanced}>{saving ? 'Saving…' : 'Save Journal Entry'}</Button>
+          <Button onClick={handleSave} disabled={saving || !balanced}>{saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} Journal Entry`}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

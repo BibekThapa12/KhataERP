@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { TrendingUp, TrendingDown, Wallet, Package } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeVatReport } from '@/lib/engine'
@@ -6,11 +6,15 @@ import { fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
+import { InvoiceForm } from '@/components/forms/InvoiceForm'
+import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
+import type { Voucher } from '@/types'
 
 export function Dashboard() {
   const { accounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
+  const [editing, setEditing] = useState<Voucher | null>(null)
 
   const pnl = useMemo(() => computeProfitAndLoss(accounts, closingStockValue()), [accounts, closingStockValue])
 
@@ -39,6 +43,8 @@ export function Dashboard() {
     const s = stock.find(e => e.id === item.id)
     return item.reorder_level != null && (s?.qty ?? 0) <= item.reorder_level
   })
+
+  const closeEdit = () => setEditing(null)
 
   return (
     <div>
@@ -106,10 +112,40 @@ export function Dashboard() {
             <CardTitle className="text-base">Recent Activity</CardTitle>
           </CardHeader>
           <CardContent className="p-0 pb-2">
-            <VoucherTable vouchers={recent} showActions={false} />
+            <VoucherTable vouchers={recent} onEdit={setEditing} />
           </CardContent>
         </Card>
       </PageContent>
+
+      <InvoiceForm
+        type="Sales"
+        open={editing?.type === 'Sales'}
+        voucher={editing?.type === 'Sales' ? editing : null}
+        onClose={closeEdit}
+      />
+      <InvoiceForm
+        type="Purchase"
+        open={editing?.type === 'Purchase'}
+        voucher={editing?.type === 'Purchase' ? editing : null}
+        onClose={closeEdit}
+      />
+      <ReceiptPaymentForm
+        type="Receipt"
+        open={editing?.type === 'Receipt'}
+        voucher={editing?.type === 'Receipt' ? editing : null}
+        onClose={closeEdit}
+      />
+      <ReceiptPaymentForm
+        type="Payment"
+        open={editing?.type === 'Payment'}
+        voucher={editing?.type === 'Payment' ? editing : null}
+        onClose={closeEdit}
+      />
+      <JournalForm
+        open={editing?.type === 'Journal'}
+        voucher={editing?.type === 'Journal' ? editing : null}
+        onClose={closeEdit}
+      />
     </div>
   )
 }

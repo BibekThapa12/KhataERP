@@ -11,6 +11,7 @@ import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
+import type { Voucher } from '@/types'
 
 interface LineItem { item_id: string; qty: number; rate: number }
 
@@ -20,11 +21,12 @@ interface InvoiceFormProps {
   type: 'Sales' | 'Purchase'
   open: boolean
   onClose: () => void
+  voucher?: Voucher | null
 }
 
-export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
+export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher } = useAppStore()
+  const { items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
 
   const [dateBs, setDateBs] = useState(todayBs())
   const [isCash, setIsCash] = useState(false)
@@ -41,6 +43,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyList = parties.filter(p => p.type === partyType)
+  const isEditing = !!voucher
 
   // Totals
   const subtotal = round2Local(lines.reduce((s, l) => s + l.qty * l.rate, 0))
@@ -49,12 +52,21 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
   const total = round2Local(taxable + vatAmount)
 
   useEffect(() => {
-    if (!open) {
+    if (open && voucher) {
+      setDateBs(voucher.date_bs)
+      setIsCash(voucher.is_cash)
+      setPartyAccountId(voucher.party_account_id || '')
+      setLines((voucher.invoice_items || []).map(i => ({ item_id: i.item_id, qty: i.qty, rate: i.rate })))
+      setVatRate(voucher.vat_rate ?? 13)
+      setDiscount(voucher.discount ?? 0)
+      setNarration(voucher.narration ?? '')
+      setError('')
+    } else if (!open) {
       setDateBs(todayBs()); setIsCash(false); setPartyAccountId('')
       setLines([{ item_id: '', qty: 1, rate: 0 }]); setVatRate(13)
       setDiscount(0); setNarration(''); setError('')
     }
-  }, [open])
+  }, [open, voucher])
 
   const updateLine = (idx: number, field: keyof LineItem, value: string | number) => {
     const next = [...lines]
@@ -84,9 +96,12 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
     if (isSales) {
       for (const l of validLines) {
         const s = getStockEntry(l.item_id)
-        if (s.qty < l.qty) {
+        const currentVoucherQty = voucher?.stock_lines
+          ?.filter(sl => sl.item_id === l.item_id && sl.direction === 'out')
+          .reduce((sum, sl) => sum + sl.qty, 0) ?? 0
+        if (s.qty + currentVoucherQty < l.qty) {
           const item = items.find(i => i.id === l.item_id)
-          setError(`Not enough stock for "${item?.name}": have ${s.qty}, selling ${l.qty}.`)
+          setError(`Not enough stock for "${item?.name}": have ${s.qty + currentVoucherQty}, selling ${l.qty}.`)
           return
         }
       }
@@ -95,8 +110,13 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
     setSaving(true)
     try {
       const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: vatRate, discount, narration: narration.trim(), date_bs: dateBs }
-      if (isSales) await saveSalesVoucher(params)
-      else await savePurchaseVoucher(params)
+      if (isSales) {
+        if (voucher) await updateSalesVoucher(voucher.id, params)
+        else await saveSalesVoucher(params)
+      } else {
+        if (voucher) await updatePurchaseVoucher(voucher.id, params)
+        else await savePurchaseVoucher(params)
+      }
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
@@ -110,7 +130,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
       <Dialog open={open} onOpenChange={o => !o && onClose()}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
+            <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4 py-2">
@@ -234,7 +254,7 @@ export function InvoiceForm({ type, open, onClose }: InvoiceFormProps) {
           <DialogFooter>
             <Button variant="outline" onClick={onClose}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving…' : `Save ${type === 'Sales' ? 'Invoice' : 'Bill'}`}
+              {saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} ${type === 'Sales' ? 'Invoice' : 'Bill'}`}
             </Button>
           </DialogFooter>
         </DialogContent>
