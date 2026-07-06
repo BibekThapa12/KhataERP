@@ -3,12 +3,17 @@ import { signIn, signUp } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 
 export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [companyName, setCompanyName] = useState('')
+  const [companyAddress, setCompanyAddress] = useState('')
+  const [panVat, setPanVat] = useState('')
+  const [phone, setPhone] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -23,7 +28,12 @@ export function LoginPage() {
         const { error } = await signIn(email, password)
         if (error) throw error
       } else {
-        const { error } = await signUp(email, password)
+        const { error } = await signUp(email, password, {
+          name: companyName.trim(),
+          address: companyAddress.trim(),
+          pan_vat: panVat.trim(),
+          phone: phone.trim(),
+        })
         if (error) throw error
         setSuccess('Account created! Check your email to confirm, then sign in.')
         setMode('login')
@@ -35,9 +45,15 @@ export function LoginPage() {
     }
   }
 
+  const toggleMode = () => {
+    setMode(m => m === 'login' ? 'signup' : 'login')
+    setError('')
+    setSuccess('')
+  }
+
   return (
     <div className="min-h-screen bg-background flex items-center justify-center p-4">
-      <div className="w-full max-w-md space-y-6">
+      <div className="w-full max-w-lg space-y-6">
         <div className="text-center">
           <h1 className="font-serif text-4xl font-bold text-[#1B2A4A]">Khata</h1>
           <p className="text-muted-foreground mt-1 text-sm uppercase tracking-widest">ERP for Nepal</p>
@@ -57,16 +73,38 @@ export function LoginPage() {
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="password">Password</Label>
-                <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••••" required minLength={6} />
+                <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="********" required minLength={6} />
               </div>
+              {mode === 'signup' && (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="company-name">Company Name</Label>
+                    <Input id="company-name" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="My Trading Co." required />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="company-address">Address</Label>
+                    <Textarea id="company-address" value={companyAddress} onChange={e => setCompanyAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" required />
+                  </div>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="pan-vat">PAN / VAT No.</Label>
+                      <Input id="pan-vat" value={panVat} onChange={e => setPanVat(e.target.value)} placeholder="600000000" required />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="phone">Phone Number</Label>
+                      <Input id="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="9800000000" required />
+                    </div>
+                  </div>
+                </>
+              )}
               {error && <p className="text-sm text-destructive">{error}</p>}
               {success && <p className="text-sm text-forest">{success}</p>}
               <Button type="submit" className="w-full" disabled={loading}>
-                {loading ? 'Please wait…' : mode === 'login' ? 'Sign in' : 'Create account'}
+                {loading ? 'Please wait...' : mode === 'login' ? 'Sign in' : 'Create account'}
               </Button>
               <button
                 type="button"
-                onClick={() => { setMode(m => m === 'login' ? 'signup' : 'login'); setError(''); setSuccess('') }}
+                onClick={toggleMode}
                 className="w-full text-center text-sm text-muted-foreground hover:text-foreground transition-colors"
               >
                 {mode === 'login' ? "Don't have an account? Sign up" : 'Already have an account? Sign in'}
@@ -75,7 +113,7 @@ export function LoginPage() {
           </CardContent>
         </Card>
         <p className="text-center text-xs text-muted-foreground">
-          Double-entry accounting · 13% VAT · NPR · Multi-user
+          Double-entry accounting | 13% VAT | NPR | Multi-user
         </p>
       </div>
     </div>

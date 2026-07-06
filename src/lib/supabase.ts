@@ -12,8 +12,27 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey)
 export const getSession = () => supabase.auth.getSession()
 export const signIn = (email: string, password: string) =>
   supabase.auth.signInWithPassword({ email, password })
-export const signUp = (email: string, password: string) =>
-  supabase.auth.signUp({ email, password })
+
+export interface CompanySignupDetails {
+  name: string
+  address: string
+  pan_vat: string
+  phone: string
+}
+
+export const signUp = (email: string, password: string, company: CompanySignupDetails) =>
+  supabase.auth.signUp({
+    email,
+    password,
+    options: {
+      data: {
+        company_name: company.name,
+        company_address: company.address,
+        company_pan_vat: company.pan_vat,
+        company_phone: company.phone,
+      },
+    },
+  })
 export const signOut = () => supabase.auth.signOut()
 
 // ─── Company ──────────────────────────────────────────────────────────────────
@@ -25,9 +44,21 @@ export async function getOrCreateCompany(user_id: string): Promise<Company> {
     .eq('user_id', user_id)
     .single()
   if (data) return data
+
+  const { data: userData } = await supabase.auth.getUser()
+  const metadata = userData.user?.user_metadata ?? {}
+  const company = {
+    user_id,
+    name: String(metadata.company_name || 'My Trading Co.').trim() || 'My Trading Co.',
+    address: String(metadata.company_address || '').trim(),
+    pan_vat: String(metadata.company_pan_vat || '').trim(),
+    phone: String(metadata.company_phone || '').trim(),
+    fiscal_year_start: '2026-04-01',
+  }
+
   const { data: newCompany, error } = await supabase
     .from('companies')
-    .insert({ user_id, name: 'My Trading Co.', fiscal_year_start: '2026-04-01' })
+    .insert(company)
     .select()
     .single()
   if (error) throw error

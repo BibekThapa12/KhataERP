@@ -14,12 +14,13 @@ export function SettingsPage() {
   const [name, setName] = useState(company?.name ?? '')
   const [address, setAddress] = useState(company?.address ?? '')
   const [panVat, setPanVat] = useState(company?.pan_vat ?? '')
+  const [phone, setPhone] = useState(company?.phone ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
   const handleSave = async () => {
     setSaving(true)
-    await saveCompany({ name: name.trim() || 'My Company', address: address.trim(), pan_vat: panVat.trim() })
+    await saveCompany({ name: name.trim() || 'My Company', address: address.trim(), pan_vat: panVat.trim(), phone: phone.trim() })
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -54,6 +55,10 @@ export function SettingsPage() {
             <div className="space-y-1.5">
               <Label>PAN / VAT Registration No.</Label>
               <Input value={panVat} onChange={e => setPanVat(e.target.value)} placeholder="Optional" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Phone Number</Label>
+              <Input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Optional" />
             </div>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save Changes'}

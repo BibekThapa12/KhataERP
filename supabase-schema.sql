@@ -13,9 +13,12 @@ create table if not exists companies (
   name             text not null default 'My Trading Co.',
   address          text,
   pan_vat          text,
+  phone            text,
   fiscal_year_start date not null default '2026-04-01',
   created_at       timestamptz not null default now()
 );
+
+alter table companies add column if not exists phone text;
 
 -- ── Accounts (Chart of Accounts + party ledger accounts) ─────────────────────
 create table if not exists accounts (

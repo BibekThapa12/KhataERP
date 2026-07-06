@@ -106,6 +106,7 @@ export interface Company {
   name: string
   address?: string
   pan_vat?: string
+  phone?: string
   fiscal_year_start: string
   created_at?: string
 }
