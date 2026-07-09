@@ -1,6 +1,6 @@
 import { Component, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
-import { supabase } from '@/lib/supabase'
+import { logAppError, supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
 import { LoginPage } from '@/pages/Login'
@@ -19,6 +19,7 @@ import { BalanceSheetPage } from '@/pages/reports/BalanceSheet'
 import { VatReportPage } from '@/pages/reports/VatReport'
 import { StockReportPage } from '@/pages/reports/StockReport'
 import { SettingsPage } from '@/pages/Settings'
+import { DeveloperDashboard } from '@/pages/DeveloperDashboard'
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -67,7 +68,7 @@ function ProtectedRoute({ children, authReady }: { children: React.ReactNode; au
 }
 
 export default function App() {
-  const { userId, setUserId, loadAll } = useAppStore()
+  const { userId, company, setUserId, loadAll } = useAppStore()
   const [authReady, setAuthReady] = useState(false)
   const refreshTimer = useRef<number | null>(null)
 
@@ -119,6 +120,27 @@ export default function App() {
     }
   }, [userId, loadAll])
 
+  useEffect(() => {
+    const handleError = (event: ErrorEvent) => {
+      logAppError(company?.id, event.error || event.message, {
+        source: 'window_error',
+        filename: event.filename,
+        lineno: event.lineno,
+        colno: event.colno,
+      })
+    }
+    const handleRejection = (event: PromiseRejectionEvent) => {
+      logAppError(company?.id, event.reason, { source: 'unhandled_rejection' })
+    }
+
+    window.addEventListener('error', handleError)
+    window.addEventListener('unhandledrejection', handleRejection)
+    return () => {
+      window.removeEventListener('error', handleError)
+      window.removeEventListener('unhandledrejection', handleRejection)
+    }
+  }, [company?.id])
+
   return (
     <AppErrorBoundary>
       <BrowserRouter>
@@ -148,6 +170,7 @@ export default function App() {
             <Route path="vat-report" element={<VatReportPage />} />
             <Route path="stock-report" element={<StockReportPage />} />
             <Route path="settings" element={<SettingsPage />} />
+            <Route path="developer" element={<DeveloperDashboard />} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

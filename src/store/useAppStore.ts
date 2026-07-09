@@ -4,12 +4,12 @@ import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, insertParty, insertItem,
   insertVoucher, cancelVoucher, updateCompany, updateItem, updateParty,
-  updateVoucher, getNextSeq, getNextInvoiceNo, getOrCreateCompany,
+  updateVoucher, getNextSeq, getNextVoucherNo, getOrCreateCompany, logAppEvent,
 } from '@/lib/supabase'
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
-  validateBalanced,
+  resolveSystemAccountId, validateBalanced, type SystemAccountKey,
 } from '@/lib/engine'
 import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
 
@@ -51,6 +51,7 @@ interface AppState {
   saveReceipt: (params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   savePayment: (params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
+  saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string }) => Promise<void>
   updateSalesVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
   updatePurchaseVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
   updateReceipt: (id: string, params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
@@ -71,6 +72,18 @@ function voucherDateFields(date_bs: string) {
 
 function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
   return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
+}
+
+function companyPrefix(company: Company, type: 'Sales' | 'Purchase' | 'Receipt' | 'Payment') {
+  if (type === 'Sales') return company.sales_prefix || 'INV-'
+  if (type === 'Purchase') return company.purchase_prefix || 'PB-'
+  if (type === 'Receipt') return company.receipt_prefix || 'RCPT-'
+  return company.payment_prefix || 'PAY-'
+}
+
+function systemAccountsFor(company: Company, accounts: Account[]) {
+  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'capital', 'discount_allowed', 'rent', 'salary', 'electricity']
+  return Object.fromEntries(keys.map(key => [key, resolveSystemAccountId(accounts, company.id, key)])) as Record<SystemAccountKey, string>
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -104,6 +117,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ loading: true, error: null })
     try {
       const company = await getOrCreateCompany(userId)
+      set({ company, userId })
       const [rawAccounts, parties, items, vouchers] = await Promise.all([
         fetchAccounts(company.id),
         fetchParties(company.id),
@@ -183,11 +197,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveSalesVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate }
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextInvoiceNo(company.id, 'Sales')
+    const invoice_no = await getNextVoucherNo(company.id, 'Sales', companyPrefix(company, 'Sales'), company.reset_numbering_fiscal_year, company.fiscal_year_start)
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
@@ -205,10 +219,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   savePurchaseVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate }
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextInvoiceNo(company.id, 'Purchase')
+    const invoice_no = await getNextVoucherNo(company.id, 'Purchase', companyPrefix(company, 'Purchase'), company.reset_numbering_fiscal_year, company.fiscal_year_start)
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
@@ -226,11 +240,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveReceipt: async ({ party_account_id, amount, deposit_to, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const data = buildReceiptData(party_account_id, amount, deposit_to)
+    const data = buildReceiptData(party_account_id, amount, deposit_to, systemAccountsFor(company, get().rawAccounts))
     const seq = await getNextSeq(company.id)
+    const invoice_no = await getNextVoucherNo(company.id, 'Receipt', companyPrefix(company, 'Receipt'), company.reset_numbering_fiscal_year, company.fiscal_year_start)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Receipt', seq, ...dateFields, narration, party_account_id, is_cash: deposit_to === 'cash', total: amount, cancelled: false },
+      voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, ...dateFields, narration, party_account_id, is_cash: deposit_to === 'cash', total: amount, cancelled: false },
       lines: data.lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -242,11 +257,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   savePayment: async ({ party_account_id, amount, paid_from, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const data = buildPaymentData(party_account_id, amount, paid_from)
+    const data = buildPaymentData(party_account_id, amount, paid_from, systemAccountsFor(company, get().rawAccounts))
     const seq = await getNextSeq(company.id)
+    const invoice_no = await getNextVoucherNo(company.id, 'Payment', companyPrefix(company, 'Payment'), company.reset_numbering_fiscal_year, company.fiscal_year_start)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Payment', seq, ...dateFields, narration, party_account_id, is_cash: paid_from === 'cash', total: amount, cancelled: false },
+      voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, ...dateFields, narration, party_account_id, is_cash: paid_from === 'cash', total: amount, cancelled: false },
       lines: data.lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -276,7 +292,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().vouchers.find(v => v.id === id)
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
-    const effectiveParams = { ...params, vat_rate: company?.vat_enabled === false ? 0 : params.vat_rate }
+    if (!company) throw new Error('No company')
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const dateFields = voucherDateFields(effectiveParams.date_bs)
@@ -297,7 +314,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().vouchers.find(v => v.id === id)
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
-    const effectiveParams = { ...params, vat_rate: company?.vat_enabled === false ? 0 : params.vat_rate }
+    if (!company) throw new Error('No company')
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const updated = await updateVoucher({
@@ -316,7 +334,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateReceipt: async (id, { party_account_id, amount, deposit_to, narration, date_bs }) => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
-    const data = buildReceiptData(party_account_id, amount, deposit_to)
+    const company = get().company
+    if (!company) throw new Error('No company')
+    const data = buildReceiptData(party_account_id, amount, deposit_to, systemAccountsFor(company, get().rawAccounts))
     const dateFields = voucherDateFields(date_bs)
     const updated = await updateVoucher({
       id,
@@ -328,10 +348,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ vouchers, accounts })
   },
 
+  saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs }) => {
+    const { company } = get()
+    if (!company) throw new Error('No company')
+    if (!item_id) throw new Error('Select an item')
+    if (!qty_delta) throw new Error('Enter a quantity adjustment')
+    const seq = await getNextSeq(company.id)
+    const dateFields = voucherDateFields(date_bs)
+    const newVoucher = await insertVoucher({
+      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, ...dateFields, narration, is_cash: false, total: Math.abs(qty_delta * rate), cancelled: false },
+      lines: [],
+      stock_lines: [{ item_id, qty: Math.abs(qty_delta), rate, direction: qty_delta > 0 ? 'in' : 'out' }],
+    })
+    const vouchers = [newVoucher, ...get().vouchers]
+    const stock = recomputeStock(get().items, vouchers)
+    set({ vouchers, stock })
+    logAppEvent('stock_adjustment', company.id, { item_id, qty_delta, rate })
+  },
+
   updatePayment: async (id, { party_account_id, amount, paid_from, narration, date_bs }) => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
-    const data = buildPaymentData(party_account_id, amount, paid_from)
+    const company = get().company
+    if (!company) throw new Error('No company')
+    const data = buildPaymentData(party_account_id, amount, paid_from, systemAccountsFor(company, get().rawAccounts))
     const dateFields = voucherDateFields(date_bs)
     const updated = await updateVoucher({
       id,

@@ -1,7 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { TrendingUp, TrendingDown, Wallet, Package } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeProfitAndLoss } from '@/lib/engine'
+import { computeProfitAndLoss, recomputeAllBalances } from '@/lib/engine'
+import { resolveSystemAccountId, type SystemAccountKey } from '@/lib/engine'
+import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { StatCard } from '@/components/StatCard'
@@ -10,17 +13,65 @@ import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
+import { Button } from '@/components/ui/button'
+import { Label } from '@/components/ui/label'
+import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import type { Voucher } from '@/types'
 
 export function Dashboard() {
-  const { company, accounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
+  const { company, accounts, rawAccounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
+  const navigate = useNavigate()
   const [editing, setEditing] = useState<Voucher | null>(null)
   const vatEnabled = company?.vat_enabled ?? true
+  const currentBs = todayBs()
+  const fiscalStartMonthDay = company?.fiscal_year_start ? adToBs(company.fiscal_year_start).slice(5) : firstOfCurrentBsMonth().slice(5)
+  const fiscalStartThisYear = `${currentBs.slice(0, 4)}-${fiscalStartMonthDay}`
+  const fiscalStartBs = makeBsKey(currentBs) >= makeBsKey(fiscalStartThisYear)
+    ? fiscalStartThisYear
+    : `${Number(currentBs.slice(0, 4)) - 1}-${fiscalStartMonthDay}`
+  const [range, setRange] = useState<'today' | 'month' | 'fiscal' | 'custom'>('fiscal')
+  const [from, setFrom] = useState(fiscalStartBs)
+  const [to, setTo] = useState(todayBs())
 
-  const pnl = useMemo(() => computeProfitAndLoss(accounts, closingStockValue()), [accounts, closingStockValue])
+  useEffect(() => {
+    if (range !== 'fiscal') return
+    setFrom(fiscalStartBs)
+    setTo(todayBs())
+  }, [fiscalStartBs, range])
 
-  const cash = accounts.find(a => a.id === 'cash')?.balance ?? 0
-  const bank = accounts.find(a => a.id === 'bank')?.balance ?? 0
+  const applyPreset = (preset: 'today' | 'month' | 'fiscal') => {
+    setRange(preset)
+    if (preset === 'today') {
+      setFrom(todayBs())
+      setTo(todayBs())
+    } else if (preset === 'month') {
+      setFrom(firstOfCurrentBsMonth())
+      setTo(todayBs())
+    } else {
+      setFrom(fiscalStartBs)
+      setTo(todayBs())
+    }
+  }
+
+  const filteredVouchers = useMemo(() => {
+    const fromKey = makeBsKey(from)
+    const toKey = makeBsKey(to)
+    return vouchers.filter(v => {
+      const key = v.date_bs_key || makeBsKey(v.date_bs)
+      return key >= fromKey && key <= toKey
+    })
+  }, [vouchers, from, to])
+
+  const periodAccounts = useMemo(() => recomputeAllBalances(rawAccounts, filteredVouchers), [rawAccounts, filteredVouchers])
+  const pnl = useMemo(() => computeProfitAndLoss(periodAccounts, closingStockValue()), [periodAccounts, closingStockValue])
+
+  const systemBalance = (key: SystemAccountKey) => {
+    if (!company) return 0
+    return accounts.find(a => a.id === resolveSystemAccountId(accounts, company.id, key))?.balance ?? 0
+  }
+
+  const cash = systemBalance('cash')
+  const bank = systemBalance('bank')
 
   const debtorsTotal = parties
     .filter(p => p.type === 'customer')
@@ -32,11 +83,11 @@ export function Dashboard() {
 
   const totalStockValue = stock.reduce((s, e) => s + e.value, 0)
 
-  const vatPayable = accounts.find(a => a.id === 'vat_payable')?.balance ?? 0
-  const vatReceivable = accounts.find(a => a.id === 'vat_receivable')?.balance ?? 0
+  const vatPayable = systemBalance('vat_payable')
+  const vatReceivable = systemBalance('vat_receivable')
   const netVat = vatPayable - vatReceivable
 
-  const recent = [...vouchers].filter(v => !v.cancelled)
+  const recent = [...filteredVouchers].filter(v => !v.cancelled)
     .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
     .slice(0, 10)
 
@@ -46,11 +97,50 @@ export function Dashboard() {
   })
 
   const closeEdit = () => setEditing(null)
+  const companySetupIncomplete = !!company && (
+    company.name === 'My Trading Co.' ||
+    !company.address ||
+    !company.phone ||
+    !company.pan_vat
+  )
 
   return (
     <div>
       <PageHeader title="Dashboard" description="Your business at a glance" />
       <PageContent className="space-y-5">
+        {companySetupIncomplete && (
+          <Card className="border-amber-200 bg-amber-50/50">
+            <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-semibold text-amber-800">Complete company setup</p>
+                <p className="text-xs text-amber-700 mt-0.5">
+                  Add company name, address, phone, PAN/VAT, VAT mode, and fiscal year from Settings.
+                </p>
+              </div>
+              <Button size="sm" onClick={() => navigate('/settings')}>Open Settings</Button>
+            </CardContent>
+          </Card>
+        )}
+        <Card>
+          <CardContent className="p-4">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex gap-2">
+                <Button variant={range === 'today' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('today')}>Today</Button>
+                <Button variant={range === 'month' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('month')}>This Month</Button>
+                <Button variant={range === 'fiscal' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('fiscal')}>Fiscal Year</Button>
+                <Button variant={range === 'custom' ? 'default' : 'outline'} size="sm" onClick={() => setRange('custom')}>Custom</Button>
+              </div>
+              <div className="space-y-1.5">
+                <Label>From</Label>
+                <NepaliDateInput value={from} onChange={v => { setFrom(v); setRange('custom') }} className="w-40" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>To</Label>
+                <NepaliDateInput value={to} onChange={v => { setTo(v); setRange('custom') }} className="w-40" />
+              </div>
+            </div>
+          </CardContent>
+        </Card>
         {/* Stat grid */}
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <StatCard label="Cash + Bank" value={cash + bank} Icon={Wallet}

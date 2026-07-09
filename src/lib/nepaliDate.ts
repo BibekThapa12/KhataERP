@@ -42,6 +42,9 @@ export function bsToAd(bsDate: string): string {
   return `${ad.getFullYear()}-${pad2(ad.getMonth() + 1)}-${pad2(ad.getDate())}`
 }
 
+export const DEFAULT_FISCAL_YEAR_START_BS = '2083-04-01'
+export const DEFAULT_FISCAL_YEAR_START_AD = bsToAd(DEFAULT_FISCAL_YEAR_START_BS)
+
 export function todayBs(): string {
   return adToBs(new Date().toISOString().slice(0, 10))
 }

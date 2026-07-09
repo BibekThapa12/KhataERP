@@ -1,7 +1,7 @@
 // ─── Domain Types ────────────────────────────────────────────────────────────
 
 export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense'
-export type VoucherType = 'Sales' | 'Purchase' | 'Receipt' | 'Payment' | 'Journal'
+export type VoucherType = 'Sales' | 'Purchase' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
 
@@ -103,11 +103,26 @@ export interface Voucher {
 export interface Company {
   id: string
   user_id: string
+  owner_email?: string
   name: string
   address?: string
   pan_vat?: string
   phone?: string
   vat_enabled?: boolean
+  sales_prefix?: string
+  purchase_prefix?: string
+  receipt_prefix?: string
+  payment_prefix?: string
+  reset_numbering_fiscal_year?: boolean
+  print_format?: 'A5' | 'A4'
+  invoice_terms?: string
+  payment_qr_text?: string
+  logo_url?: string
+  plan_status?: 'free' | 'trial' | 'paid' | 'expired'
+  trial_ends_at?: string
+  support_status?: 'normal' | 'needs_help' | 'blocked'
+  developer_notes?: string
+  suspended?: boolean
   fiscal_year_start: string
   created_at?: string
 }

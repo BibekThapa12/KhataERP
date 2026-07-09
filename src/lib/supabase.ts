@@ -1,11 +1,19 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Account, Party, Item, Voucher, VoucherLine, StockLine, Company } from '@/types'
-import { normalizeVoucherDates } from '@/lib/nepaliDate'
+import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+export const supabaseProjectHost = (() => {
+  if (!supabaseUrl) return ''
+  try {
+    return new URL(supabaseUrl).host
+  } catch {
+    return supabaseUrl
+  }
+})()
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
@@ -38,26 +46,185 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
   })
 export const signOut = () => supabase.auth.signOut()
 
+export async function isDeveloperAdmin(): Promise<boolean> {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user) return false
+  const { data, error } = await supabase
+    .from('developer_admins')
+    .select('user_id')
+    .eq('user_id', user.id)
+    .maybeSingle()
+  if (error) return false
+  return !!data
+}
+
+export async function logAppEvent(event_type: string, company_id?: string | null, metadata: Record<string, unknown> = {}) {
+  const { data: { user } } = await supabase.auth.getUser()
+  if (!user || !company_id) return
+  await supabase.from('app_events').insert({ event_type, company_id, user_id: user.id, metadata })
+}
+
+export function logAppError(company_id: string | undefined | null, error: unknown, context: Record<string, unknown> = {}) {
+  const message = error instanceof Error ? error.message : String(error)
+  const stack = error instanceof Error ? error.stack : undefined
+  logAppEvent('frontend_error', company_id, {
+    message,
+    stack,
+    path: typeof window !== 'undefined' ? window.location.pathname : undefined,
+    ...context,
+  })
+}
+
+export type DeveloperSchemaStatusItem = {
+  key: string
+  label: string
+  status: 'ok' | 'missing'
+  detail: string
+}
+
+export async function fetchDeveloperSchemaStatus(): Promise<{
+  available: boolean
+  items: DeveloperSchemaStatusItem[]
+  error?: string
+}> {
+  const { data, error } = await supabase.rpc('get_developer_schema_status')
+  if (error) {
+    return {
+      available: false,
+      items: [],
+      error: error.message,
+    }
+  }
+  return {
+    available: true,
+    items: Array.isArray(data) ? data as DeveloperSchemaStatusItem[] : [],
+  }
+}
+
+export async function checkSupabaseConnectionStatus() {
+  const messages: string[] = []
+  let project = 'Missing VITE_SUPABASE_URL'
+  if (supabaseUrl) {
+    try {
+      project = new URL(supabaseUrl).host
+    } catch {
+      project = supabaseUrl
+    }
+  }
+  const status = {
+    checked_at: new Date().toISOString(),
+    project,
+    auth: 'checking' as 'ok' | 'error' | 'checking',
+    database: 'checking' as 'ok' | 'error' | 'checking',
+    event_log: 'checking' as 'ok' | 'error' | 'checking',
+    realtime: 'configured',
+    messages,
+  }
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    status.auth = 'error'
+    status.database = 'error'
+    status.event_log = 'error'
+    messages.push('Missing Supabase environment variables.')
+    return status
+  }
+
+  const { error: authError } = await supabase.auth.getSession()
+  status.auth = authError ? 'error' : 'ok'
+  if (authError) messages.push(authError.message)
+
+  const { error: dbError } = await supabase
+    .from('companies')
+    .select('id', { count: 'exact', head: true })
+  status.database = dbError ? 'error' : 'ok'
+  if (dbError) messages.push(`companies: ${dbError.message}`)
+
+  const { error: eventError } = await supabase
+    .from('app_events')
+    .select('id', { count: 'exact', head: true })
+  status.event_log = eventError ? 'error' : 'ok'
+  if (eventError) messages.push(`app_events: ${eventError.message}`)
+
+  return status
+}
+
 // ─── Company ──────────────────────────────────────────────────────────────────
 
 export async function getOrCreateCompany(user_id: string): Promise<Company> {
-  const { data } = await supabase
+  const { data: userData } = await supabase.auth.getUser()
+  const { data: companies, error: companyError } = await supabase
     .from('companies')
     .select('*')
     .eq('user_id', user_id)
-    .single()
-  if (data) return data
+    .order('created_at', { ascending: true })
+  if (companyError) throw companyError
 
-  const { data: userData } = await supabase.auth.getUser()
   const metadata = userData.user?.user_metadata ?? {}
-  const company = {
-    user_id,
-    name: String(metadata.company_name || 'My Trading Co.').trim() || 'My Trading Co.',
+  const metadataCompany = {
+    owner_email: userData.user?.email,
+    name: String(metadata.company_name || '').trim(),
     address: String(metadata.company_address || '').trim(),
     pan_vat: String(metadata.company_pan_vat || '').trim(),
     phone: String(metadata.company_phone || '').trim(),
     vat_enabled: metadata.company_vat_enabled !== false,
-    fiscal_year_start: '2026-04-01',
+  }
+
+  const existingCompanies = companies || []
+  if (existingCompanies.length) {
+    const scoreCompany = (company: Company) => {
+      let score = 0
+      if (company.name && company.name !== 'My Trading Co.') score += 5
+      if (company.address) score += 2
+      if (company.pan_vat) score += 2
+      if (company.phone) score += 2
+      if (company.owner_email) score += 1
+      return score
+    }
+
+    const selected = [...existingCompanies].sort((a, b) => scoreCompany(b) - scoreCompany(a))[0]
+    const updates: Partial<Company> = {}
+
+    if (!selected.fiscal_year_start || selected.fiscal_year_start === '2026-04-01') {
+      updates.fiscal_year_start = DEFAULT_FISCAL_YEAR_START_AD
+    }
+    if (!selected.owner_email && metadataCompany.owner_email) {
+      updates.owner_email = metadataCompany.owner_email
+    }
+    if (selected.name === 'My Trading Co.' && metadataCompany.name) {
+      updates.name = metadataCompany.name
+    }
+    if (!selected.address && metadataCompany.address) {
+      updates.address = metadataCompany.address
+    }
+    if (!selected.pan_vat && metadataCompany.pan_vat) {
+      updates.pan_vat = metadataCompany.pan_vat
+    }
+    if (!selected.phone && metadataCompany.phone) {
+      updates.phone = metadataCompany.phone
+    }
+
+    if (Object.keys(updates).length) {
+      await updateCompany(selected.id, updates)
+      return { ...selected, ...updates }
+    }
+    return selected
+  }
+
+  const company = {
+    user_id,
+    owner_email: metadataCompany.owner_email,
+    name: metadataCompany.name || 'My Trading Co.',
+    address: metadataCompany.address,
+    pan_vat: metadataCompany.pan_vat,
+    phone: metadataCompany.phone,
+    vat_enabled: metadataCompany.vat_enabled,
+    sales_prefix: 'INV-',
+    purchase_prefix: 'PB-',
+    receipt_prefix: 'RCPT-',
+    payment_prefix: 'PAY-',
+    reset_numbering_fiscal_year: false,
+    print_format: 'A5',
+    fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
   }
 
   const { data: newCompany, error } = await supabase
@@ -70,7 +237,68 @@ export async function getOrCreateCompany(user_id: string): Promise<Company> {
 }
 
 export async function updateCompany(id: string, updates: Partial<Company>) {
+  const nextUpdates: Record<string, unknown> = { ...updates }
+  const skippedColumns: string[] = []
+
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const { error } = await supabase.from('companies').update(nextUpdates).eq('id', id)
+    if (!error) {
+      if (skippedColumns.length) {
+        console.warn(`Skipped missing companies columns while saving: ${skippedColumns.join(', ')}`)
+      }
+      return
+    }
+
+    const message = error.message || ''
+    const missingColumn =
+      /Could not find the '([^']+)' column/.exec(message)?.[1] ||
+      /column companies\.([a-zA-Z0-9_]+) does not exist/.exec(message)?.[1]
+
+    if (!missingColumn || !(missingColumn in nextUpdates)) throw error
+
+    delete nextUpdates[missingColumn]
+    skippedColumns.push(missingColumn)
+  }
+
+  throw new Error('Could not save company details because too many Supabase columns are missing.')
+}
+
+export async function fetchDeveloperDashboardData() {
+  const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes] = await Promise.all([
+    supabase.from('companies').select('*').order('created_at', { ascending: false }),
+    supabase.from('accounts').select('*'),
+    supabase.from('parties').select('*'),
+    supabase.from('items').select('*'),
+    supabase.from('vouchers').select(`
+      *,
+      lines:voucher_lines(*),
+      stock_lines:stock_lines(*),
+      invoice_items:invoice_items(*)
+    `).order('date_bs_key', { ascending: false }),
+    supabase.from('app_events').select('*').order('created_at', { ascending: false }).limit(1000),
+  ])
+
+  for (const res of [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes]) {
+    if (res.error) throw res.error
+  }
+
+  return {
+    companies: (companiesRes.data || []) as Company[],
+    accounts: (accountsRes.data || []).map(a => ({ ...a, balance: 0 })) as Account[],
+    parties: (partiesRes.data || []) as Party[],
+    items: (itemsRes.data || []) as Item[],
+    vouchers: (vouchersRes.data || []).map(v => normalizeVoucherDates(v) as Voucher),
+    events: eventsRes.error ? [] : (eventsRes.data || []),
+  }
+}
+
+export async function updateDeveloperCompany(id: string, updates: Partial<Company>) {
   const { error } = await supabase.from('companies').update(updates).eq('id', id)
+  if (error) throw error
+}
+
+export async function deleteDeveloperCompany(id: string) {
+  const { error } = await supabase.from('companies').delete().eq('id', id)
   if (error) throw error
 }
 
@@ -194,13 +422,14 @@ export async function getNextSeq(company_id: string): Promise<number> {
   return (data?.seq || 0) + 1
 }
 
-export async function getNextInvoiceNo(company_id: string, type: 'Sales' | 'Purchase'): Promise<string> {
-  const prefix = type === 'Sales' ? 'INV-' : 'PB-'
-  const { count } = await supabase
+export async function getNextVoucherNo(company_id: string, type: 'Sales' | 'Purchase' | 'Receipt' | 'Payment', prefix: string, resetByFiscalYear = false, fiscalYearStart?: string): Promise<string> {
+  let query = supabase
     .from('vouchers')
     .select('*', { count: 'exact', head: true })
     .eq('company_id', company_id)
     .eq('type', type)
+  if (resetByFiscalYear && fiscalYearStart) query = query.gte('date_ad', fiscalYearStart)
+  const { count } = await query
   return `${prefix}${String((count || 0) + 1).padStart(4, '0')}`
 }
 
@@ -227,11 +456,15 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     .single()
   if (ve) throw ve
 
-  const { data: newLines, error: le } = await supabase
-    .from('voucher_lines')
-    .insert(lines.map(l => ({ ...l, voucher_id: v.id })))
-    .select()
-  if (le) throw le
+  let newLines: VoucherLine[] = []
+  if (lines.length) {
+    const { data, error: le } = await supabase
+      .from('voucher_lines')
+      .insert(lines.map(l => ({ ...l, voucher_id: v.id })))
+      .select()
+    if (le) throw le
+    newLines = data || []
+  }
 
   let newStockLines: StockLine[] = []
   if (stock_lines?.length) {
@@ -255,7 +488,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
 
   return {
     ...normalizeVoucherDates(v),
-    lines: newLines || [],
+    lines: newLines,
     stock_lines: newStockLines,
     invoice_items: newInvoiceItems,
   } as Voucher
@@ -276,11 +509,15 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
     if (error) throw error
   }
 
-  const { data: newLines, error: le } = await supabase
-    .from('voucher_lines')
-    .insert(lines.map(l => ({ ...l, voucher_id: id })))
-    .select()
-  if (le) throw le
+  let newLines: VoucherLine[] = []
+  if (lines.length) {
+    const { data, error: le } = await supabase
+      .from('voucher_lines')
+      .insert(lines.map(l => ({ ...l, voucher_id: id })))
+      .select()
+    if (le) throw le
+    newLines = data || []
+  }
 
   let newStockLines: StockLine[] = []
   if (stock_lines?.length) {
@@ -304,7 +541,7 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
 
   return {
     ...normalizeVoucherDates(v),
-    lines: newLines || [],
+    lines: newLines,
     stock_lines: newStockLines,
     invoice_items: newInvoiceItems,
   } as Voucher

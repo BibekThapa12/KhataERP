@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Edit2, Eye, Printer, XCircle } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
+import { logAppEvent } from '@/lib/supabase'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
@@ -160,13 +161,14 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
         <div class="grand"><span>Total</span><strong>${esc(fmtMoney(voucher.total))}</strong></div>
       </div>
     `
+    const printFormat = company?.print_format || 'A5'
     const html = `
       <!doctype html>
       <html>
         <head>
           <title>${esc(voucher.type)} ${esc(voucher.invoice_no || voucher.seq)}</title>
           <style>
-            @page { size: A5; margin: 10mm; }
+            @page { size: ${esc(printFormat)}; margin: 10mm; }
             * { box-sizing: border-box; }
             body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; }
             .sheet { width: 100%; min-height: 190mm; padding: 2mm; }
@@ -195,6 +197,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
           <main class="sheet">
             <section class="top">
               <div>
+                ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
                 <h1>${esc(company?.name || 'KhataERP')}</h1>
                 <p class="muted">${esc(company?.address || '')}</p>
                 <p class="muted">${company?.pan_vat ? `PAN/VAT: ${esc(company.pan_vat)}` : ''} ${company?.phone ? ` | Phone: ${esc(company.phone)}` : ''}</p>
@@ -224,6 +227,8 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
             </table>
             ${totals}
             ${voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
+            ${company?.invoice_terms ? `<p class="note"><strong>Terms:</strong> ${esc(company.invoice_terms)}</p>` : ''}
+            ${company?.payment_qr_text ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
             <section class="signatures">
               <div>Prepared By</div>
               <div>Received By</div>
@@ -234,6 +239,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
     `
     const win = window.open('', '_blank', 'width=800,height=900')
     if (!win) return
+    logAppEvent('print_voucher', company?.id, { voucher_id: voucher.id, type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
     win.document.close()
     win.focus()

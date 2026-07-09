@@ -1,14 +1,14 @@
+import { useEffect, useState } from 'react'
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { signOut } from '@/lib/supabase'
+import { isDeveloperAdmin, signOut } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, List, Scale, BarChart2, FileText,
-  Receipt, Percent, Boxes, Settings, LogOut, ChevronRight
+  Percent, Boxes, Settings, LogOut, ChevronRight, Code2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { Separator } from '@/components/ui/misc'
 
 const NAV_SECTIONS: {
   label: string
@@ -52,10 +52,31 @@ export function AppShell() {
   const company = useAppStore(s => s.company)
   const navigate = useNavigate()
   const vatEnabled = company?.vat_enabled ?? true
+  const [developerAdmin, setDeveloperAdmin] = useState(false)
+
+  useEffect(() => {
+    isDeveloperAdmin().then(setDeveloperAdmin)
+  }, [])
 
   const handleSignOut = async () => {
     await signOut()
     navigate('/login')
+  }
+
+  if (company?.suspended && !developerAdmin) {
+    return (
+      <div className="min-h-screen bg-background flex items-center justify-center p-6">
+        <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-sm">
+          <h1 className="font-serif text-2xl font-bold text-foreground">Account suspended</h1>
+          <p className="mt-2 text-sm text-muted-foreground">
+            This company is temporarily suspended. Please contact KhataERP support to continue using the app.
+          </p>
+          <Button onClick={handleSignOut} className="mt-5">
+            Sign out
+          </Button>
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -106,6 +127,27 @@ export function AppShell() {
               </div>
             </div>
           ))}
+          {developerAdmin && (
+            <div>
+              <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">
+                Developer
+              </div>
+              <NavLink
+                to="/developer"
+                className={({ isActive }) =>
+                  cn(
+                    'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
+                    isActive
+                      ? 'bg-white text-[#1B2A4A] font-semibold'
+                      : 'text-blue-100/80 hover:bg-white/10 hover:text-white'
+                  )
+                }
+              >
+                <Code2 className="h-4 w-4 flex-shrink-0" />
+                <span>Developer Dashboard</span>
+              </NavLink>
+            </div>
+          )}
         </nav>
 
         {/* Footer */}

@@ -1,6 +1,7 @@
 import { useState } from 'react'
-import { Plus, Eye } from 'lucide-react'
+import { Plus, Eye, Printer, Share2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
+import { logAppEvent } from '@/lib/supabase'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { PartyForm } from '@/components/forms/PartyForm'
@@ -8,11 +9,10 @@ import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Badge } from '@/components/ui/misc'
 import type { Party } from '@/types'
 
 function PartyLedger({ party }: { party: Party }) {
-  const { vouchers, getAccount } = useAppStore()
+  const { company, vouchers, getAccount } = useAppStore()
   const account = getAccount(party.account_id)
   const related = vouchers
     .filter(v => !v.cancelled && v.party_account_id === party.account_id)
@@ -20,6 +20,44 @@ function PartyLedger({ party }: { party: Party }) {
 
   const isCustomer = party.type === 'customer'
   let running = account?.opening_balance ?? 0
+  const statementRows = related.map(v => {
+    const line = v.lines?.find(l => l.account_id === party.account_id)
+    const dr = line?.debit ?? 0
+    const cr = line?.credit ?? 0
+    running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 100) / 100
+    return { v, dr, cr, balance: running }
+  })
+
+  const printStatement = () => {
+    const rows = statementRows.map(({ v, dr, cr, balance }) => `
+      <tr>
+        <td>${fmtDate(v.date_bs)}</td>
+        <td>${v.type}</td>
+        <td>${v.invoice_no || ''}</td>
+        <td class="right">${dr ? fmtMoney(dr) : '-'}</td>
+        <td class="right">${cr ? fmtMoney(cr) : '-'}</td>
+        <td class="right">${fmtMoney(balance)}</td>
+      </tr>
+    `).join('')
+    const win = window.open('', '_blank', 'width=900,height=900')
+    if (!win) return
+    logAppEvent('print_party_statement', company?.id, { party_id: party.id, party_type: party.type })
+    win.document.write(`
+      <!doctype html><html><head><title>${party.name} statement</title>
+      <style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111827}h1{margin:0;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #d1d5db;padding:6px}th{background:#f3f4f6;text-align:left}.right{text-align:right}.meta{margin-top:6px;color:#4b5563}</style>
+      </head><body><h1>${company?.name || 'KhataERP'}</h1><p class="meta">Statement for <strong>${party.name}</strong></p><p class="meta">Opening balance: ${fmtMoney(account?.opening_balance ?? 0)} | Current balance: ${fmtMoney(account?.balance ?? 0)}</p><table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th>Debit</th><th>Credit</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table></body></html>
+    `)
+    win.document.close()
+    win.focus()
+    win.print()
+  }
+
+  const shareStatement = async () => {
+    const text = `${party.name} statement\nOpening: ${fmtMoney(account?.opening_balance ?? 0)}\nBalance: ${fmtMoney(account?.balance ?? 0)}`
+    logAppEvent('share_party_statement', company?.id, { party_id: party.id, party_type: party.type })
+    if (navigator.share) await navigator.share({ title: `${party.name} statement`, text })
+    else await navigator.clipboard.writeText(text)
+  }
 
   return (
     <div className="space-y-4">
@@ -30,6 +68,11 @@ function PartyLedger({ party }: { party: Party }) {
           <p className="mt-0.5 font-serif font-bold num">{fmtMoney(account?.balance ?? 0)}</p>
         </div>
       </div>
+      <div className="flex gap-2">
+        <Button variant="outline" size="sm" onClick={printStatement}><Printer className="h-3.5 w-3.5 mr-1.5" />Print statement</Button>
+        <Button variant="outline" size="sm" onClick={shareStatement}><Share2 className="h-3.5 w-3.5 mr-1.5" />Share</Button>
+      </div>
+      <p className="text-sm text-muted-foreground">Opening balance: <span className="num font-semibold">{fmtMoney(account?.opening_balance ?? 0)}</span></p>
       {related.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No transactions yet.</p>
       ) : (
@@ -45,11 +88,7 @@ function PartyLedger({ party }: { party: Party }) {
             </tr>
           </thead>
           <tbody>
-            {related.map(v => {
-              const line = v.lines?.find(l => l.account_id === party.account_id)
-              const dr = line?.debit ?? 0
-              const cr = line?.credit ?? 0
-              running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 100) / 100
+            {statementRows.map(({ v, dr, cr, balance }) => {
               return (
                 <tr key={v.id} className="border-t border-border hover:bg-muted/30">
                   <td className="px-3 py-2.5 text-muted-foreground">{fmtDate(v.date_bs)}</td>
@@ -57,7 +96,7 @@ function PartyLedger({ party }: { party: Party }) {
                   <td className="px-3 py-2.5 text-muted-foreground num text-xs">{v.invoice_no}</td>
                   <td className="px-3 py-2.5 text-right num">{dr ? <span className="debit-amt">{fmtMoney(dr)}</span> : '—'}</td>
                   <td className="px-3 py-2.5 text-right num">{cr ? <span className="credit-amt">{fmtMoney(cr)}</span> : '—'}</td>
-                  <td className="px-3 py-2.5 text-right num font-semibold">{fmtMoney(running)}</td>
+                  <td className="px-3 py-2.5 text-right num font-semibold">{fmtMoney(balance)}</td>
                 </tr>
               )
             })}

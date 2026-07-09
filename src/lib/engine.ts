@@ -20,11 +20,36 @@ export function validateBalanced(lines: VoucherLine[]): { valid: boolean; total_
   return { valid: Math.abs(diff) < 0.005, total_debit, total_credit, diff }
 }
 
+export type SystemAccountKey =
+  | 'cash'
+  | 'bank'
+  | 'inventory'
+  | 'vat_payable'
+  | 'vat_receivable'
+  | 'sales'
+  | 'purchase'
+  | 'capital'
+  | 'discount_allowed'
+  | 'rent'
+  | 'salary'
+  | 'electricity'
+
+export function systemAccountId(company_id: string, key: SystemAccountKey) {
+  return `${company_id}:${key}`
+}
+
+export function resolveSystemAccountId(accounts: Account[], company_id: string, key: SystemAccountKey) {
+  const scoped = systemAccountId(company_id, key)
+  if (accounts.some(a => a.id === scoped)) return scoped
+  if (accounts.some(a => a.company_id === company_id && a.id === key)) return key
+  return scoped
+}
+
 // ─── Default Chart of Accounts ────────────────────────────────────────────────
 
 export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balance'>[] {
-  const base = (id: string, name: string, type: AccountType, group: string, is_system = true) => ({
-    id, company_id, name, type, group, is_system, is_party: false, opening_balance: 0,
+  const base = (key: SystemAccountKey, name: string, type: AccountType, group: string, is_system = true) => ({
+    id: systemAccountId(company_id, key), company_id, name, type, group, is_system, is_party: false, opening_balance: 0,
   })
   return [
     base('cash', 'Cash', 'Asset', 'Current Assets'),
@@ -107,7 +132,10 @@ interface InvoiceParams {
   date?: string
   date_bs?: string
   invoice_no?: string
+  system_accounts?: Partial<Record<SystemAccountKey, string>>
 }
+
+const sys = (accounts: InvoiceParams['system_accounts'], key: SystemAccountKey) => accounts?.[key] || key
 
 export function buildSalesVoucherData(p: InvoiceParams) {
   const subtotal = round2(p.items.reduce((s, l) => s + l.qty * l.rate, 0))
@@ -116,10 +144,10 @@ export function buildSalesVoucherData(p: InvoiceParams) {
   const vat_amount = round2(taxable * (p.vat_rate / 100))
   const total = round2(taxable + vat_amount)
   const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = [
-    { account_id: p.is_cash ? 'cash' : p.party_account_id!, debit: total, credit: 0 },
-    { account_id: 'sales', debit: 0, credit: taxable },
+    { account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: total, credit: 0 },
+    { account_id: sys(p.system_accounts, 'sales'), debit: 0, credit: taxable },
   ]
-  if (vat_amount > 0) lines.push({ account_id: 'vat_payable', debit: 0, credit: vat_amount })
+  if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
   const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: l.qty, rate: l.rate, direction: 'out' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items: p.items }
 }
@@ -131,32 +159,32 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   const vat_amount = round2(taxable * (p.vat_rate / 100))
   const total = round2(taxable + vat_amount)
   const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = [
-    { account_id: 'purchase', debit: taxable, credit: 0 },
+    { account_id: sys(p.system_accounts, 'purchase'), debit: taxable, credit: 0 },
   ]
-  if (vat_amount > 0) lines.push({ account_id: 'vat_receivable', debit: vat_amount, credit: 0 })
-  lines.push({ account_id: p.is_cash ? 'cash' : p.party_account_id!, debit: 0, credit: total })
+  if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
+  lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
   const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: l.qty, rate: l.rate, direction: 'in' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items: p.items }
 }
 
 type PaymentMode = 'cash' | 'bank'
 
-export function buildReceiptData(party_account_id: string, amount: number, deposit_to: PaymentMode = 'cash') {
+export function buildReceiptData(party_account_id: string, amount: number, deposit_to: PaymentMode = 'cash', system_accounts?: Partial<Record<SystemAccountKey, string>>) {
   return {
     total: amount,
     lines: [
-      { account_id: deposit_to, debit: amount, credit: 0 },
+      { account_id: sys(system_accounts, deposit_to), debit: amount, credit: 0 },
       { account_id: party_account_id, debit: 0, credit: amount },
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }
 
-export function buildPaymentData(party_account_id: string, amount: number, paid_from: PaymentMode = 'cash') {
+export function buildPaymentData(party_account_id: string, amount: number, paid_from: PaymentMode = 'cash', system_accounts?: Partial<Record<SystemAccountKey, string>>) {
   return {
     total: amount,
     lines: [
       { account_id: party_account_id, debit: amount, credit: 0 },
-      { account_id: paid_from, debit: 0, credit: amount },
+      { account_id: sys(system_accounts, paid_from), debit: 0, credit: amount },
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }
@@ -191,7 +219,7 @@ export function computeProfitAndLoss(accounts: Account[], closing_stock_value = 
 }
 
 export function computeBalanceSheet(accounts: Account[], net_profit: number, closing_stock_value = 0): BalanceSheet {
-  const assets = accounts.filter(a => a.type === 'Asset' && a.id !== 'inventory')
+  const assets = accounts.filter(a => a.type === 'Asset' && a.id !== 'inventory' && !a.id.endsWith(':inventory'))
   const liabilities = accounts.filter(a => a.type === 'Liability')
   const equity = accounts.filter(a => a.type === 'Equity')
   const total_assets_base = round2(assets.reduce((s, a) => s + (a.balance || 0), 0))
