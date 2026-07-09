@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react'
 import { TrendingUp, TrendingDown, Wallet, Package } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeProfitAndLoss, computeVatReport } from '@/lib/engine'
+import { computeProfitAndLoss } from '@/lib/engine'
 import { fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { StatCard } from '@/components/StatCard'
@@ -13,8 +13,9 @@ import { Badge } from '@/components/ui/misc'
 import type { Voucher } from '@/types'
 
 export function Dashboard() {
-  const { accounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
+  const { company, accounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
   const [editing, setEditing] = useState<Voucher | null>(null)
+  const vatEnabled = company?.vat_enabled ?? true
 
   const pnl = useMemo(() => computeProfitAndLoss(accounts, closingStockValue()), [accounts, closingStockValue])
 
@@ -62,7 +63,7 @@ export function Dashboard() {
             sub={`${useAppStore.getState().items.length} item(s)`} />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <div className={`grid grid-cols-1 ${vatEnabled ? 'lg:grid-cols-2' : ''} gap-4`}>
           <Card>
             <CardContent className="p-5">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Net Profit / Loss</p>
@@ -74,6 +75,7 @@ export function Dashboard() {
               </p>
             </CardContent>
           </Card>
+          {vatEnabled && (
           <Card>
             <CardContent className="p-5">
               <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">VAT Position</p>
@@ -85,6 +87,7 @@ export function Dashboard() {
               </p>
             </CardContent>
           </Card>
+          )}
         </div>
 
         {/* Low stock alerts */}

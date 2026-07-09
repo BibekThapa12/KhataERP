@@ -51,6 +51,7 @@ const NAV_SECTIONS: {
 export function AppShell() {
   const company = useAppStore(s => s.company)
   const navigate = useNavigate()
+  const vatEnabled = company?.vat_enabled ?? true
 
   const handleSignOut = async () => {
     await signOut()
@@ -82,7 +83,9 @@ export function AppShell() {
                 {section.label}
               </div>
               <div className="space-y-0.5">
-                {section.items.map(({ to, label, Icon, end }) => (
+                {section.items
+                  .filter(item => vatEnabled || item.to !== '/vat-report')
+                  .map(({ to, label, Icon, end }) => (
                   <NavLink
                     key={to}
                     to={to}

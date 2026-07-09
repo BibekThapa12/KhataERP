@@ -219,11 +219,28 @@ export function BalanceSheetPage() {
 // ─── VAT Report ───────────────────────────────────────────────────────────────
 export function VatReportPage() {
   const vouchers = useAppStore(s => s.vouchers)
+  const company = useAppStore(s => s.company)
   const [from, setFrom] = useState(firstOfCurrentBsMonth())
   const [to, setTo] = useState(todayBs())
   const [applied, setApplied] = useState({ from: firstOfCurrentBsMonth(), to: todayBs() })
 
   const vat = useMemo(() => computeVatReport(vouchers, applied.from, applied.to), [vouchers, applied])
+
+  if (company?.vat_enabled === false) {
+    return (
+      <div>
+        <PageHeader title="VAT Report" description="VAT mode is disabled for this company" />
+        <PageContent>
+          <Card>
+            <CardContent className="p-6 text-sm text-muted-foreground">
+              This company is using internal bookkeeping mode, so VAT reporting is not active.
+              You can enable VAT Mode from Settings if you need VAT invoices and reports.
+            </CardContent>
+          </Card>
+        </PageContent>
+      </div>
+    )
+  }
 
   return (
     <div>

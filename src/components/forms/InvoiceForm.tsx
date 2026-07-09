@@ -26,7 +26,8 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
+  const { company, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
+  const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(todayBs())
   const [isCash, setIsCash] = useState(false)
@@ -48,7 +49,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   // Totals
   const subtotal = round2Local(lines.reduce((s, l) => s + l.qty * l.rate, 0))
   const taxable = round2Local(subtotal - discount)
-  const vatAmount = round2Local(taxable * (vatRate / 100))
+  const effectiveVatRate = vatEnabled ? vatRate : 0
+  const vatAmount = round2Local(taxable * (effectiveVatRate / 100))
   const total = round2Local(taxable + vatAmount)
 
   useEffect(() => {
@@ -57,16 +59,16 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setIsCash(voucher.is_cash)
       setPartyAccountId(voucher.party_account_id || '')
       setLines((voucher.invoice_items || []).map(i => ({ item_id: i.item_id, qty: i.qty, rate: i.rate })))
-      setVatRate(voucher.vat_rate ?? 13)
+      setVatRate(vatEnabled ? (voucher.vat_rate ?? 13) : 0)
       setDiscount(voucher.discount ?? 0)
       setNarration(voucher.narration ?? '')
       setError('')
     } else if (!open) {
       setDateBs(todayBs()); setIsCash(false); setPartyAccountId('')
-      setLines([{ item_id: '', qty: 1, rate: 0 }]); setVatRate(13)
+      setLines([{ item_id: '', qty: 1, rate: 0 }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setNarration(''); setError('')
     }
-  }, [open, voucher])
+  }, [open, voucher, vatEnabled])
 
   const updateLine = (idx: number, field: keyof LineItem, value: string | number) => {
     const next = [...lines]
@@ -109,7 +111,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: vatRate, discount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: effectiveVatRate, discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params)
         else await saveSalesVoucher(params)
@@ -221,23 +223,25 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                 <Label>Discount (Rs, flat)</Label>
                 <Input type="number" min="0" step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" />
               </div>
-              <div className="space-y-1.5">
-                <Label>VAT Rate</Label>
-                <Select value={String(vatRate)} onValueChange={v => setVatRate(Number(v))}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="13">13% (Standard)</SelectItem>
-                    <SelectItem value="0">0% (Exempt)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
+              {vatEnabled && (
+                <div className="space-y-1.5">
+                  <Label>VAT Rate</Label>
+                  <Select value={String(vatRate)} onValueChange={v => setVatRate(Number(v))}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="13">13% (Standard)</SelectItem>
+                      <SelectItem value="0">0% (Exempt)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
             </div>
 
             {/* Totals */}
             <div className="bg-muted/40 rounded-lg p-4 text-sm space-y-1.5">
               <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(subtotal)}</span></div>
               <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(discount)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">VAT ({vatRate}%)</span><span className="num">{fmtMoney(vatAmount)}</span></div>
+              {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num">{fmtMoney(vatAmount)}</span></div>}
               <div className="flex justify-between font-serif font-bold text-base border-t border-border pt-2 mt-2">
                 <span>Total</span><span className="num">{fmtMoney(total)}</span>
               </div>

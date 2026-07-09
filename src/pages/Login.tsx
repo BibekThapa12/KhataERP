@@ -14,6 +14,7 @@ export function LoginPage() {
   const [companyAddress, setCompanyAddress] = useState('')
   const [panVat, setPanVat] = useState('')
   const [phone, setPhone] = useState('')
+  const [vatEnabled, setVatEnabled] = useState(true)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
@@ -33,6 +34,7 @@ export function LoginPage() {
           address: companyAddress.trim(),
           pan_vat: panVat.trim(),
           phone: phone.trim(),
+          vat_enabled: vatEnabled,
         })
         if (error) throw error
         setSuccess('Account created! Check your email to confirm, then sign in.')
@@ -95,6 +97,21 @@ export function LoginPage() {
                       <Input id="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="9800000000" required />
                     </div>
                   </div>
+                  <label htmlFor="vat-enabled" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
+                    <input
+                      id="vat-enabled"
+                      type="checkbox"
+                      checked={vatEnabled}
+                      onChange={e => setVatEnabled(e.target.checked)}
+                      className="mt-1"
+                    />
+                    <span>
+                      <span className="block text-sm font-medium">VAT Mode</span>
+                      <span className="block text-xs text-muted-foreground">
+                        {vatEnabled ? 'Use VAT invoices and VAT reports.' : 'Use internal bookkeeping without VAT fields.'}
+                      </span>
+                    </span>
+                  </label>
                 </>
               )}
               {error && <p className="text-sm text-destructive">{error}</p>}
@@ -113,7 +130,7 @@ export function LoginPage() {
           </CardContent>
         </Card>
         <p className="text-center text-xs text-muted-foreground">
-          Double-entry accounting | 13% VAT | NPR | Multi-user
+          Double-entry accounting | VAT optional | NPR | Multi-user
         </p>
       </div>
     </div>

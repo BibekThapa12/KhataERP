@@ -183,13 +183,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveSalesVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const data = buildSalesVoucherData(params)
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate }
+    const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextInvoiceNo(company.id, 'Sales')
-    const dateFields = voucherDateFields(params.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,
@@ -204,12 +205,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   savePurchaseVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const data = buildPurchaseVoucherData(params)
+    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate }
+    const data = buildPurchaseVoucherData(effectiveParams)
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextInvoiceNo(company.id, 'Purchase')
-    const dateFields = voucherDateFields(params.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,
@@ -272,13 +274,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   // ─── Cancel ─────────────────────────────────────────────────────────────────
   updateSalesVoucher: async (id, params) => {
     const existing = get().vouchers.find(v => v.id === id)
+    const company = get().company
     if (!existing) throw new Error('Voucher not found')
-    const data = buildSalesVoucherData(params)
+    const effectiveParams = { ...params, vat_rate: company?.vat_enabled === false ? 0 : params.vat_rate }
+    const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
-    const dateFields = voucherDateFields(params.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,
@@ -291,12 +295,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   updatePurchaseVoucher: async (id, params) => {
     const existing = get().vouchers.find(v => v.id === id)
+    const company = get().company
     if (!existing) throw new Error('Voucher not found')
-    const data = buildPurchaseVoucherData(params)
-    const dateFields = voucherDateFields(params.date_bs)
+    const effectiveParams = { ...params, vat_rate: company?.vat_enabled === false ? 0 : params.vat_rate }
+    const data = buildPurchaseVoucherData(effectiveParams)
+    const dateFields = voucherDateFields(effectiveParams.date_bs)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, narration: params.narration, party_account_id: params.is_cash ? undefined : (params.party_account_id ?? undefined), is_cash: params.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: data.invoice_items,

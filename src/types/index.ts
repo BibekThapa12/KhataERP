@@ -107,6 +107,7 @@ export interface Company {
   address?: string
   pan_vat?: string
   phone?: string
+  vat_enabled?: boolean
   fiscal_year_start: string
   created_at?: string
 }

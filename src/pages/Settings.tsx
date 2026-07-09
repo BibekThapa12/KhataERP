@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Download } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { todayISO } from '@/lib/utils'
@@ -15,12 +15,21 @@ export function SettingsPage() {
   const [address, setAddress] = useState(company?.address ?? '')
   const [panVat, setPanVat] = useState(company?.pan_vat ?? '')
   const [phone, setPhone] = useState(company?.phone ?? '')
+  const [vatEnabled, setVatEnabled] = useState(company?.vat_enabled ?? true)
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
 
+  useEffect(() => {
+    setName(company?.name ?? '')
+    setAddress(company?.address ?? '')
+    setPanVat(company?.pan_vat ?? '')
+    setPhone(company?.phone ?? '')
+    setVatEnabled(company?.vat_enabled ?? true)
+  }, [company])
+
   const handleSave = async () => {
     setSaving(true)
-    await saveCompany({ name: name.trim() || 'My Company', address: address.trim(), pan_vat: panVat.trim(), phone: phone.trim() })
+    await saveCompany({ name: name.trim() || 'My Company', address: address.trim(), pan_vat: panVat.trim(), phone: phone.trim(), vat_enabled: vatEnabled })
     setSaving(false)
     setSaved(true)
     setTimeout(() => setSaved(false), 2000)
@@ -60,6 +69,21 @@ export function SettingsPage() {
               <Label>Phone Number</Label>
               <Input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Optional" />
             </div>
+            <label htmlFor="settings-vat-enabled" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
+              <input
+                id="settings-vat-enabled"
+                type="checkbox"
+                checked={vatEnabled}
+                onChange={e => setVatEnabled(e.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm font-medium">VAT Mode</span>
+                <span className="block text-xs text-muted-foreground">
+                  {vatEnabled ? 'Invoices include VAT and VAT reports are available.' : 'Internal bookkeeping mode hides VAT fields and reports.'}
+                </span>
+              </span>
+            </label>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save Changes'}
             </Button>

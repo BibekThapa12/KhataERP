@@ -21,12 +21,13 @@ function useVouchersByType(type: VoucherType) {
 
 // ─── Sales ────────────────────────────────────────────────────────────────────
 export function SalesPage() {
+  const vatEnabled = useAppStore(s => s.company?.vat_enabled ?? true)
   const vouchers = useVouchersByType('Sales')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
-      <PageHeader title="Sales Invoices" description="VAT-ready sales to customers"
+      <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to customers' : 'Internal sales records for bookkeeping'}
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale</Button>} />
       <PageContent>
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>

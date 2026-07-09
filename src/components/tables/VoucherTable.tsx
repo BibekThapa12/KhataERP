@@ -20,7 +20,8 @@ function voucherBadgeVariant(type: string, cancelled: boolean) {
 }
 
 function VoucherDetail({ voucher }: { voucher: Voucher }) {
-  const { getAccount, getItem, getPartyByAccountId } = useAppStore()
+  const { company, getAccount, getItem, getPartyByAccountId } = useAppStore()
+  const vatEnabled = company?.vat_enabled ?? true
   const partyName = voucher.party_account_id
     ? getPartyByAccountId(voucher.party_account_id)?.name ?? getAccount(voucher.party_account_id)?.name
     : voucher.is_cash ? 'Cash' : '—'
@@ -61,7 +62,7 @@ function VoucherDetail({ voucher }: { voucher: Voucher }) {
           <div className="text-sm space-y-1 pt-2 border-t border-border">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(voucher.subtotal)}</span></div>
             {(voucher.discount ?? 0) > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(voucher.discount)}</span></div>}
-            <div className="flex justify-between"><span className="text-muted-foreground">VAT ({voucher.vat_rate}%)</span><span className="num">{fmtMoney(voucher.vat_amount)}</span></div>
+            {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({voucher.vat_rate}%)</span><span className="num">{fmtMoney(voucher.vat_amount)}</span></div>}
             <div className="flex justify-between font-serif font-bold text-base pt-1 border-t border-border"><span>Total</span><span className="num">{fmtMoney(voucher.total)}</span></div>
           </div>
         </>
@@ -142,6 +143,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
       `
     }).join('')
     const isInvoice = (voucher.invoice_items || []).length > 0
+    const vatEnabled = company?.vat_enabled ?? true
     const rows = isInvoice ? invoiceRows : ledgerRows
     const head = isInvoice
       ? '<tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>'
@@ -150,7 +152,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
       <div class="totals">
         <div><span>Subtotal</span><strong>${esc(fmtMoney(voucher.subtotal))}</strong></div>
         <div><span>Discount</span><strong>${esc(fmtMoney(voucher.discount || 0))}</strong></div>
-        <div><span>VAT (${esc(voucher.vat_rate || 0)}%)</span><strong>${esc(fmtMoney(voucher.vat_amount || 0))}</strong></div>
+        ${vatEnabled ? `<div><span>VAT (${esc(voucher.vat_rate || 0)}%)</span><strong>${esc(fmtMoney(voucher.vat_amount || 0))}</strong></div>` : ''}
         <div class="grand"><span>Total</span><strong>${esc(fmtMoney(voucher.total))}</strong></div>
       </div>
     ` : `

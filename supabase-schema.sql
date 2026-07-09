@@ -14,11 +14,13 @@ create table if not exists companies (
   address          text,
   pan_vat          text,
   phone            text,
+  vat_enabled      boolean not null default true,
   fiscal_year_start date not null default '2026-04-01',
   created_at       timestamptz not null default now()
 );
 
 alter table companies add column if not exists phone text;
+alter table companies add column if not exists vat_enabled boolean not null default true;
 
 -- ── Accounts (Chart of Accounts + party ledger accounts) ─────────────────────
 create table if not exists accounts (

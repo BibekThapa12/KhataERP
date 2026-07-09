@@ -18,6 +18,7 @@ export interface CompanySignupDetails {
   address: string
   pan_vat: string
   phone: string
+  vat_enabled: boolean
 }
 
 export const signUp = (email: string, password: string, company: CompanySignupDetails) =>
@@ -31,6 +32,7 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
         company_address: company.address,
         company_pan_vat: company.pan_vat,
         company_phone: company.phone,
+        company_vat_enabled: company.vat_enabled,
       },
     },
   })
@@ -54,6 +56,7 @@ export async function getOrCreateCompany(user_id: string): Promise<Company> {
     address: String(metadata.company_address || '').trim(),
     pan_vat: String(metadata.company_pan_vat || '').trim(),
     phone: String(metadata.company_phone || '').trim(),
+    vat_enabled: metadata.company_vat_enabled !== false,
     fiscal_year_start: '2026-04-01',
   }
 
