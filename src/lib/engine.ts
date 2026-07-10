@@ -1,5 +1,5 @@
 import type {
-  Account, AccountType, Voucher, VoucherLine, StockLine,
+  Account, AccountType, Voucher, VoucherLine,
   TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item
 } from '@/types'
 import { makeBsKey } from '@/lib/nepaliDate'
@@ -28,6 +28,8 @@ export type SystemAccountKey =
   | 'vat_receivable'
   | 'sales'
   | 'purchase'
+  | 'sales_return'
+  | 'purchase_return'
   | 'capital'
   | 'discount_allowed'
   | 'rent'
@@ -59,6 +61,8 @@ export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balan
     base('vat_receivable', 'VAT Receivable (Input)', 'Asset', 'Duties & Taxes'),
     base('sales', 'Sales Account', 'Income', 'Sales Accounts'),
     base('purchase', 'Purchase Account', 'Expense', 'Purchase Accounts'),
+    base('sales_return', 'Sales Return Account', 'Income', 'Sales Accounts'),
+    base('purchase_return', 'Purchase Return Account', 'Expense', 'Purchase Accounts'),
     base('capital', "Owner's Capital", 'Equity', 'Capital Account'),
     base('discount_allowed', 'Discount Allowed', 'Expense', 'Indirect Expenses', false),
     base('rent', 'Rent Expense', 'Expense', 'Indirect Expenses', false),
@@ -167,6 +171,80 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items: p.items }
 }
 
+export interface ReturnItemInput {
+  id?: string
+  source_invoice_item_id: string
+  item_id: string
+  item_name?: string
+  unit?: string
+  qty: number
+  rate: number
+  cost_rate: number
+}
+
+export interface ReturnVoucherParams {
+  type: 'Sales Return' | 'Purchase Return'
+  original: Voucher
+  items: ReturnItemInput[]
+  settlement_mode: 'party' | 'cash' | 'bank'
+  restock_items: boolean
+  system_accounts?: Partial<Record<SystemAccountKey, string>>
+}
+
+export function buildReturnVoucherData(p: ReturnVoucherParams) {
+  const subtotal = round2(p.items.reduce((sum, item) => sum + item.qty * item.rate, 0))
+  const originalSubtotal = p.original.subtotal || (p.original.invoice_items || []).reduce((sum, item) => sum + item.qty * item.rate, 0)
+  const originalDiscount = p.original.discount || 0
+  const vatRate = p.original.vat_rate || 0
+  let invoice_items = p.items.map(item => {
+    const gross = round2(item.qty * item.rate)
+    const discount_amount = originalSubtotal > 0 ? round2(originalDiscount * gross / originalSubtotal) : 0
+    const taxable_amount = round2(gross - discount_amount)
+    const vat_amount = round2(taxable_amount * vatRate / 100)
+    return { ...item, discount_amount, taxable_amount, vat_amount }
+  })
+  const fullOriginalReturn = (p.original.invoice_items || []).length === invoice_items.length &&
+    (p.original.invoice_items || []).every(source => {
+      const returned = invoice_items.find(item => item.source_invoice_item_id === source.id)
+      return returned && Math.abs(returned.qty - source.qty) < 0.0001
+    })
+  if (fullOriginalReturn && invoice_items.length) {
+    const allocatedDiscount = round2(invoice_items.reduce((sum, item) => sum + item.discount_amount, 0))
+    const residualDiscount = round2(originalDiscount - allocatedDiscount)
+    invoice_items = invoice_items.map((item, index) => index === invoice_items.length - 1
+      ? { ...item, discount_amount: round2(item.discount_amount + residualDiscount), taxable_amount: round2(item.taxable_amount - residualDiscount) }
+      : item)
+  }
+  const discount = round2(invoice_items.reduce((sum, item) => sum + item.discount_amount, 0))
+  const taxable = round2(invoice_items.reduce((sum, item) => sum + item.taxable_amount, 0))
+  const vat_amount = round2(taxable * vatRate / 100)
+  if (invoice_items.length) {
+    const allocatedVat = round2(invoice_items.reduce((sum, item) => sum + item.vat_amount, 0))
+    const residualVat = round2(vat_amount - allocatedVat)
+    invoice_items = invoice_items.map((item, index) => index === invoice_items.length - 1 ? { ...item, vat_amount: round2(item.vat_amount + residualVat) } : item)
+  }
+  const total = round2(taxable + vat_amount)
+  const settlementAccount = p.settlement_mode === 'party'
+    ? p.original.party_account_id!
+    : sys(p.system_accounts, p.settlement_mode)
+  const isSalesReturn = p.type === 'Sales Return'
+  const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = isSalesReturn
+    ? [
+        { account_id: sys(p.system_accounts, 'sales_return'), debit: taxable, credit: 0 },
+        ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_payable'), debit: vat_amount, credit: 0 }] : []),
+        { account_id: settlementAccount, debit: 0, credit: total },
+      ]
+    : [
+        { account_id: settlementAccount, debit: total, credit: 0 },
+        { account_id: sys(p.system_accounts, 'purchase_return'), debit: 0, credit: taxable },
+        ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_receivable'), debit: 0, credit: vat_amount }] : []),
+      ]
+  const stock_lines = isSalesReturn
+    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: item.qty, rate: item.cost_rate, direction: 'in' as const })) : [])
+    : p.items.map(item => ({ item_id: item.item_id, qty: item.qty, rate: item.cost_rate, direction: 'out' as const }))
+  return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
+}
+
 type PaymentMode = 'cash' | 'bank'
 
 export function buildReceiptData(party_account_id: string, amount: number, deposit_to: PaymentMode = 'cash', system_accounts?: Partial<Record<SystemAccountKey, string>>) {
@@ -242,10 +320,16 @@ export function computeVatReport(vouchers: Voucher[], from_date: string, to_date
   })
   const sales = in_range.filter(v => v.type === 'Sales')
   const purchases = in_range.filter(v => v.type === 'Purchase')
-  const output_vat = round2(sales.reduce((s, v) => s + (v.vat_amount || 0), 0))
-  const input_vat = round2(purchases.reduce((s, v) => s + (v.vat_amount || 0), 0))
-  const taxable_sales = round2(sales.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0))
-  const taxable_purchases = round2(purchases.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0))
+  const sales_returns = in_range.filter(v => v.type === 'Sales Return')
+  const purchase_returns = in_range.filter(v => v.type === 'Purchase Return')
+  const sales_return_vat = round2(sales_returns.reduce((s, v) => s + (v.vat_amount || 0), 0))
+  const purchase_return_vat = round2(purchase_returns.reduce((s, v) => s + (v.vat_amount || 0), 0))
+  const taxable_sales_returns = round2(sales_returns.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0))
+  const taxable_purchase_returns = round2(purchase_returns.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0))
+  const output_vat = round2(sales.reduce((s, v) => s + (v.vat_amount || 0), 0) - sales_return_vat)
+  const input_vat = round2(purchases.reduce((s, v) => s + (v.vat_amount || 0), 0) - purchase_return_vat)
+  const taxable_sales = round2(sales.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0) - taxable_sales_returns)
+  const taxable_purchases = round2(purchases.reduce((s, v) => s + ((v.subtotal || 0) - (v.discount || 0)), 0) - taxable_purchase_returns)
   const net_payable = round2(output_vat - input_vat)
-  return { sales, purchases, output_vat, input_vat, taxable_sales, taxable_purchases, net_payable }
+  return { sales, purchases, sales_returns, purchase_returns, output_vat, input_vat, sales_return_vat, purchase_return_vat, taxable_sales, taxable_purchases, taxable_sales_returns, taxable_purchase_returns, net_payable }
 }

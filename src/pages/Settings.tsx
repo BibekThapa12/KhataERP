@@ -24,6 +24,8 @@ export function SettingsPage() {
   const [purchasePrefix, setPurchasePrefix] = useState(company?.purchase_prefix ?? 'PB-')
   const [receiptPrefix, setReceiptPrefix] = useState(company?.receipt_prefix ?? 'RCPT-')
   const [paymentPrefix, setPaymentPrefix] = useState(company?.payment_prefix ?? 'PAY-')
+  const [salesReturnPrefix, setSalesReturnPrefix] = useState(company?.sales_return_prefix ?? 'SR-')
+  const [purchaseReturnPrefix, setPurchaseReturnPrefix] = useState(company?.purchase_return_prefix ?? 'PR-')
   const [resetNumbering, setResetNumbering] = useState(company?.reset_numbering_fiscal_year ?? false)
   const [printFormat, setPrintFormat] = useState(company?.print_format ?? 'A5')
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
@@ -46,6 +48,8 @@ export function SettingsPage() {
     setPurchasePrefix(company?.purchase_prefix ?? 'PB-')
     setReceiptPrefix(company?.receipt_prefix ?? 'RCPT-')
     setPaymentPrefix(company?.payment_prefix ?? 'PAY-')
+    setSalesReturnPrefix(company?.sales_return_prefix ?? 'SR-')
+    setPurchaseReturnPrefix(company?.purchase_return_prefix ?? 'PR-')
     setResetNumbering(company?.reset_numbering_fiscal_year ?? false)
     setPrintFormat(company?.print_format ?? 'A5')
     setInvoiceTerms(company?.invoice_terms ?? '')
@@ -73,6 +77,8 @@ export function SettingsPage() {
         purchase_prefix: purchasePrefix.trim() || 'PB-',
         receipt_prefix: receiptPrefix.trim() || 'RCPT-',
         payment_prefix: paymentPrefix.trim() || 'PAY-',
+        sales_return_prefix: salesReturnPrefix.trim() || 'SR-',
+        purchase_return_prefix: purchaseReturnPrefix.trim() || 'PR-',
         reset_numbering_fiscal_year: resetNumbering,
         print_format: printFormat,
         invoice_terms: invoiceTerms.trim(),
@@ -282,6 +288,14 @@ export function SettingsPage() {
               <div className="space-y-1.5">
                 <Label>Payment Prefix</Label>
                 <Input value={paymentPrefix} onChange={e => setPaymentPrefix(e.target.value)} placeholder="PAY-" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Sales Return Prefix</Label>
+                <Input value={salesReturnPrefix} onChange={e => setSalesReturnPrefix(e.target.value)} placeholder="SR-" />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Purchase Return Prefix</Label>
+                <Input value={purchaseReturnPrefix} onChange={e => setPurchaseReturnPrefix(e.target.value)} placeholder="PR-" />
               </div>
             </div>
             <label htmlFor="reset-numbering" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">

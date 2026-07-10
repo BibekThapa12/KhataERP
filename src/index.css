@@ -39,4 +39,29 @@
   .num { @apply font-mono tabular-nums; }
   .debit-amt { @apply text-terracotta font-semibold; }
   .credit-amt { @apply text-forest font-semibold; }
+  .report-th { @apply px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground; }
+  .report-td { @apply px-4 py-3 align-top; }
+}
+
+@media print {
+  @page { size: A4 landscape; margin: 10mm; }
+  body { background: white; color: black; }
+  body > #root > div > aside,
+  .report-page > div:first-child,
+  .report-controls { display: none !important; }
+  body > #root > div,
+  body > #root > div > main { display: block !important; height: auto !important; overflow: visible !important; }
+  .report-page .report-print-header { display: block !important; margin-bottom: 12px; }
+  .report-print-header h1 { margin: 0; font-size: 20px; }
+  .report-print-header p { margin: 3px 0 0; font-size: 11px; }
+  .report-content { padding: 0 !important; }
+  .report-summary { grid-template-columns: repeat(3, 1fr) !important; }
+  .report-summary > div,
+  .report-table-card { box-shadow: none !important; }
+  .report-table-card { overflow: visible !important; }
+  .report-table-card > div { overflow: visible !important; }
+  .report-table-card table { min-width: 0 !important; font-size: 9px; }
+  .report-th { padding: 5px 6px !important; font-size: 8px !important; }
+  .report-td { padding: 5px 6px !important; }
+  .report-table-card tr { break-inside: avoid; }
 }

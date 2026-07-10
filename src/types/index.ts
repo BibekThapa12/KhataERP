@@ -1,7 +1,7 @@
 // ─── Domain Types ────────────────────────────────────────────────────────────
 
 export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense'
-export type VoucherType = 'Sales' | 'Purchase' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
+export type VoucherType = 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
 
@@ -14,6 +14,8 @@ export interface Account {
   is_system: boolean
   is_party: boolean
   opening_balance: number
+  category_id?: string
+  is_archived?: boolean
   balance: number // computed, not stored in DB
   created_at?: string
 }
@@ -27,6 +29,7 @@ export interface Party {
   pan_vat?: string
   address?: string
   account_id: string
+  is_archived?: boolean
   created_at?: string
   // joined
   account?: Account
@@ -40,7 +43,12 @@ export interface Item {
   sell_rate: number
   opening_qty: number
   opening_rate: number
-  reorder_level?: number
+  reorder_level?: number | null
+  category_id?: string
+  sku?: string
+  barcode?: string
+  vat_applicable?: boolean
+  is_archived?: boolean
   created_at?: string
   // computed
   stock_qty?: number
@@ -68,9 +76,18 @@ export interface StockLine {
 }
 
 export interface InvoiceItem {
+  id?: string
+  voucher_id?: string
   item_id: string
   qty: number
   rate: number
+  source_invoice_item_id?: string
+  item_name?: string
+  unit?: string
+  discount_amount?: number
+  taxable_amount?: number
+  vat_amount?: number
+  cost_rate?: number
 }
 
 export interface Voucher {
@@ -83,6 +100,10 @@ export interface Voucher {
   date_bs_key: number
   invoice_no?: string
   narration?: string
+  original_voucher_id?: string
+  return_reason?: string
+  settlement_mode?: 'party' | 'cash' | 'bank'
+  restock_items?: boolean
   party_account_id?: string
   is_cash: boolean
   subtotal?: number
@@ -113,6 +134,8 @@ export interface Company {
   purchase_prefix?: string
   receipt_prefix?: string
   payment_prefix?: string
+  sales_return_prefix?: string
+  purchase_return_prefix?: string
   reset_numbering_fiscal_year?: boolean
   print_format?: 'A5' | 'A4'
   invoice_terms?: string
@@ -125,6 +148,38 @@ export interface Company {
   suspended?: boolean
   fiscal_year_start: string
   created_at?: string
+}
+
+export interface AccountCategory {
+  id: string
+  company_id: string
+  name: string
+  account_type: AccountType
+  parent_category_id?: string
+  is_system: boolean
+  is_archived: boolean
+  created_at?: string
+}
+
+export interface ItemCategory {
+  id: string
+  company_id: string
+  name: string
+  parent_category_id?: string
+  is_archived: boolean
+  created_at?: string
+}
+
+export interface MasterChangeLog {
+  id: string
+  company_id: string
+  user_id?: string
+  record_type: string
+  record_id: string
+  action: string
+  old_values: Record<string, unknown>
+  new_values: Record<string, unknown>
+  created_at: string
 }
 
 // ─── Report Types ─────────────────────────────────────────────────────────────
@@ -167,10 +222,16 @@ export interface BalanceSheet {
 export interface VatReport {
   sales: Voucher[]
   purchases: Voucher[]
+  sales_returns: Voucher[]
+  purchase_returns: Voucher[]
   output_vat: number
   input_vat: number
+  sales_return_vat: number
+  purchase_return_vat: number
   taxable_sales: number
   taxable_purchases: number
+  taxable_sales_returns: number
+  taxable_purchase_returns: number
   net_payable: number
 }
 

@@ -43,7 +43,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
 
   const partyType = isSales ? 'customer' : 'supplier'
-  const partyList = parties.filter(p => p.type === partyType)
+  const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
 
   // Totals
@@ -186,7 +186,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                             <SelectValue placeholder="Select item…" />
                           </SelectTrigger>
                           <SelectContent>
-                            {items.map(i => (
+                            {items.filter(i => !i.is_archived).map(i => (
                               <SelectItem key={i.id} value={i.id}>
                                 {i.name} {isSales ? `(${getStockEntry(i.id).qty} ${i.unit})` : `(${i.unit})`}
                               </SelectItem>

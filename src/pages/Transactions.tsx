@@ -5,6 +5,7 @@ import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
+import { ReturnForm } from '@/components/forms/ReturnForm'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import type { Voucher, VoucherType } from '@/types'
@@ -53,6 +54,26 @@ export function PurchasePage() {
     </div>
   )
 }
+
+function ReturnPage({ type }: { type: 'Sales Return' | 'Purchase Return' }) {
+  const vatEnabled = useAppStore(s => s.company?.vat_enabled ?? true)
+  const vouchers = useVouchersByType(type)
+  const [open, setOpen] = useState(false)
+  const [editing, setEditing] = useState<Voucher | null>(null)
+  const isSales = type === 'Sales Return'
+  const title = vatEnabled ? (isSales ? 'Sales Returns / Credit Notes' : 'Purchase Returns / Debit Notes') : `${type}s`
+  return (
+    <div>
+      <PageHeader title={title} description={isSales ? 'Goods returned by customers' : 'Goods returned to suppliers'}
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New {isSales ? 'Sales' : 'Purchase'} Return</Button>} />
+      <PageContent><Card><VoucherTable vouchers={vouchers} onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></Card></PageContent>
+      <ReturnForm type={type} open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
+    </div>
+  )
+}
+
+export function SalesReturnPage() { return <ReturnPage type="Sales Return" /> }
+export function PurchaseReturnPage() { return <ReturnPage type="Purchase Return" /> }
 
 // ─── Receipts ─────────────────────────────────────────────────────────────────
 export function ReceiptsPage() {

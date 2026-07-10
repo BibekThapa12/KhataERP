@@ -11,6 +11,7 @@ import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
+import { ReturnForm } from '@/components/forms/ReturnForm'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
@@ -19,7 +20,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import type { Voucher } from '@/types'
 
 export function Dashboard() {
-  const { company, accounts, rawAccounts, vouchers, stock, parties, closingStockValue, getPartyByAccountId } = useAppStore()
+  const { company, accounts, rawAccounts, vouchers, stock, parties, closingStockValue } = useAppStore()
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Voucher | null>(null)
   const vatEnabled = company?.vat_enabled ?? true
@@ -239,6 +240,8 @@ export function Dashboard() {
         voucher={editing?.type === 'Journal' ? editing : null}
         onClose={closeEdit}
       />
+      <ReturnForm type="Sales Return" open={editing?.type === 'Sales Return'} voucher={editing?.type === 'Sales Return' ? editing : null} onClose={closeEdit} />
+      <ReturnForm type="Purchase Return" open={editing?.type === 'Purchase Return'} voucher={editing?.type === 'Purchase Return' ? editing : null} onClose={closeEdit} />
     </div>
   )
 }

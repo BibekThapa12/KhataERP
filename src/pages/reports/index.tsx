@@ -266,9 +266,9 @@ export function VatReportPage() {
         {/* Summary stats */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <StatCard label="Output VAT (on Sales)" value={vat.output_vat}
-            sub={`Taxable sales: ${fmtMoney(vat.taxable_sales)}`} />
+            sub={`Net taxable sales: ${fmtMoney(vat.taxable_sales)} | Returns VAT: ${fmtMoney(vat.sales_return_vat)}`} />
           <StatCard label="Input VAT (on Purchases)" value={vat.input_vat}
-            sub={`Taxable purchases: ${fmtMoney(vat.taxable_purchases)}`} />
+            sub={`Net taxable purchases: ${fmtMoney(vat.taxable_purchases)} | Returns VAT: ${fmtMoney(vat.purchase_return_vat)}`} />
           <StatCard
             label={vat.net_payable >= 0 ? 'Net VAT Payable' : 'Net VAT Credit'}
             value={Math.abs(vat.net_payable)}
@@ -281,7 +281,7 @@ export function VatReportPage() {
           <CardHeader className="pb-2"><CardTitle className="text-base">Transactions in range</CardTitle></CardHeader>
           <CardContent className="p-0 pb-2">
             <VoucherTable
-              vouchers={[...vat.sales, ...vat.purchases].sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)}
+              vouchers={[...vat.sales, ...vat.purchases, ...vat.sales_returns, ...vat.purchase_returns].sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)}
               showActions={false}
             />
           </CardContent>

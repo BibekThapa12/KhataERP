@@ -23,24 +23,30 @@ interface ItemFormProps {
 
 export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const addItem = useAppStore(s => s.addItem)
+  const itemCategories = useAppStore(s => s.itemCategories)
   const [name, setName] = useState('')
   const [unit, setUnit] = useState('pcs')
   const [sellRate, setSellRate] = useState(0)
   const [openingQty, setOpeningQty] = useState(0)
   const [openingRate, setOpeningRate] = useState(0)
   const [reorderLevel, setReorderLevel] = useState('')
+  const [categoryId, setCategoryId] = useState('')
+  const [sku, setSku] = useState('')
+  const [barcode, setBarcode] = useState('')
+  const [vatApplicable, setVatApplicable] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!open) { setName(''); setUnit('pcs'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setError('') }
-  }, [open])
+    if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
+    if (!open) { setName(''); setUnit('pcs'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
+  }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Enter an item name.'); return }
     setSaving(true)
     try {
-      const item = await addItem({ name: name.trim(), unit: unit.trim() || 'pcs', sell_rate: sellRate, opening_qty: openingQty, opening_rate: openingRate, reorder_level: reorderLevel ? Number(reorderLevel) : undefined })
+      const item = await addItem({ name: name.trim(), unit: unit.trim() || 'pcs', sell_rate: sellRate, opening_qty: openingQty, opening_rate: openingRate, reorder_level: reorderLevel ? Number(reorderLevel) : undefined, category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -56,6 +62,10 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           <div className="space-y-1.5">
             <Label>Item Name</Label>
             <Input value={name} onChange={e => setName(e.target.value)} placeholder="Rice 25kg Bag" autoFocus />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Category</Label>
+            <Select value={categoryId} onValueChange={setCategoryId}><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger><SelectContent>{itemCategories.filter(category => !category.is_archived).map(category => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}</SelectContent></Select>
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -81,6 +91,11 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             <Label>Reorder Level (optional)</Label>
             <Input type="number" step="any" value={reorderLevel} onChange={e => setReorderLevel(e.target.value)} placeholder="Alert when stock falls below…" />
           </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={e => setSku(e.target.value)} placeholder="Optional" /></div>
+            <div className="space-y-1.5"><Label>Barcode</Label><Input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Optional" /></div>
+          </div>
+          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={vatApplicable} onChange={e => setVatApplicable(e.target.checked)} className="h-4 w-4 accent-primary" />VAT applicable</label>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
@@ -105,7 +120,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const { parties, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
   const isReceipt = type === 'Receipt'
   const partyType = isReceipt ? 'customer' : 'supplier'
-  const partyList = parties.filter(p => p.type === partyType)
+  const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
@@ -205,7 +220,7 @@ interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const { accounts, saveJournal, updateJournal } = useAppStore()
-  const nonPartyAccounts = accounts.filter(a => !a.is_party)
+  const nonPartyAccounts = accounts.filter(a => !a.is_party && !a.is_archived)
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())

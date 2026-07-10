@@ -15,17 +15,17 @@ const esc = (value: unknown) =>
 function voucherBadgeVariant(type: string, cancelled: boolean) {
   if (cancelled) return 'cancelled' as const
   const map: Record<string, 'sales' | 'purchase' | 'receipt' | 'payment' | 'journal'> = {
-    Sales: 'sales', Purchase: 'purchase', Receipt: 'receipt', Payment: 'payment', Journal: 'journal',
+    Sales: 'sales', Purchase: 'purchase', 'Sales Return': 'sales', 'Purchase Return': 'purchase', Receipt: 'receipt', Payment: 'payment', Journal: 'journal',
   }
   return map[type] ?? 'default' as const
 }
 
 function VoucherDetail({ voucher }: { voucher: Voucher }) {
-  const { company, getAccount, getItem, getPartyByAccountId } = useAppStore()
+  const { company, vouchers, getAccount, getItem, getPartyByAccountId } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
   const partyName = voucher.party_account_id
     ? getPartyByAccountId(voucher.party_account_id)?.name ?? getAccount(voucher.party_account_id)?.name
-    : voucher.is_cash ? 'Cash' : '—'
+    : voucher.settlement_mode === 'bank' ? 'Bank' : voucher.is_cash ? 'Cash' : '—'
 
   return (
     <div className="space-y-4">
@@ -51,7 +51,7 @@ function VoucherDetail({ voucher }: { voucher: Voucher }) {
                 const item = getItem(it.item_id)
                 return (
                   <tr key={i} className="border-t border-border">
-                    <td className="px-3 py-2">{item?.name ?? it.item_id}</td>
+                    <td className="px-3 py-2">{it.item_name || item?.name || it.item_id}</td>
                     <td className="px-3 py-2 text-right num">{it.qty}</td>
                     <td className="px-3 py-2 text-right num">{fmtMoney(it.rate)}</td>
                     <td className="px-3 py-2 text-right num font-semibold">{fmtMoney(it.qty * it.rate)}</td>
@@ -96,6 +96,11 @@ function VoucherDetail({ voucher }: { voucher: Voucher }) {
           Note: {voucher.narration}
         </p>
       )}
+      {voucher.original_voucher_id && (
+        <p className="text-sm text-muted-foreground border-t border-border pt-2">
+          Original document: {vouchers.find(entry => entry.id === voucher.original_voucher_id)?.invoice_no || voucher.original_voucher_id}
+        </p>
+      )}
     </div>
   )
 }
@@ -112,6 +117,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
   const getAccount = useAppStore(s => s.getAccount)
   const getItem = useAppStore(s => s.getItem)
   const getPartyByAccountId = useAppStore(s => s.getPartyByAccountId)
+  const allVouchers = useAppStore(s => s.vouchers)
   const [detail, setDetail] = useState<Voucher | null>(null)
   const [cancelling, setCancelling] = useState(false)
 
@@ -119,13 +125,13 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
     const party = voucher.party_account_id
       ? getPartyByAccountId(voucher.party_account_id)
       : null
-    const partyName = party?.name || (voucher.is_cash ? 'Cash' : '-')
+    const partyName = party?.name || (voucher.settlement_mode === 'bank' ? 'Bank' : voucher.is_cash ? 'Cash' : '-')
     const invoiceRows = (voucher.invoice_items || []).map((it, index) => {
       const item = getItem(it.item_id)
       return `
         <tr>
           <td>${index + 1}</td>
-          <td>${esc(item?.name || it.item_id)}</td>
+          <td>${esc(it.item_name || item?.name || it.item_id)}</td>
           <td class="right">${esc(it.qty)}</td>
           <td class="right">${esc(fmtMoney(it.rate))}</td>
           <td class="right">${esc(fmtMoney(it.qty * it.rate))}</td>
@@ -162,11 +168,17 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
       </div>
     `
     const printFormat = company?.print_format || 'A5'
+    const originalVoucher = voucher.original_voucher_id ? allVouchers.find(entry => entry.id === voucher.original_voucher_id) : null
+    const documentTitle = voucher.type === 'Sales Return' && vatEnabled
+      ? 'Credit Note'
+      : voucher.type === 'Purchase Return' && vatEnabled
+        ? 'Debit Note'
+        : voucher.type
     const html = `
       <!doctype html>
       <html>
         <head>
-          <title>${esc(voucher.type)} ${esc(voucher.invoice_no || voucher.seq)}</title>
+          <title>${esc(documentTitle)} ${esc(voucher.invoice_no || voucher.seq)}</title>
           <style>
             @page { size: ${esc(printFormat)}; margin: 10mm; }
             * { box-sizing: border-box; }
@@ -203,14 +215,15 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
                 <p class="muted">${company?.pan_vat ? `PAN/VAT: ${esc(company.pan_vat)}` : ''} ${company?.phone ? ` | Phone: ${esc(company.phone)}` : ''}</p>
               </div>
               <div class="meta">
-                <h2>${esc(voucher.type)} ${voucher.invoice_no ? `Invoice` : `Voucher`}</h2>
+                <h2>${esc(documentTitle)}</h2>
                 <p><strong>No:</strong> ${esc(voucher.invoice_no || voucher.seq)}</p>
                 <p><strong>Date:</strong> ${esc(fmtDate(voucher.date_bs))}</p>
+                ${originalVoucher ? `<p><strong>Original Invoice:</strong> ${esc(originalVoucher.invoice_no || originalVoucher.seq)}</p><p><strong>Original Date:</strong> ${esc(fmtDate(originalVoucher.date_bs))}</p>` : ''}
               </div>
             </section>
             <section class="party">
               <div class="box">
-                <p class="muted">${voucher.type === 'Payment' ? 'Paid to' : voucher.type === 'Receipt' ? 'Received from' : 'Party'}</p>
+                <p class="muted">${voucher.type === 'Payment' ? 'Paid to' : voucher.type === 'Receipt' ? 'Received from' : voucher.type === 'Sales Return' ? 'Returned by' : voucher.type === 'Purchase Return' ? 'Returned to' : 'Party'}</p>
                 <p><strong>${esc(partyName)}</strong></p>
                 <p>${esc(party?.address || '')}</p>
                 <p>${party?.pan_vat ? `PAN/VAT: ${esc(party.pan_vat)}` : ''}</p>
@@ -226,7 +239,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
               <tbody>${rows}</tbody>
             </table>
             ${totals}
-            ${voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
+            ${voucher.return_reason ? `<p class="note"><strong>Return reason:</strong> ${esc(voucher.return_reason)}</p>` : voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
             ${company?.invoice_terms ? `<p class="note"><strong>Terms:</strong> ${esc(company.invoice_terms)}</p>` : ''}
             ${company?.payment_qr_text ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
             <section class="signatures">
@@ -274,7 +287,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
             {vouchers.map(v => {
               const partyName = v.party_account_id
                 ? getPartyByAccountId(v.party_account_id)?.name ?? '—'
-                : v.is_cash ? 'Cash' : '—'
+                : v.settlement_mode === 'bank' ? 'Bank' : v.is_cash ? 'Cash' : '—'
               return (
                 <tr key={v.id} className={`border-t border-border hover:bg-muted/30 transition-colors ${v.cancelled ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date_bs)}</td>

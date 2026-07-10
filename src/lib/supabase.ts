@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, Party, Item, Voucher, VoucherLine, StockLine, Company } from '@/types'
-import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company } from '@/types'
+import { adToBs, DEFAULT_FISCAL_YEAR_START_AD, makeBsKey, normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
@@ -222,6 +222,8 @@ export async function getOrCreateCompany(user_id: string): Promise<Company> {
     purchase_prefix: 'PB-',
     receipt_prefix: 'RCPT-',
     payment_prefix: 'PAY-',
+    sales_return_prefix: 'SR-',
+    purchase_return_prefix: 'PR-',
     reset_numbering_fiscal_year: false,
     print_format: 'A5',
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
@@ -315,7 +317,9 @@ export async function fetchAccounts(company_id: string): Promise<Account[]> {
 }
 
 export async function insertAccounts(accounts: Omit<Account, 'balance' | 'created_at'>[]) {
-  const { error } = await supabase.from('accounts').insert(accounts)
+  const { error } = await supabase
+    .from('accounts')
+    .upsert(accounts, { onConflict: 'id', ignoreDuplicates: true })
   if (error) throw error
 }
 
@@ -323,6 +327,33 @@ export async function insertAccount(account: Omit<Account, 'balance' | 'created_
   const { data, error } = await supabase.from('accounts').insert(account).select().single()
   if (error) throw error
   return data
+}
+
+export async function updateAccount(id: string, updates: Partial<Account>) {
+  const { balance: _balance, ...storedUpdates } = updates
+  const { error } = await supabase.from('accounts').update(storedUpdates).eq('id', id)
+  if (error) throw error
+}
+
+export async function fetchAccountCategories(company_id: string): Promise<AccountCategory[]> {
+  const { data, error } = await supabase.from('account_categories').select('*').eq('company_id', company_id).order('name')
+  if (error) throw error
+  return data || []
+}
+
+export async function insertAccountCategory(category: Omit<AccountCategory, 'id' | 'created_at'>): Promise<AccountCategory> {
+  const { data, error } = await supabase.from('account_categories').upsert(category, { onConflict: 'company_id,name,account_type' }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateAccountCategory(id: string, updates: Partial<AccountCategory>) {
+  const { error } = await supabase.from('account_categories').update(updates).eq('id', id)
+  if (error) throw error
+  if (updates.name) {
+    const { error: accountsError } = await supabase.from('accounts').update({ group: updates.name }).eq('category_id', id)
+    if (accountsError) throw accountsError
+  }
 }
 
 // ─── Parties ──────────────────────────────────────────────────────────────────
@@ -369,6 +400,35 @@ export async function insertItem(item: Omit<Item, 'id' | 'created_at' | 'stock_q
 export async function updateItem(id: string, updates: Partial<Item>) {
   const { error } = await supabase.from('items').update(updates).eq('id', id)
   if (error) throw error
+}
+
+export async function fetchItemCategories(company_id: string): Promise<ItemCategory[]> {
+  const { data, error } = await supabase.from('item_categories').select('*').eq('company_id', company_id).order('name')
+  if (error) throw error
+  return data || []
+}
+
+export async function insertItemCategory(category: Omit<ItemCategory, 'id' | 'created_at'>): Promise<ItemCategory> {
+  const { data, error } = await supabase.from('item_categories').upsert(category, { onConflict: 'company_id,name' }).select().single()
+  if (error) throw error
+  return data
+}
+
+export async function updateItemCategory(id: string, updates: Partial<ItemCategory>) {
+  const { error } = await supabase.from('item_categories').update(updates).eq('id', id)
+  if (error) throw error
+}
+
+export async function logMasterChange(company_id: string, record_type: string, record_id: string, action: string, old_values: Record<string, unknown>, new_values: Record<string, unknown>) {
+  const { data: { user } } = await supabase.auth.getUser()
+  const { error } = await supabase.from('master_change_logs').insert({ company_id, user_id: user?.id, record_type, record_id, action, old_values, new_values })
+  if (error) throw error
+}
+
+export async function fetchMasterChangeLogs(company_id: string): Promise<MasterChangeLog[]> {
+  const { data, error } = await supabase.from('master_change_logs').select('*').eq('company_id', company_id).order('created_at', { ascending: false }).limit(200)
+  if (error) throw error
+  return data || []
 }
 
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
@@ -422,22 +482,44 @@ export async function getNextSeq(company_id: string): Promise<number> {
   return (data?.seq || 0) + 1
 }
 
-export async function getNextVoucherNo(company_id: string, type: 'Sales' | 'Purchase' | 'Receipt' | 'Payment', prefix: string, resetByFiscalYear = false, fiscalYearStart?: string): Promise<string> {
+export async function getNextVoucherNo(
+  company_id: string,
+  type: 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment',
+  prefix: string,
+  resetByFiscalYear = false,
+  fiscalYearStart?: string,
+  voucherDateBs?: string,
+): Promise<string> {
   let query = supabase
     .from('vouchers')
-    .select('*', { count: 'exact', head: true })
+    .select('invoice_no')
     .eq('company_id', company_id)
     .eq('type', type)
-  if (resetByFiscalYear && fiscalYearStart) query = query.gte('date_ad', fiscalYearStart)
-  const { count } = await query
-  return `${prefix}${String((count || 0) + 1).padStart(4, '0')}`
+
+  if (resetByFiscalYear && fiscalYearStart && voucherDateBs) {
+    const fiscalMonthDay = adToBs(fiscalYearStart).slice(5)
+    const voucherYear = Number(voucherDateBs.slice(0, 4))
+    const fiscalYear = voucherDateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1
+    const periodStart = makeBsKey(`${fiscalYear}-${fiscalMonthDay}`)
+    const nextPeriodStart = makeBsKey(`${fiscalYear + 1}-${fiscalMonthDay}`)
+    query = query.gte('date_bs_key', periodStart).lt('date_bs_key', nextPeriodStart)
+  }
+
+  const { data, error } = await query
+  if (error) throw error
+
+  const highestNumber = (data || []).reduce((highest, voucher) => {
+    const match = String(voucher.invoice_no || '').match(/(\d+)$/)
+    return match ? Math.max(highest, Number(match[1])) : highest
+  }, 0)
+  return `${prefix}${String(highestNumber + 1).padStart(4, '0')}`
 }
 
 interface InsertVoucherPayload {
   voucher: Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'party'>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
-  invoice_items?: { item_id: string; qty: number; rate: number }[]
+  invoice_items?: InvoiceItem[]
 }
 
 interface UpdateVoucherPayload {
@@ -445,7 +527,7 @@ interface UpdateVoucherPayload {
   voucher: Partial<Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'party'>>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
-  invoice_items?: { item_id: string; qty: number; rate: number }[]
+  invoice_items?: InvoiceItem[]
 }
 
 export async function insertVoucher({ voucher, lines, stock_lines, invoice_items }: InsertVoucherPayload): Promise<Voucher> {
@@ -476,11 +558,11 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     newStockLines = data || []
   }
 
-  let newInvoiceItems: { item_id: string; qty: number; rate: number }[] = []
+  let newInvoiceItems: InvoiceItem[] = []
   if (invoice_items?.length) {
     const { data, error: ie } = await supabase
       .from('invoice_items')
-      .insert(invoice_items.map(i => ({ ...i, voucher_id: v.id })))
+      .insert(invoice_items.map(({ id: _id, voucher_id: _voucherId, ...item }) => ({ ...item, voucher_id: v.id })))
       .select()
     if (ie) throw ie
     newInvoiceItems = data || []
@@ -529,11 +611,11 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
     newStockLines = data || []
   }
 
-  let newInvoiceItems: { item_id: string; qty: number; rate: number }[] = []
+  let newInvoiceItems: InvoiceItem[] = []
   if (invoice_items?.length) {
     const { data, error: ie } = await supabase
       .from('invoice_items')
-      .insert(invoice_items.map(i => ({ ...i, voucher_id: id })))
+      .insert(invoice_items.map(({ id: _id, voucher_id: _voucherId, ...item }) => ({ ...item, voucher_id: id })))
       .select()
     if (ie) throw ie
     newInvoiceItems = data || []

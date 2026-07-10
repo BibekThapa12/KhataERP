@@ -282,7 +282,7 @@ export function DeveloperDashboard() {
     const inactiveCompanies = companies.filter(c => !lastActivityByCompany[c.id] || daysAgo(lastActivityByCompany[c.id]) > 30)
     const missingFiscalYear = companies.filter(c => !c.fiscal_year_start)
     const missingSetup = companies.filter(c => !partyByCompany[c.id] || !itemByCompany[c.id])
-    const missingInvoiceNo = vouchers.filter(v => ['Sales', 'Purchase', 'Receipt', 'Payment'].includes(v.type) && !v.invoice_no)
+    const missingInvoiceNo = vouchers.filter(v => ['Sales', 'Purchase', 'Sales Return', 'Purchase Return', 'Receipt', 'Payment'].includes(v.type) && !v.invoice_no)
 
     const stockWarnings: string[] = []
     for (const company of companies) {

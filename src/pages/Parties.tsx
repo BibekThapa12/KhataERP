@@ -111,7 +111,7 @@ function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
   const { parties, accounts } = useAppStore()
   const [selected, setSelected] = useState<Party | null>(null)
   const list = parties
-    .filter(p => p.type === partyType)
+    .filter(p => p.type === partyType && !p.is_archived)
     .map(p => ({ ...p, account: accounts.find(a => a.id === p.account_id) }))
     .sort((a, b) => a.name.localeCompare(b.name))
 

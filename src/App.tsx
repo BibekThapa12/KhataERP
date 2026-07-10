@@ -7,19 +7,23 @@ import { LoginPage } from '@/pages/Login'
 import { Dashboard } from '@/pages/Dashboard'
 import { SalesPage } from '@/pages/Sales'
 import { PurchasePage } from '@/pages/Purchase'
+import { SalesReturnPage } from '@/pages/SalesReturn'
+import { PurchaseReturnPage } from '@/pages/PurchaseReturn'
 import { ReceiptsPage } from '@/pages/Receipts'
 import { PaymentsPage } from '@/pages/Payments'
 import { JournalPage } from '@/pages/Journal'
 import { PartiesPage } from '@/pages/Parties'
 import { ItemsPage } from '@/pages/Items'
-import { AccountsPage } from '@/pages/Accounts'
 import { TrialBalancePage } from '@/pages/reports/TrialBalance'
 import { ProfitLossPage } from '@/pages/reports/ProfitLoss'
 import { BalanceSheetPage } from '@/pages/reports/BalanceSheet'
 import { VatReportPage } from '@/pages/reports/VatReport'
 import { StockReportPage } from '@/pages/reports/StockReport'
+import { DaybookPage } from '@/pages/reports/Daybook'
+import { LedgerReportPage } from '@/pages/reports/LedgerReport'
 import { SettingsPage } from '@/pages/Settings'
 import { DeveloperDashboard } from '@/pages/DeveloperDashboard'
+import { MastersPage } from '@/pages/Masters'
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -108,6 +112,8 @@ export default function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'parties' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'account_categories' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'item_categories' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, scheduleRefresh)
       .subscribe()
 
@@ -150,6 +156,8 @@ export default function App() {
             <Route index element={<Dashboard />} />
             <Route path="sales" element={<SalesPage />} />
             <Route path="purchase" element={<PurchasePage />} />
+            <Route path="sales-returns" element={<SalesReturnPage />} />
+            <Route path="purchase-returns" element={<PurchaseReturnPage />} />
             <Route path="purchases" element={<PurchasePage />} />
             <Route path="receipts" element={<ReceiptsPage />} />
             <Route path="payments" element={<PaymentsPage />} />
@@ -158,17 +166,22 @@ export default function App() {
             <Route path="transactions/sales" element={<SalesPage />} />
             <Route path="transactions/purchase" element={<PurchasePage />} />
             <Route path="transactions/purchases" element={<PurchasePage />} />
+            <Route path="transactions/sales-returns" element={<SalesReturnPage />} />
+            <Route path="transactions/purchase-returns" element={<PurchaseReturnPage />} />
             <Route path="transactions/receipts" element={<ReceiptsPage />} />
             <Route path="transactions/payments" element={<PaymentsPage />} />
             <Route path="transactions/journal" element={<JournalPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />
-            <Route path="accounts" element={<AccountsPage />} />
+            <Route path="accounts" element={<Navigate to="/masters" replace />} />
+            <Route path="masters" element={<MastersPage />} />
             <Route path="trial-balance" element={<TrialBalancePage />} />
             <Route path="profit-loss" element={<ProfitLossPage />} />
             <Route path="balance-sheet" element={<BalanceSheetPage />} />
             <Route path="vat-report" element={<VatReportPage />} />
             <Route path="stock-report" element={<StockReportPage />} />
+            <Route path="reports/daybook" element={<DaybookPage />} />
+            <Route path="reports/ledger" element={<LedgerReportPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="developer" element={<DeveloperDashboard />} />
           </Route>

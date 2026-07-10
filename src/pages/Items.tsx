@@ -54,7 +54,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
             <Select value={itemId} onValueChange={setItemId}>
               <SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger>
               <SelectContent>
-                {items.map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
+                {items.filter(item => !item.is_archived).map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
               </SelectContent>
             </Select>
           </div>
@@ -88,7 +88,7 @@ export function ItemsPage() {
   const [showForm, setShowForm] = useState(false)
   const [showAdjustment, setShowAdjustment] = useState(false)
 
-  const rows = items
+  const rows = items.filter(item => !item.is_archived)
     .map(item => ({ item, s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 } }))
     .sort((a, b) => a.item.name.localeCompare(b.item.name))
 

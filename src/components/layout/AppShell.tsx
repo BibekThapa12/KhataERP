@@ -5,8 +5,8 @@ import { isDeveloperAdmin, signOut } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
-  BookOpen, Users, Package, List, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronRight, Code2
+  BookOpen, Users, Package, Scale, BarChart2, FileText,
+  Percent, Boxes, Settings, LogOut, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -23,6 +23,8 @@ const NAV_SECTIONS: {
     items: [
       { to: '/sales', label: 'Sales Invoices', Icon: TrendingUp },
       { to: '/purchase', label: 'Purchase Bills', Icon: TrendingDown },
+      { to: '/sales-returns', label: 'Sales Returns', Icon: Undo2 },
+      { to: '/purchase-returns', label: 'Purchase Returns', Icon: Redo2 },
       { to: '/receipts', label: 'Receipts', Icon: ArrowDownCircle },
       { to: '/payments', label: 'Payments', Icon: ArrowUpCircle },
       { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
@@ -31,14 +33,16 @@ const NAV_SECTIONS: {
   {
     label: 'Masters',
     items: [
+      { to: '/masters', label: 'Alter Masters', Icon: Database },
       { to: '/parties', label: 'Parties', Icon: Users },
       { to: '/items', label: 'Items & Stock', Icon: Package },
-      { to: '/accounts', label: 'Chart of Accounts', Icon: List },
     ],
   },
   {
     label: 'Reports',
     items: [
+      { to: '/reports/daybook', label: 'Daybook', Icon: CalendarDays },
+      { to: '/reports/ledger', label: 'Ledger Report', Icon: Library },
       { to: '/trial-balance', label: 'Trial Balance', Icon: Scale },
       { to: '/profit-loss', label: 'Profit & Loss', Icon: BarChart2 },
       { to: '/balance-sheet', label: 'Balance Sheet', Icon: FileText },

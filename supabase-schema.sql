@@ -114,6 +114,16 @@ begin
   ));
 
   checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'return_vouchers',
+    'label', 'Sales and purchase return support',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'original_voucher_id')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'invoice_items' and column_name = 'source_invoice_item_id')
+                   and exists (select 1 from pg_constraint where conname = 'vouchers_type_check' and pg_get_constraintdef(oid) ilike '%Sales Return%' and pg_get_constraintdef(oid) ilike '%Purchase Return%')
+              then 'ok' else 'missing' end,
+    'detail', 'Required for linked credit notes, debit notes, and partial-return validation'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
     'key', 'developer_rls_policies',
     'label', 'Developer RLS policies',
     'status', case when exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'companies' and policyname = 'companies_developer_select')
@@ -149,6 +159,8 @@ create table if not exists companies (
   purchase_prefix  text not null default 'PB-',
   receipt_prefix   text not null default 'RCPT-',
   payment_prefix   text not null default 'PAY-',
+  sales_return_prefix text not null default 'SR-',
+  purchase_return_prefix text not null default 'PR-',
   reset_numbering_fiscal_year boolean not null default false,
   print_format     text not null default 'A5' check (print_format in ('A5','A4')),
   invoice_terms    text,
@@ -170,6 +182,8 @@ alter table companies add column if not exists sales_prefix text not null defaul
 alter table companies add column if not exists purchase_prefix text not null default 'PB-';
 alter table companies add column if not exists receipt_prefix text not null default 'RCPT-';
 alter table companies add column if not exists payment_prefix text not null default 'PAY-';
+alter table companies add column if not exists sales_return_prefix text not null default 'SR-';
+alter table companies add column if not exists purchase_return_prefix text not null default 'PR-';
 alter table companies add column if not exists reset_numbering_fiscal_year boolean not null default false;
 alter table companies add column if not exists print_format text not null default 'A5';
 alter table companies add column if not exists invoice_terms text;
@@ -208,6 +222,22 @@ create table if not exists accounts (
   created_at       timestamptz not null default now()
 );
 
+-- Managed categories used by the Masters screen.
+create table if not exists account_categories (
+  id                 uuid primary key default uuid_generate_v4(),
+  company_id         uuid not null references companies(id) on delete cascade,
+  name               text not null,
+  account_type       text not null check (account_type in ('Asset','Liability','Equity','Income','Expense')),
+  parent_category_id uuid references account_categories(id) on delete restrict,
+  is_system          boolean not null default false,
+  is_archived        boolean not null default false,
+  created_at         timestamptz not null default now(),
+  unique(company_id, name, account_type)
+);
+
+alter table accounts add column if not exists category_id uuid references account_categories(id) on delete restrict;
+alter table accounts add column if not exists is_archived boolean not null default false;
+
 -- ── Parties ───────────────────────────────────────────────────────────────────
 create table if not exists parties (
   id               uuid primary key default uuid_generate_v4(),
@@ -220,6 +250,7 @@ create table if not exists parties (
   account_id       text not null references accounts(id) on delete cascade,
   created_at       timestamptz not null default now()
 );
+alter table parties add column if not exists is_archived boolean not null default false;
 
 -- ── Items ─────────────────────────────────────────────────────────────────────
 create table if not exists items (
@@ -234,17 +265,73 @@ create table if not exists items (
   created_at       timestamptz not null default now()
 );
 
+create table if not exists item_categories (
+  id                 uuid primary key default uuid_generate_v4(),
+  company_id         uuid not null references companies(id) on delete cascade,
+  name               text not null,
+  parent_category_id uuid references item_categories(id) on delete restrict,
+  is_archived        boolean not null default false,
+  created_at         timestamptz not null default now(),
+  unique(company_id, name)
+);
+
+alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
+alter table items add column if not exists sku text;
+alter table items add column if not exists barcode text;
+alter table items add column if not exists vat_applicable boolean not null default true;
+alter table items add column if not exists is_archived boolean not null default false;
+
+create table if not exists master_change_logs (
+  id          uuid primary key default uuid_generate_v4(),
+  company_id  uuid not null references companies(id) on delete cascade,
+  user_id     uuid references auth.users(id) on delete set null,
+  record_type text not null,
+  record_id   text not null,
+  action      text not null,
+  old_values  jsonb not null default '{}'::jsonb,
+  new_values  jsonb not null default '{}'::jsonb,
+  created_at  timestamptz not null default now()
+);
+
+-- Convert existing free-text account groups into managed categories.
+insert into account_categories (company_id, name, account_type, is_system)
+select company_id, "group", type, bool_or(is_system)
+from accounts
+group by company_id, "group", type
+on conflict (company_id, name, account_type) do nothing;
+
+update accounts a
+set category_id = c.id
+from account_categories c
+where a.category_id is null
+  and c.company_id = a.company_id
+  and c.name = a."group"
+  and c.account_type = a.type;
+
+insert into item_categories (company_id, name)
+select id, 'General' from companies
+on conflict (company_id, name) do nothing;
+
+update items i
+set category_id = c.id
+from item_categories c
+where i.category_id is null and c.company_id = i.company_id and c.name = 'General';
+
 -- ── Vouchers ──────────────────────────────────────────────────────────────────
 create table if not exists vouchers (
   id               uuid primary key default uuid_generate_v4(),
   company_id       uuid not null references companies(id) on delete cascade,
-  type             text not null check (type in ('Sales','Purchase','Receipt','Payment','Journal','Stock Adjustment')),
+  type             text not null check (type in ('Sales','Purchase','Sales Return','Purchase Return','Receipt','Payment','Journal','Stock Adjustment')),
   date             date not null,
   date_ad          date not null,
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
   narration        text,
+  original_voucher_id uuid references vouchers(id) on delete restrict,
+  return_reason    text,
+  settlement_mode text check (settlement_mode in ('party','cash','bank')),
+  restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
   subtotal         numeric(14,2),
@@ -266,7 +353,7 @@ begin
     alter table vouchers drop constraint vouchers_type_check;
   end if;
   alter table vouchers add constraint vouchers_type_check
-    check (type in ('Sales','Purchase','Receipt','Payment','Journal','Stock Adjustment'));
+    check (type in ('Sales','Purchase','Sales Return','Purchase Return','Receipt','Payment','Journal','Stock Adjustment'));
 end $$;
 
 -- Existing databases created before Nepali-date support can run this file again.
@@ -275,6 +362,10 @@ end $$;
 alter table vouchers add column if not exists date_ad date;
 alter table vouchers add column if not exists date_bs text;
 alter table vouchers add column if not exists date_bs_key integer;
+alter table vouchers add column if not exists original_voucher_id uuid references vouchers(id) on delete restrict;
+alter table vouchers add column if not exists return_reason text;
+alter table vouchers add column if not exists settlement_mode text;
+alter table vouchers add column if not exists restock_items boolean;
 update vouchers set date_ad = coalesce(date_ad, date) where date_ad is null;
 
 -- ── Voucher Lines (double-entry ledger rows) ──────────────────────────────────
@@ -304,13 +395,25 @@ create table if not exists invoice_items (
   qty              numeric(14,4) not null,
   rate             numeric(14,2) not null
 );
+alter table invoice_items add column if not exists source_invoice_item_id uuid references invoice_items(id) on delete restrict;
+alter table invoice_items add column if not exists item_name text;
+alter table invoice_items add column if not exists unit text;
+alter table invoice_items add column if not exists discount_amount numeric(14,2);
+alter table invoice_items add column if not exists taxable_amount numeric(14,2);
+alter table invoice_items add column if not exists vat_amount numeric(14,2);
+alter table invoice_items add column if not exists cost_rate numeric(14,2);
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 create index if not exists idx_accounts_company   on accounts(company_id);
+create index if not exists idx_account_categories_company on account_categories(company_id, account_type, name);
 create index if not exists idx_parties_company    on parties(company_id);
 create index if not exists idx_items_company      on items(company_id);
+create index if not exists idx_item_categories_company on item_categories(company_id, name);
+create index if not exists idx_master_logs_company on master_change_logs(company_id, created_at desc);
 create index if not exists idx_vouchers_company   on vouchers(company_id, date desc, seq desc);
 create index if not exists idx_vouchers_company_bs on vouchers(company_id, date_bs_key desc, seq desc);
+create index if not exists idx_vouchers_original on vouchers(original_voucher_id) where original_voucher_id is not null;
+create index if not exists idx_iitems_source on invoice_items(source_invoice_item_id) where source_invoice_item_id is not null;
 create index if not exists idx_vlines_voucher     on voucher_lines(voucher_id);
 create index if not exists idx_slines_voucher     on stock_lines(voucher_id);
 create index if not exists idx_iitems_voucher     on invoice_items(voucher_id);
@@ -322,8 +425,11 @@ create index if not exists idx_app_events_type    on app_events(event_type, crea
 
 alter table companies      enable row level security;
 alter table accounts       enable row level security;
+alter table account_categories enable row level security;
 alter table parties        enable row level security;
 alter table items          enable row level security;
+alter table item_categories enable row level security;
+alter table master_change_logs enable row level security;
 alter table vouchers       enable row level security;
 alter table voucher_lines  enable row level security;
 alter table stock_lines    enable row level security;
@@ -359,6 +465,12 @@ create policy "accounts_own" on accounts
 create policy "accounts_developer_select" on accounts
   for select using (is_developer_admin());
 
+create policy "account_categories_own" on account_categories
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+create policy "account_categories_developer_select" on account_categories
+  for select using (is_developer_admin());
+
 -- Parties
 create policy "parties_own" on parties
   for all using (company_id = my_company_id()) with check (company_id = my_company_id());
@@ -371,6 +483,18 @@ create policy "items_own" on items
   for all using (company_id = my_company_id()) with check (company_id = my_company_id());
 
 create policy "items_developer_select" on items
+  for select using (is_developer_admin());
+
+create policy "item_categories_own" on item_categories
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+create policy "item_categories_developer_select" on item_categories
+  for select using (is_developer_admin());
+
+create policy "master_change_logs_own" on master_change_logs
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+create policy "master_change_logs_developer_select" on master_change_logs
   for select using (is_developer_admin());
 
 -- Vouchers
