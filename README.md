@@ -43,4 +43,4 @@ npm run build      # output in dist/ — deploy to Vercel, Netlify, Cloudflare P
 - Voucher cancellation with full reversal
 - JSON backup export from Settings
 
-Made with love
+Made with love ❤
