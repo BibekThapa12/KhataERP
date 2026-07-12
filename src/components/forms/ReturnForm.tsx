@@ -6,6 +6,7 @@ import { fmtDate, fmtMoney } from '@/lib/utils'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { resolveSystemAccountId } from '@/lib/engine'
 import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
+import { toBaseQty } from '@/lib/units'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -65,7 +66,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       unit: line.unit || items.find(item => item.id === line.item_id)?.unit || '',
       entry_unit: line.entry_unit || line.unit || items.find(item => item.id === line.item_id)?.unit || '',
       conversion_factor: line.conversion_factor || 1,
-      base_qty: (existing?.qty || 0) * (line.conversion_factor || 1),
+      base_qty: toBaseQty(existing?.qty || 0, line.conversion_factor || 1),
       qty: existing?.qty || 0,
       rate: line.rate,
       cost_rate: existing?.cost_rate ?? line.cost_rate ?? stock.find(entry => entry.id === line.item_id)?.avg_cost ?? 0,

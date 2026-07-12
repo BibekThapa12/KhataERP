@@ -42,18 +42,18 @@ describe('accounting engine integrity', () => {
   })
 
   it('converts an alternative-unit invoice to canonical stock units', () => {
-    const purchase = buildPurchaseVoucherData({ party_account_id: null, is_cash: true, items: [{ item_id: 'tea', qty: 2, rate: 1200, entry_unit: 'box', conversion_factor: 12 }], vat_rate: 0, system_accounts: accounts })
-    expect(purchase.subtotal).toBe(2400)
-    expect(purchase.invoice_items[0]).toMatchObject({ qty: 2, rate: 1200, entry_unit: 'box', conversion_factor: 12, base_qty: 24 })
-    expect(purchase.stock_lines[0]).toMatchObject({ qty: 24, rate: 100, direction: 'in' })
+    const purchase = buildPurchaseVoucherData({ party_account_id: null, is_cash: true, items: [{ item_id: 'tea', qty: 12, rate: 100, entry_unit: 'pcs', conversion_factor: 12 }], vat_rate: 0, system_accounts: accounts })
+    expect(purchase.subtotal).toBe(1200)
+    expect(purchase.invoice_items[0]).toMatchObject({ qty: 12, rate: 100, entry_unit: 'pcs', conversion_factor: 12, base_qty: 1 })
+    expect(purchase.stock_lines[0]).toMatchObject({ qty: 1, rate: 1200, direction: 'in' })
   })
 
   it('converts quantities and rates and formats equivalent stock', () => {
-    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pcs', alternate_unit: 'box', alternate_conversion: 12, sell_rate: 100, opening_qty: 0, opening_rate: 0 } as Item
-    expect(toBaseQty(2.5, 12)).toBe(30)
-    expect(toBaseRate(1200, 12)).toBe(100)
-    expect(fromBaseRate(100, 12)).toBe(1200)
-    expect(formatStockQuantity(30, item)).toBe('30 pcs (2 box + 6 pcs)')
-    expect(formatStockQuantity(24, item)).toBe('24 pcs (2 box)')
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'cs', alternate_unit: 'pcs', alternate_conversion: 6, sell_rate: 600, opening_qty: 0, opening_rate: 0 } as Item
+    expect(toBaseQty(15, 6)).toBe(2.5)
+    expect(toBaseRate(100, 6)).toBe(600)
+    expect(fromBaseRate(600, 6)).toBe(100)
+    expect(formatStockQuantity(2.5, item)).toBe('2.5 cs (15 pcs)')
+    expect(formatStockQuantity(4, item)).toBe('4 cs (24 pcs)')
   })
 })

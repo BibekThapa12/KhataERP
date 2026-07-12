@@ -3,7 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
-import { formatStockQuantity, fromBaseRate, toBaseQty, unitFactor, unitName, type UnitMode } from '@/lib/units'
+import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -103,7 +103,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const line = next[idx]
     const item = items.find(entry => entry.id === line.item_id)
     const oldFactor = line.conversion_factor || unitFactor(item, line.unit_mode)
-    const baseRate = line.rate / oldFactor
+    const baseRate = toBaseRate(line.rate, oldFactor)
     const factor = unitFactor(item, mode)
     next[idx] = { ...line, unit_mode: mode, entry_unit: unitName(item, mode), conversion_factor: factor, rate: fromBaseRate(baseRate, factor) }
     setLines(next)

@@ -55,7 +55,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
     const mainUnit = unit.trim() || 'pcs'
     const altUnit = alternateUnit.trim()
     if (altUnit && altUnit.toLowerCase() === mainUnit.toLowerCase()) { setError('Main and alternative units must be different.'); return }
-    if (altUnit && alternateConversion <= 1) { setError('Main units per alternative must be greater than 1.'); return }
+    if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
     const factor = openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     setSaving(true)
     try {
@@ -92,9 +92,9 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><Input value={alternateUnit} onChange={e => setAlternateUnit(e.target.value)} placeholder="box, carton…" /></div>
-            <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder="Enter manually" /><p className="text-[11px] text-muted-foreground">Number of main units in one alternative unit</p></div>
+            <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder="Enter manually" /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
           </div>
-          {alternateUnit.trim() && alternateConversion > 1 && <p className="text-xs text-muted-foreground">1 {alternateUnit.trim()} = {alternateConversion} {unit.trim() || 'pcs'}</p>}
+          {alternateUnit.trim() && alternateConversion > 1 && <p className="text-xs text-muted-foreground">1 {unit.trim() || 'main unit'} = {alternateConversion} {alternateUnit.trim()}</p>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Opening Stock Qty</Label>

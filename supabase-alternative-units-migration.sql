@@ -21,7 +21,7 @@ alter table public.invoice_items add column if not exists base_qty numeric(14,4)
 update public.invoice_items
 set entry_unit = coalesce(entry_unit, unit),
     conversion_factor = coalesce(conversion_factor, 1),
-    base_qty = coalesce(base_qty, qty * coalesce(conversion_factor, 1))
+    base_qty = coalesce(base_qty, qty / nullif(coalesce(conversion_factor, 1), 0))
 where entry_unit is null or base_qty is null;
 
 alter table public.invoice_items drop constraint if exists invoice_items_conversion_factor_check;

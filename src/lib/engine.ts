@@ -3,6 +3,7 @@ import type {
   TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item
 } from '@/types'
 import { makeBsKey } from '@/lib/nepaliDate'
+import { toBaseQty, toBaseRate } from '@/lib/units'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -229,8 +230,8 @@ export function buildSalesVoucherData(p: InvoiceParams) {
     { account_id: sys(p.system_accounts, 'sales'), debit: 0, credit: taxable },
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
-  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: round4(l.qty * (l.conversion_factor || 1)) }))
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: round4(l.qty * (l.conversion_factor || 1)), rate: round2(l.rate / (l.conversion_factor || 1)), direction: 'out' as const }))
+  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -245,8 +246,8 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
   lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
-  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: round4(l.qty * (l.conversion_factor || 1)) }))
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: round4(l.qty * (l.conversion_factor || 1)), rate: round2(l.rate / (l.conversion_factor || 1)), direction: 'in' as const }))
+  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -323,8 +324,8 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
         ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_receivable'), debit: 0, credit: vat_amount }] : []),
       ]
   const stock_lines = isSalesReturn
-    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: round4(item.qty * (item.conversion_factor || 1)), rate: item.cost_rate, direction: 'in' as const })) : [])
-    : p.items.map(item => ({ item_id: item.item_id, qty: round4(item.qty * (item.conversion_factor || 1)), rate: item.cost_rate, direction: 'out' as const }))
+    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'in' as const })) : [])
+    : p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'out' as const }))
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 

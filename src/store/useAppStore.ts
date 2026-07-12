@@ -17,6 +17,7 @@ import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
 import { categoryDepth, categoryDescendantIds, subtreeHeight } from '@/lib/categoryHierarchy'
 import { partyTerminology, partyTypeForCategory } from '@/lib/partyTerminology'
 import { bankAccounts } from '@/lib/banks'
+import { toBaseQty, toBaseRate } from '@/lib/units'
 
 interface AppState {
   // Auth
@@ -110,8 +111,8 @@ function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: 
       unit: line.entry_unit || item?.unit,
       entry_unit: line.entry_unit || item?.unit,
       conversion_factor: line.conversion_factor || 1,
-      base_qty: line.qty * (line.conversion_factor || 1),
-      cost_rate: line.cost_rate ?? (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : line.rate / (line.conversion_factor || 1)),
+      base_qty: toBaseQty(line.qty, line.conversion_factor || 1),
+      cost_rate: line.cost_rate ?? (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : toBaseRate(line.rate, line.conversion_factor || 1)),
     }
   })
 }
@@ -164,7 +165,7 @@ function validateReturnRequest(vouchers: Voucher[], stock: StockEntry[], params:
 
   if (params.type === 'Purchase Return') {
     const requestedByItem = new Map<string, number>()
-    for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + item.qty * (item.conversion_factor || 1))
+    for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + toBaseQty(item.qty, item.conversion_factor || 1))
     const editing = editingId ? vouchers.find(voucher => voucher.id === editingId) : undefined
     for (const [itemId, qty] of requestedByItem) {
       const currentReturnQty = editing?.stock_lines?.filter(line => line.item_id === itemId && line.direction === 'out').reduce((sum, line) => sum + line.qty, 0) || 0
