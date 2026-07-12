@@ -42,3 +42,5 @@ npm run build      # output in dist/ — deploy to Vercel, Netlify, Cloudflare P
 - Trial Balance, P&L (with closing-stock adjustment), Balance Sheet, VAT Report, Stock Summary
 - Voucher cancellation with full reversal
 - JSON backup export from Settings
+
+Made with love
