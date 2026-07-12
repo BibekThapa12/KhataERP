@@ -3,6 +3,7 @@ import { Plus, Eye, Printer, Share2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent } from '@/lib/supabase'
 import { fmtMoney, fmtDate } from '@/lib/utils'
+import { partyTerminology } from '@/lib/partyTerminology'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { PartyForm } from '@/components/forms/PartyForm'
 import { Button } from '@/components/ui/button'
@@ -19,6 +20,7 @@ function PartyLedger({ party }: { party: Party }) {
     .sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
 
   const isCustomer = party.type === 'customer'
+  const terminology = partyTerminology(party.type)
   let running = account?.opening_balance ?? 0
   const statementRows = related.map(v => {
     const line = v.lines?.find(l => l.account_id === party.account_id)
@@ -45,7 +47,7 @@ function PartyLedger({ party }: { party: Party }) {
     win.document.write(`
       <!doctype html><html><head><title>${party.name} statement</title>
       <style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111827}h1{margin:0;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #d1d5db;padding:6px}th{background:#f3f4f6;text-align:left}.right{text-align:right}.meta{margin-top:6px;color:#4b5563}</style>
-      </head><body><h1>${company?.name || 'KhataERP'}</h1><p class="meta">Statement for <strong>${party.name}</strong></p><p class="meta">Opening balance: ${fmtMoney(account?.opening_balance ?? 0)} | Current balance: ${fmtMoney(account?.balance ?? 0)}</p><table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th>Debit</th><th>Credit</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table></body></html>
+      </head><body><h1>${company?.name || 'KhataERP'}</h1><p class="meta">${terminology.singular} statement for <strong>${party.name}</strong></p><p class="meta">Opening balance: ${fmtMoney(account?.opening_balance ?? 0)} | Current balance: ${fmtMoney(account?.balance ?? 0)}</p><table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th>Debit</th><th>Credit</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table></body></html>
     `)
     win.document.close()
     win.focus()
@@ -53,7 +55,7 @@ function PartyLedger({ party }: { party: Party }) {
   }
 
   const shareStatement = async () => {
-    const text = `${party.name} statement\nOpening: ${fmtMoney(account?.opening_balance ?? 0)}\nBalance: ${fmtMoney(account?.balance ?? 0)}`
+    const text = `${terminology.singular}: ${party.name}\nOpening: ${fmtMoney(account?.opening_balance ?? 0)}\nBalance: ${fmtMoney(account?.balance ?? 0)}`
     logAppEvent('share_party_statement', company?.id, { party_id: party.id, party_type: party.type })
     if (navigator.share) await navigator.share({ title: `${party.name} statement`, text })
     else await navigator.clipboard.writeText(text)
@@ -61,7 +63,7 @@ function PartyLedger({ party }: { party: Party }) {
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Phone</p><p className="mt-0.5 font-medium">{party.phone || '—'}</p></div>
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">PAN / VAT</p><p className="mt-0.5 font-medium">{party.pan_vat || '—'}</p></div>
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Balance</p>
@@ -110,6 +112,7 @@ function PartyLedger({ party }: { party: Party }) {
 function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
   const { parties, accounts } = useAppStore()
   const [selected, setSelected] = useState<Party | null>(null)
+  const terminology = partyTerminology(partyType)
   const list = parties
     .filter(p => p.type === partyType && !p.is_archived)
     .map(p => ({ ...p, account: accounts.find(a => a.id === p.account_id) }))
@@ -119,8 +122,8 @@ function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <p className="text-3xl mb-3 opacity-30">◔</p>
-        <p className="font-medium text-foreground">No {partyType}s yet</p>
-        <p className="text-sm mt-1">Add a {partyType} to start recording {partyType === 'customer' ? 'sales' : 'purchases'} on credit.</p>
+        <p className="font-medium text-foreground">No {terminology.plural} yet</p>
+        <p className="text-sm mt-1">Add a {terminology.singular} to start recording {partyType === 'customer' ? 'sales' : 'purchases'} on credit.</p>
       </div>
     )
   }
@@ -178,13 +181,13 @@ export function PartiesPage() {
   const [showForm, setShowForm] = useState(false)
   return (
     <div>
-      <PageHeader title="Parties" description="Customers and suppliers"
+      <PageHeader title="Parties" description="Sundry Debtors (Customers) and Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button>} />
       <PageContent>
         <Tabs defaultValue="customer">
           <TabsList className="mb-4">
-            <TabsTrigger value="customer">Customers</TabsTrigger>
-            <TabsTrigger value="supplier">Suppliers</TabsTrigger>
+            <TabsTrigger value="customer">Sundry Debtors (Customers)</TabsTrigger>
+            <TabsTrigger value="supplier">Sundry Creditors (Suppliers)</TabsTrigger>
           </TabsList>
           <Card>
             <TabsContent value="customer" className="mt-0"><PartyTable partyType="customer" /></TabsContent>

@@ -41,6 +41,14 @@
   .credit-amt { @apply text-forest font-semibold; }
   .report-th { @apply px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground; }
   .report-td { @apply px-4 py-3 align-top; }
+  .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+}
+
+@media (max-width: 767px) {
+  .report-th { padding: 0.5rem 0.65rem; font-size: 0.65rem; }
+  .report-td { padding: 0.65rem; }
+  button, [role="button"], input, select, textarea { touch-action: manipulation; }
+  input, select, textarea { font-size: 16px !important; }
 }
 
 @media print {

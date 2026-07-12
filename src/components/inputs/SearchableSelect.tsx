@@ -33,9 +33,10 @@ export function SearchableSelect({
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const suppressNextFocus = useRef(false)
-  const filtered = useMemo(() => filterSearchableOptions(options, query), [options, query])
+  const uniqueOptions = useMemo(() => [...new Map(options.map(option => [option.value, option])).values()], [options])
+  const filtered = useMemo(() => filterSearchableOptions(uniqueOptions, query), [uniqueOptions, query])
   const enabled = filtered.filter(option => !option.disabled)
-  const selected = options.find(option => option.value === value)
+  const selected = uniqueOptions.find(option => option.value === value)
 
   useEffect(() => {
     if (!open) { setQuery(''); setActiveIndex(0); return }
@@ -62,13 +63,13 @@ export function SearchableSelect({
 
   return <Popover.Root open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild>
-      <button id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} onFocus={openOnFocus} className={cn('flex h-9 w-full items-center justify-between rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
-        <span className={cn('truncate', !selected && 'text-muted-foreground')}>{selected?.label || placeholder}</span>
+      <button id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
+        <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')} title={selected?.label}>{selected?.label || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>
     </Popover.Trigger>
     <Popover.Portal>
-      <Popover.Content sideOffset={4} align="start" className="z-[80] w-[var(--radix-popover-trigger-width)] min-w-[14rem] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+      <Popover.Content collisionPadding={8} sideOffset={4} align="start" className="z-[80] w-[var(--radix-popover-trigger-width)] min-w-[min(14rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
         <div className="relative border-b p-1.5">
           <Search className="absolute left-4 top-4 h-3.5 w-3.5 text-muted-foreground" />
           <input ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setActiveIndex(0) }} onKeyDown={event => {

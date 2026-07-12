@@ -269,6 +269,7 @@ export interface ReturnVoucherParams {
   original: Voucher
   items: ReturnItemInput[]
   settlement_mode: 'party' | 'cash' | 'bank'
+  settlement_account_id?: string
   restock_items: boolean
   system_accounts?: Partial<Record<SystemAccountKey, string>>
 }
@@ -308,7 +309,7 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   const total = round2(taxable + vat_amount)
   const settlementAccount = p.settlement_mode === 'party'
     ? p.original.party_account_id!
-    : sys(p.system_accounts, p.settlement_mode)
+    : p.settlement_account_id || sys(p.system_accounts, p.settlement_mode)
   const isSalesReturn = p.type === 'Sales Return'
   const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = isSalesReturn
     ? [
@@ -327,24 +328,22 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
-type PaymentMode = 'cash' | 'bank'
-
-export function buildReceiptData(party_account_id: string, amount: number, deposit_to: PaymentMode = 'cash', system_accounts?: Partial<Record<SystemAccountKey, string>>) {
+export function buildReceiptData(party_account_id: string, amount: number, deposit_to_account_id: string) {
   return {
     total: amount,
     lines: [
-      { account_id: sys(system_accounts, deposit_to), debit: amount, credit: 0 },
+      { account_id: deposit_to_account_id, debit: amount, credit: 0 },
       { account_id: party_account_id, debit: 0, credit: amount },
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }
 
-export function buildPaymentData(party_account_id: string, amount: number, paid_from: PaymentMode = 'cash', system_accounts?: Partial<Record<SystemAccountKey, string>>) {
+export function buildPaymentData(party_account_id: string, amount: number, paid_from_account_id: string) {
   return {
     total: amount,
     lines: [
       { account_id: party_account_id, debit: amount, credit: 0 },
-      { account_id: sys(system_accounts, paid_from), debit: 0, credit: amount },
+      { account_id: paid_from_account_id, debit: 0, credit: amount },
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }

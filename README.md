@@ -17,6 +17,9 @@ SQL Editor → paste `supabase-schema.sql` → Run.
 ### 3. Set environment variables
 Apply `supabase-integrity-migration.sql` after the base schema to enable database-level numbering and journal-balance guards.
 Apply `supabase-alternative-units-migration.sql` to enable main and alternative item units.
+Apply `supabase-category-hierarchy-migration.sql` to seed editable account roots and enforce three-level account and item category trees.
+Apply `supabase-sundry-parties-migration.sql` afterwards to migrate party ledgers into Sundry Debtors and Sundry Creditors.
+Apply `supabase-multiple-bank-accounts-migration.sql` to add the Bank category and exact settlement-account tracking.
 
 ```bash
 cp .env.example .env.local

@@ -372,7 +372,7 @@ export function DeveloperDashboard() {
           </CardContent>
         </Card>
 
-        <div className="grid grid-cols-2 xl:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-6 xl:gap-4">
           <StatCard label="Companies" value={String(companies.length)} Icon={Building2} sub={`${metrics.activeCompanyIds.size} active in 30 days`} />
           <StatCard label="Vouchers" value={String(metrics.totalVouchers)} Icon={Activity} sub={`Sales ${metrics.voucherByType.Sales || 0} / Purchases ${metrics.voucherByType.Purchase || 0}`} />
           <StatCard label="Parties" value={String(metrics.totalParties)} Icon={Users} />

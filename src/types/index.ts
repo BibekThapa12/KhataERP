@@ -108,6 +108,7 @@ export interface Voucher {
   original_voucher_id?: string
   return_reason?: string
   settlement_mode?: 'party' | 'cash' | 'bank'
+  settlement_account_id?: string
   restock_items?: boolean
   party_account_id?: string
   is_cash: boolean
@@ -160,7 +161,7 @@ export interface AccountCategory {
   company_id: string
   name: string
   account_type: AccountType
-  parent_category_id?: string
+  parent_category_id?: string | null
   is_system: boolean
   is_archived: boolean
   created_at?: string
@@ -170,7 +171,7 @@ export interface ItemCategory {
   id: string
   company_id: string
   name: string
-  parent_category_id?: string
+  parent_category_id?: string | null
   is_archived: boolean
   created_at?: string
 }

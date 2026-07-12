@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { normalizeSearch } from '@/lib/search'
+import { categoryPath } from '@/lib/categoryHierarchy'
 
 function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { items, saveStockAdjustment } = useAppStore()
@@ -86,9 +87,7 @@ export function ItemsPage() {
   const [showAdjustment, setShowAdjustment] = useState(false)
   const [search, setSearch] = useState('')
   const q = normalizeSearch(search)
-  const categoryNames = new Map(itemCategories.map(category => [category.id, category.name]))
-
-  const rows = items.filter(item => !item.is_archived && (!q || normalizeSearch(`${item.name} ${categoryNames.get(item.category_id || '') || ''} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q)))
+  const rows = items.filter(item => !item.is_archived && (!q || normalizeSearch(`${item.name} ${categoryPath(itemCategories, item.category_id)} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q)))
     .map(item => ({ item, s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 } }))
     .sort((a, b) => a.item.name.localeCompare(b.item.name))
 
@@ -97,7 +96,7 @@ export function ItemsPage() {
       <PageHeader
         title="Items & Stock"
         description="Inventory tracked at weighted-average cost"
-        action={<div className="flex flex-wrap gap-2"><div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-56 pl-8" /></div><Button variant="outline" onClick={() => setShowAdjustment(true)}>Stock Adjustment</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Item</Button></div>}
+        action={<div className="flex w-full flex-wrap gap-2 sm:w-auto"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8 sm:w-56" /></div><Button variant="outline" onClick={() => setShowAdjustment(true)}>Stock Adjustment</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Item</Button></div>}
       />
       <PageContent>
         <Card>

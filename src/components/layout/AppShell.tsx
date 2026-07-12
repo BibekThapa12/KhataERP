@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2
+  Percent, Boxes, Settings, LogOut, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -57,6 +57,7 @@ export function AppShell() {
   const navigate = useNavigate()
   const vatEnabled = company?.vat_enabled ?? true
   const [developerAdmin, setDeveloperAdmin] = useState(false)
+  const [mobileOpen, setMobileOpen] = useState(false)
 
   useEffect(() => {
     isDeveloperAdmin().then(setDeveloperAdmin)
@@ -84,11 +85,16 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
+    <div className="flex h-dvh overflow-hidden bg-background">
+      <button type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-md border bg-background shadow-sm md:hidden">
+        <Menu className="h-5 w-5" />
+      </button>
+      {mobileOpen && <button type="button" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/45 md:hidden" />}
       {/* Sidebar */}
-      <aside className="w-56 flex-shrink-0 bg-[#1B2A4A] flex flex-col overflow-y-auto">
+      <aside className={cn('fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-y-auto bg-[#1B2A4A] transition-transform md:static md:w-56 md:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
         {/* Brand */}
-        <div className="px-4 py-5 border-b border-white/10">
+        <div className="relative px-4 py-5 border-b border-white/10">
+          <button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/10 md:hidden"><X className="h-5 w-5" /></button>
           <div className="font-serif text-2xl font-bold text-white tracking-tight">Khata</div>
           <div className="text-[10px] uppercase tracking-widest text-blue-200/70 mt-0.5">ERP for Nepal</div>
           <button
@@ -115,6 +121,7 @@ export function AppShell() {
                     key={to}
                     to={to}
                     end={end}
+                    onClick={() => setMobileOpen(false)}
                     className={({ isActive }) =>
                       cn(
                         'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
@@ -138,6 +145,7 @@ export function AppShell() {
               </div>
               <NavLink
                 to="/developer"
+                onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
                   cn(
                     'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
@@ -158,6 +166,7 @@ export function AppShell() {
         <div className="px-3 py-3 border-t border-white/10 space-y-1">
           <NavLink
             to="/settings"
+            onClick={() => setMobileOpen(false)}
             className={({ isActive }) =>
               cn('flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors', isActive ? 'bg-white text-[#1B2A4A] font-semibold' : 'text-blue-100/80 hover:bg-white/10 hover:text-white')
             }

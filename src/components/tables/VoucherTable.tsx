@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/button'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Voucher } from '@/types'
+import { legacySettlementAccountId } from '@/lib/banks'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
@@ -25,13 +26,15 @@ function VoucherDetail({ voucher }: { voucher: Voucher }) {
   const vatEnabled = company?.vat_enabled ?? true
   const partyName = voucher.party_account_id
     ? getPartyByAccountId(voucher.party_account_id)?.name ?? getAccount(voucher.party_account_id)?.name
-    : voucher.settlement_mode === 'bank' ? 'Bank' : voucher.is_cash ? 'Cash' : '—'
+    : getAccount(legacySettlementAccountId(voucher) || '')?.name || (voucher.is_cash ? 'Cash' : '—')
+  const settlementName = getAccount(legacySettlementAccountId(voucher) || '')?.name
 
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-3 text-sm">
+      <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.date_bs)}</p></div>
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Party</p><p className="font-medium mt-0.5">{partyName}</p></div>
+        {settlementName && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Settlement Account</p><p className="font-medium mt-0.5">{settlementName}</p></div>}
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Total</p><p className="font-serif font-bold mt-0.5 num">{fmtMoney(voucher.total)}</p></div>
       </div>
 
@@ -125,7 +128,8 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
     const party = voucher.party_account_id
       ? getPartyByAccountId(voucher.party_account_id)
       : null
-    const partyName = party?.name || (voucher.settlement_mode === 'bank' ? 'Bank' : voucher.is_cash ? 'Cash' : '-')
+    const settlementName = getAccount(legacySettlementAccountId(voucher) || '')?.name
+    const partyName = party ? `${party.name}${settlementName ? ` / ${settlementName}` : ''}` : settlementName || (voucher.is_cash ? 'Cash' : '-')
     const invoiceRows = (voucher.invoice_items || []).map((it, index) => {
       const item = getItem(it.item_id)
       return `
@@ -287,7 +291,8 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
             {vouchers.map(v => {
               const partyName = v.party_account_id
                 ? getPartyByAccountId(v.party_account_id)?.name ?? '—'
-                : v.settlement_mode === 'bank' ? 'Bank' : v.is_cash ? 'Cash' : '—'
+                : getAccount(legacySettlementAccountId(v) || '')?.name || (v.is_cash ? 'Cash' : '—')
+              const settlementName = getAccount(legacySettlementAccountId(v) || '')?.name
               return (
                 <tr key={v.id} className={`border-t border-border hover:bg-muted/30 transition-colors ${v.cancelled ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date_bs)}</td>
@@ -297,6 +302,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
                   <td className="px-4 py-3">
                     {v.invoice_no && <span className="text-xs text-muted-foreground block num">{v.invoice_no}</span>}
                     <span className="font-medium">{partyName}</span>
+                    {v.party_account_id && settlementName && <span className="block text-xs text-muted-foreground">via {settlementName}</span>}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell max-w-[200px] truncate">{v.narration}</td>
                   <td className="px-4 py-3 text-right num font-semibold">{fmtMoney(v.total)}</td>

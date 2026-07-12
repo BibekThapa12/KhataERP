@@ -1,8 +1,10 @@
 // ─── Shared report helpers ────────────────────────────────────────────────────
-import { useState, useMemo } from 'react'
-import { Search } from 'lucide-react'
+import { Fragment, useState, useMemo } from 'react'
+import { ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary } from '@/lib/engine'
+import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide } from '@/lib/engine'
+import { buildAccountReportTree, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
 import { fmtMoney } from '@/lib/utils'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity } from '@/lib/units'
@@ -15,75 +17,63 @@ import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
 import { normalizeSearch } from '@/lib/search'
+import { categoryPath } from '@/lib/categoryHierarchy'
 import type { Account } from '@/types'
 
-function ReportTable({
-  rows, totalLeft, totalRight, leftLabel = 'Debit', rightLabel = 'Credit',
-}: {
-  rows: { label: string; left?: number; right?: number }[]
-  totalLeft: number
-  totalRight: number
-  leftLabel?: string
-  rightLabel?: string
-}) {
-  return (
-    <div className="overflow-x-auto">
-      <table className="w-full text-sm border-collapse">
-        <thead>
-          <tr className="bg-muted/50">
-            <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Account</th>
-            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{leftLabel}</th>
-            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">{rightLabel}</th>
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((r, i) => (
-            <tr key={i} className="border-t border-border hover:bg-muted/20">
-              <td className="px-4 py-2.5">{r.label}</td>
-              <td className="px-4 py-2.5 text-right num">
-                {r.left != null && r.left !== 0 ? <span className="debit-amt">{fmtMoney(r.left)}</span> : '—'}
-              </td>
-              <td className="px-4 py-2.5 text-right num">
-                {r.right != null && r.right !== 0 ? <span className="credit-amt">{fmtMoney(r.right)}</span> : '—'}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-        <tfoot>
-          <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-            <td className="px-4 py-2.5">Total</td>
-            <td className="px-4 py-2.5 text-right num">{fmtMoney(totalLeft)}</td>
-            <td className="px-4 py-2.5 text-right num">{fmtMoney(totalRight)}</td>
-          </tr>
-        </tfoot>
-      </table>
-    </div>
-  )
-}
-
-function AccountList({ accounts, total, emptyLabel }: { accounts: Account[]; total: number; emptyLabel: string }) {
-  if (accounts.length === 0) return <p className="text-sm text-muted-foreground px-4 py-3">{emptyLabel}</p>
-  return (
-    <table className="w-full text-sm border-collapse">
-      <tbody>
-        {accounts.map(a => (
-          <tr key={a.id} className="border-t border-border hover:bg-muted/20">
-            <td className="px-4 py-2.5">{a.name}</td>
-            <td className="px-4 py-2.5 text-right num">{fmtMoney(a.balance)}</td>
-          </tr>
-        ))}
-        <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-          <td className="px-4 py-2.5">Total</td>
-          <td className="px-4 py-2.5 text-right num">{fmtMoney(total)}</td>
-        </tr>
-      </tbody>
-    </table>
-  )
-}
-
 // ─── Trial Balance ────────────────────────────────────────────────────────────
+function LedgerLink({ account }: { account: Account }) {
+  const navigate = useNavigate()
+  return account.company_id ? <button type="button" onClick={() => navigate(`/reports/ledger?account=${encodeURIComponent(account.id)}`)} className="max-w-full truncate text-left text-primary underline-offset-2 hover:underline focus-visible:rounded focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{account.name}</button> : <span>{account.name}</span>
+}
+
+function useExpandedGroups() {
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
+  const toggle = (key: string) => setExpanded(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next })
+  return { expanded, toggle }
+}
+
+function GroupButton({ groupKey, name, count, type, expanded, toggle }: { groupKey: string; name: string; count: number; type?: string; expanded: boolean; toggle: (key: string) => void }) {
+  return <button type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} onClick={() => toggle(groupKey)} className="flex max-w-full items-center gap-2 text-left"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-muted">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</span><span className="truncate">{name}</span><span className="shrink-0 text-xs font-normal text-muted-foreground">{type ? `${type} · ` : ''}{count}</span></button>
+}
+
+function GroupedTrialTable({ accounts, totalDebit, totalCredit }: { accounts: Account[]; totalDebit: number; totalCredit: number }) {
+  const groups = useMemo(() => groupReportAccounts(accounts.filter(account => Math.abs(account.balance || 0) >= 0.005)), [accounts])
+  const { expanded, toggle } = useExpandedGroups()
+  return <div className="overflow-x-auto"><table className="w-full min-w-[520px] border-collapse text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Account Group</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{groups.map(group => <Fragment key={group.key}><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td"><GroupButton groupKey={group.key} name={group.name} count={group.accounts.length} type={group.type} expanded={expanded.has(group.key)} toggle={toggle} /></td><td className="report-td text-right num debit-amt">{group.debit ? fmtMoney(group.debit) : '—'}</td><td className="report-td text-right num credit-amt">{group.credit ? fmtMoney(group.credit) : '—'}</td></tr>{expanded.has(group.key) && group.accounts.map(account => { const side = normalSide(account.type); const balance = account.balance || 0; const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; return <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><LedgerLink account={account} /></td><td className="report-td text-right num">{debit ? <span className="debit-amt">{fmtMoney(debit)}</span> : '—'}</td><td className="report-td text-right num">{credit ? <span className="credit-amt">{fmtMoney(credit)}</span> : '—'}</td></tr> })}</Fragment>)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div>
+}
+
+function GroupedAmountTable({ accounts, total, emptyLabel, totalLabel = 'Total', adjustments = [] }: { accounts: Account[]; total: number; emptyLabel: string; totalLabel?: string; adjustments?: { label: string; amount: number; className?: string }[] }) {
+  const groups = useMemo(() => groupReportAccounts(accounts), [accounts])
+  const { expanded, toggle } = useExpandedGroups()
+  if (!groups.length && !adjustments.length) return <p className="px-4 py-3 text-sm text-muted-foreground">{emptyLabel}</p>
+  return <table className="w-full border-collapse text-sm"><tbody>{groups.map(group => <Fragment key={group.key}><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td"><GroupButton groupKey={group.key} name={group.name} count={group.accounts.length} expanded={expanded.has(group.key)} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(group.balance)}</td></tr>{expanded.has(group.key) && group.accounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><LedgerLink account={account} /></td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>)}</Fragment>)}{adjustments.map(row => <tr key={row.label} className={`border-t hover:bg-muted/20 ${row.className || ''}`}><td className="report-td italic">{row.label}</td><td className="report-td text-right num">{fmtMoney(row.amount)}</td></tr>)}<tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">{totalLabel}</td><td className="report-td text-right num">{fmtMoney(total)}</td></tr></tbody></table>
+}
+
+function TrialNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
+  const open = expanded.has(node.key)
+  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} type={node.type} expanded={open} toggle={toggle} /></td><td className="report-td text-right num debit-amt">{node.debit ? fmtMoney(node.debit) : '—'}</td><td className="report-td text-right num credit-amt">{node.credit ? fmtMoney(node.credit) : '—'}</td></tr>{open && node.directAccounts.map(account => { const side = normalSide(account.type); const balance = account.balance || 0; const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; return <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}><LedgerLink account={account} /></td><td className="report-td text-right num">{debit ? fmtMoney(debit) : '—'}</td><td className="report-td text-right num">{credit ? fmtMoney(credit) : '—'}</td></tr>})}{open && node.children.map(child => <TrialNodeRows key={child.key} node={child} expanded={expanded} toggle={toggle} />)}</Fragment>
+}
+
+function HierarchicalTrialTable({ accounts, categories, totalDebit, totalCredit }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; totalDebit: number; totalCredit: number }) {
+  const nodes = useMemo(() => buildAccountReportTree(accounts.filter(account => Math.abs(account.balance || 0) >= 0.005), categories), [accounts, categories])
+  const { expanded, toggle } = useExpandedGroups()
+  return <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Category / Ledger</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div>
+}
+
+function AmountNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
+  const open = expanded.has(node.key)
+  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} expanded={open} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(node.balance)}</td></tr>{open && node.directAccounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}><LedgerLink account={account} /></td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>)}{open && node.children.map(child => <AmountNodeRows key={child.key} node={child} expanded={expanded} toggle={toggle} />)}</Fragment>
+}
+
+function HierarchicalAmountTable({ accounts, categories, total, emptyLabel, totalLabel = 'Total', adjustments = [] }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; total: number; emptyLabel: string; totalLabel?: string; adjustments?: { label: string; amount: number; className?: string }[] }) {
+  const nodes = useMemo(() => buildAccountReportTree(accounts, categories), [accounts, categories])
+  const { expanded, toggle } = useExpandedGroups()
+  if (!nodes.length && !adjustments.length) return <p className="p-4 text-sm text-muted-foreground">{emptyLabel}</p>
+  return <table className="w-full text-sm"><tbody>{nodes.map(node => <AmountNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}{adjustments.map(row => <tr key={row.label} className={`border-t ${row.className || ''}`}><td className="report-td italic">{row.label}</td><td className="report-td text-right num">{fmtMoney(row.amount)}</td></tr>)}<tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">{totalLabel}</td><td className="report-td text-right num">{fmtMoney(total)}</td></tr></tbody></table>
+}
+
 export function TrialBalancePage() {
-  const accounts = useAppStore(s => s.accounts)
+  const { accounts, accountCategories } = useAppStore()
   const tb = useMemo(() => computeTrialBalance(accounts), [accounts])
 
   return (
@@ -91,11 +81,7 @@ export function TrialBalancePage() {
       <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" />
       <PageContent>
         <Card>
-          <ReportTable
-            rows={tb.rows.map(r => ({ label: r.name, left: r.debit || undefined, right: r.credit || undefined }))}
-            totalLeft={tb.total_debit}
-            totalRight={tb.total_credit}
-          />
+          <HierarchicalTrialTable accounts={accounts} categories={accountCategories} totalDebit={tb.total_debit} totalCredit={tb.total_credit} />
           {tb.balanced
             ? <p className="px-4 py-3 text-sm text-forest font-semibold">✓ Balanced</p>
             : <p className="px-4 py-3 text-sm text-destructive">⚠ Not balanced — check recent journal entries</p>
@@ -108,7 +94,7 @@ export function TrialBalancePage() {
 
 // ─── Profit & Loss ────────────────────────────────────────────────────────────
 export function ProfitLossPage() {
-  const { accounts, closingStockValue } = useAppStore()
+  const { accounts, accountCategories, closingStockValue } = useAppStore()
   const csv = closingStockValue()
   const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
 
@@ -129,32 +115,13 @@ export function ProfitLossPage() {
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Income</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
-              <AccountList accounts={pnl.income} total={pnl.total_income} emptyLabel="No income accounts" />
+              <HierarchicalAmountTable accounts={pnl.income} categories={accountCategories} total={pnl.total_income} emptyLabel="No income accounts" />
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Expense</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
-              <table className="w-full text-sm border-collapse">
-                <tbody>
-                  {pnl.expense.map(a => (
-                    <tr key={a.id} className="border-t border-border hover:bg-muted/20">
-                      <td className="px-4 py-2.5">{a.name}</td>
-                      <td className="px-4 py-2.5 text-right num">{fmtMoney(a.balance)}</td>
-                    </tr>
-                  ))}
-                  {csv > 0 && (
-                    <tr className="border-t border-border hover:bg-muted/20 text-forest">
-                      <td className="px-4 py-2.5 italic">Less: Closing Stock</td>
-                      <td className="px-4 py-2.5 text-right num">- {fmtMoney(csv)}</td>
-                    </tr>
-                  )}
-                  <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="px-4 py-2.5">Total (adjusted)</td>
-                    <td className="px-4 py-2.5 text-right num">{fmtMoney(pnl.total_expense)}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <HierarchicalAmountTable accounts={pnl.expense} categories={accountCategories} total={pnl.total_expense} totalLabel="Total (adjusted)" emptyLabel="No expense accounts" adjustments={csv > 0 ? [{ label: 'Less: Closing Stock', amount: -csv, className: 'text-forest' }] : []} />
             </CardContent>
           </Card>
         </div>
@@ -165,10 +132,11 @@ export function ProfitLossPage() {
 
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 export function BalanceSheetPage() {
-  const { accounts, closingStockValue } = useAppStore()
+  const { accounts, accountCategories, closingStockValue } = useAppStore()
   const csv = closingStockValue()
   const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
   const bs = useMemo(() => computeBalanceSheet(accounts, pnl.net_profit, csv), [accounts, pnl.net_profit, csv])
+  const realAssets = bs.assets.filter(account => !!account.company_id)
 
   return (
     <div>
@@ -178,36 +146,13 @@ export function BalanceSheetPage() {
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Assets</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
-              <AccountList accounts={bs.assets} total={bs.total_assets} emptyLabel="No assets" />
+              <HierarchicalAmountTable accounts={realAssets} categories={accountCategories} total={bs.total_assets} emptyLabel="No assets" adjustments={csv !== 0 ? [{ label: 'Stock-in-Hand (Closing)', amount: csv }] : []} />
             </CardContent>
           </Card>
           <Card>
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Liabilities & Equity</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
-              <table className="w-full text-sm border-collapse">
-                <tbody>
-                  {bs.liabilities.map(a => (
-                    <tr key={a.id} className="border-t border-border hover:bg-muted/20">
-                      <td className="px-4 py-2.5">{a.name}</td>
-                      <td className="px-4 py-2.5 text-right num">{fmtMoney(a.balance)}</td>
-                    </tr>
-                  ))}
-                  {bs.equity.map(a => (
-                    <tr key={a.id} className="border-t border-border hover:bg-muted/20">
-                      <td className="px-4 py-2.5">{a.name}</td>
-                      <td className="px-4 py-2.5 text-right num">{fmtMoney(a.balance)}</td>
-                    </tr>
-                  ))}
-                  <tr className="border-t border-border hover:bg-muted/20">
-                    <td className="px-4 py-2.5 italic text-muted-foreground">Net {pnl.net_profit >= 0 ? 'Profit' : 'Loss'} (current)</td>
-                    <td className="px-4 py-2.5 text-right num">{fmtMoney(pnl.net_profit)}</td>
-                  </tr>
-                  <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="px-4 py-2.5">Total</td>
-                    <td className="px-4 py-2.5 text-right num">{fmtMoney(bs.total_liabilities + bs.total_equity)}</td>
-                  </tr>
-                </tbody>
-              </table>
+              <HierarchicalAmountTable accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} total={bs.total_liabilities + bs.total_equity} emptyLabel="No liabilities or equity" adjustments={[{ label: `Net ${pnl.net_profit >= 0 ? 'Profit' : 'Loss'} (current)`, amount: pnl.net_profit, className: 'text-muted-foreground' }]} />
             </CardContent>
           </Card>
         </div>
@@ -301,10 +246,9 @@ export function StockReportPage() {
   const [showDetails, setShowDetails] = useState(false)
   const [search, setSearch] = useState('')
   const q = normalizeSearch(search)
-  const categoryNames = new Map(itemCategories.map(category => [category.id, category.name]))
   const movements = useMemo(() => computeStockSummary(items, vouchers), [items, vouchers])
   const rows = items
-    .filter(item => !q || normalizeSearch(`${item.name} ${categoryNames.get(item.category_id || '') || ''} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q))
+    .filter(item => !q || normalizeSearch(`${item.name} ${categoryPath(itemCategories, item.category_id)} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q))
     .map(item => ({
       item,
       s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 },
@@ -329,7 +273,7 @@ export function StockReportPage() {
       <PageHeader title="Stock Summary" description={showDetails ? 'Opening, inward, outward and closing stock at weighted-average cost' : 'Current quantities at weighted-average cost'} />
       <PageContent className="space-y-3">
         <div className="flex flex-wrap justify-end gap-2">
-          <div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock…" className="w-64 pl-8" /></div>
+          <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock…" className="w-full pl-8 sm:w-64" /></div>
           <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>
             {showDetails ? 'Hide Details' : 'Show Details'}
           </Button>

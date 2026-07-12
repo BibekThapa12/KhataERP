@@ -18,8 +18,8 @@ describe('accounting engine integrity', () => {
   it('posts purchases, receipts, and payments as balanced journals', () => {
     const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items: [{ item_id: 'tea', qty: 3, rate: 50 }], vat_rate: 13, system_accounts: accounts })
     expect(validateBalanced(purchase.lines).valid).toBe(true)
-    expect(validateBalanced(buildReceiptData('customer', 500, 'cash', accounts).lines).valid).toBe(true)
-    expect(validateBalanced(buildPaymentData('supplier', 300, 'cash', accounts).lines).valid).toBe(true)
+    expect(validateBalanced(buildReceiptData('customer', 500, 'cash').lines).valid).toBe(true)
+    expect(validateBalanced(buildPaymentData('supplier', 300, 'cash').lines).valid).toBe(true)
   })
 
   it('maintains weighted-average stock cost and ignores cancelled vouchers', () => {

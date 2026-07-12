@@ -1,4 +1,5 @@
-import type { Account, Company, Party, Voucher } from '@/types'
+import type { Account, AccountCategory, AccountType, Company, Party, Voucher } from '@/types'
+import { buildCategoryTree, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { normalSide, round2 } from '@/lib/engine'
 import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 
@@ -37,6 +38,75 @@ export interface LedgerReport {
   total_debit: number
   total_credit: number
   closing_balance: number
+}
+
+export interface AccountReportGroup {
+  key: string
+  name: string
+  type: AccountType
+  accounts: Account[]
+  balance: number
+  debit: number
+  credit: number
+}
+
+export interface AccountReportTreeNode {
+  key: string
+  name: string
+  type: AccountType
+  depth: number
+  path: string
+  directAccounts: Account[]
+  children: AccountReportTreeNode[]
+  balance: number
+  debit: number
+  credit: number
+  totalCount: number
+}
+
+export function buildAccountReportTree(accounts: Account[], categories: AccountCategory[]): AccountReportTreeNode[] {
+  const activeCategories = categories.filter(category => !category.is_archived)
+  const categorized = new Set(activeCategories.map(category => category.id))
+  const convert = (node: CategoryTreeNode<AccountCategory, Account>): AccountReportTreeNode => {
+    const children = node.children.map(convert).filter(child => child.totalCount > 0)
+    const direct = groupReportAccounts(node.directRecords)
+    return {
+      key: node.category.id, name: node.category.name, type: node.category.account_type, depth: node.depth, path: node.path,
+      directAccounts: node.directRecords.sort((a, b) => a.name.localeCompare(b.name)), children,
+      balance: round2(direct.reduce((sum, group) => sum + group.balance, 0) + children.reduce((sum, child) => sum + child.balance, 0)),
+      debit: round2(direct.reduce((sum, group) => sum + group.debit, 0) + children.reduce((sum, child) => sum + child.debit, 0)),
+      credit: round2(direct.reduce((sum, group) => sum + group.credit, 0) + children.reduce((sum, child) => sum + child.credit, 0)),
+      totalCount: node.directCount + children.reduce((sum, child) => sum + child.totalCount, 0),
+    }
+  }
+  const roots = buildCategoryTree(activeCategories, accounts).map(convert).filter(node => node.totalCount > 0)
+  const uncategorized = accounts.filter(account => !account.category_id || !categorized.has(account.category_id))
+  for (const type of ['Asset','Liability','Equity','Income','Expense'] as AccountType[]) {
+    const entries = uncategorized.filter(account => account.type === type)
+    if (!entries.length) continue
+    const [totals] = groupReportAccounts(entries.map(account => ({ ...account, group: `Uncategorized ${type}` })))
+    roots.push({ key: `uncategorized:${type}`, name: `Uncategorized ${type}`, type, depth: 1, path: `Uncategorized ${type}`, directAccounts: entries, children: [], balance: totals.balance, debit: totals.debit, credit: totals.credit, totalCount: entries.length })
+  }
+  return roots.sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name))
+}
+
+export function groupReportAccounts(accounts: Account[]): AccountReportGroup[] {
+  const groups = new Map<string, AccountReportGroup>()
+  for (const account of accounts) {
+    const name = account.group?.trim() || 'Ungrouped'
+    const key = `${account.type}:${account.category_id || name.toLocaleLowerCase()}`
+    const group = groups.get(key) || { key, name, type: account.type, accounts: [], balance: 0, debit: 0, credit: 0 }
+    const balance = round2(account.balance || 0)
+    const side = normalSide(account.type)
+    group.accounts.push(account)
+    group.balance = round2(group.balance + balance)
+    if ((side === 'debit' && balance > 0) || (side === 'credit' && balance < 0)) group.debit = round2(group.debit + Math.abs(balance))
+    if ((side === 'credit' && balance > 0) || (side === 'debit' && balance < 0)) group.credit = round2(group.credit + Math.abs(balance))
+    groups.set(key, group)
+  }
+  return [...groups.values()]
+    .map(group => ({ ...group, accounts: group.accounts.sort((a, b) => a.name.localeCompare(b.name)) }))
+    .sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name))
 }
 
 const voucherKey = (voucher: Voucher) => voucher.date_bs_key || makeBsKey(voucher.date_bs)

@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity, fromBaseRate, toBaseQty, unitFactor, unitName, type UnitMode } from '@/lib/units'
+import { partyTerminology } from '@/lib/partyTerminology'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -45,6 +46,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
 
   const partyType = isSales ? 'customer' : 'supplier'
+  const partyTerms = partyTerminology(partyType)
   const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
 
@@ -111,7 +113,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setError('')
     const validLines = lines.filter(l => l.item_id && l.qty > 0 && l.rate > 0)
     if (validLines.length === 0) { setError('Add at least one item with quantity and rate.'); return }
-    if (!isCash && !partyAccountId) { setError(`Select a ${partyType} or check "Cash".`); return }
+    if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
@@ -157,7 +159,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
           <div className="space-y-4 py-2">
             {/* Date + Party */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Date</Label>
                 <NepaliDateInput value={dateBs} onChange={setDateBs} />
@@ -171,7 +173,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                 </div>
                 {!isCash && (
                   <div className="flex gap-1.5">
-                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyType}…`} searchPlaceholder={`Search ${partyType}s…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type}` }))} />
+                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyTerms.singular}…`} searchPlaceholder={`Search ${partyTerms.plural}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
                     <Button type="button" variant="outline" size="sm" onClick={() => setShowPartyForm(true)}>+ New</Button>
                   </div>
                 )}
@@ -180,7 +182,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
             {/* Line items */}
             <div>
-              <div className="grid grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 mb-1.5">
+              <div className="mb-1.5 hidden grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 md:grid">
                 {['Item', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
                   <p key={h} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{h}</p>
                 ))}
@@ -190,20 +192,20 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   const amt = round2Local(line.qty * line.rate)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   return (
-                    <div key={idx} className="grid grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 items-start">
-                      <div className="flex gap-1">
+                    <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 md:grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] md:items-start md:border-0 md:p-0">
+                      <div className="col-span-2 flex gap-1 md:col-span-1">
                         <SearchableSelect value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: `${i.name} ${isSales ? `(${formatStockQuantity(getStockEntry(i.id).qty, i)})` : `(${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`}`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''}` }))} />
                         <Button type="button" variant="outline" size="icon" className="h-9 w-9 flex-shrink-0" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <div>
+                      <div className="space-y-1"><Label className="text-xs md:hidden">Qty</Label>
                         <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" />
                         {isSales && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
                           <p className="text-xs text-destructive mt-0.5">Only {items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : stock.qty} in stock</p>
                         )}
                       </div>
-                      {(() => {
+                      <div className="space-y-1"><Label className="text-xs md:hidden">Unit</Label>{(() => {
                         const item = items.find(entry => entry.id === line.item_id)
                         const snapshotMatchesCurrent = line.unit_mode === 'main'
                           ? !line.entry_unit || line.entry_unit === item?.unit
@@ -211,10 +213,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                         return item?.alternate_unit && snapshotMatchesCurrent
                           ? <SearchableSelect value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="h-9 flex items-center text-sm text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
-                      })()}
-                      <Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" />
-                      <div className="h-9 flex items-center num font-semibold text-sm">{fmtMoney(amt)}</div>
-                      <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
+                      })()}</div>
+                      <div className="space-y-1"><Label className="text-xs md:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" /></div>
+                      <div className="space-y-1"><Label className="text-xs md:hidden">Amount</Label><div className="flex h-9 items-center num font-semibold text-sm">{fmtMoney(amt)}</div></div>
+                      <Button type="button" variant="ghost" size="icon" className="h-9 w-9 self-end text-muted-foreground hover:text-destructive md:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
@@ -227,7 +229,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             </div>
 
             {/* VAT + Discount */}
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Discount (Rs, flat)</Label>
                 <Input type="number" min="0" step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" />

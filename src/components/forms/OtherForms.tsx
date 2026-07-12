@@ -3,8 +3,11 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
-import { round2 } from '@/lib/engine'
+import { resolveSystemAccountId, round2 } from '@/lib/engine'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
+import { categoryPath } from '@/lib/categoryHierarchy'
+import { partyTerminology } from '@/lib/partyTerminology'
+import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -75,9 +78,9 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: category.name }))} />
+            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryPath(itemCategories, category.id) }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Main Unit</Label>
               <Input value={unit} onChange={e => setUnit(e.target.value)} placeholder="pcs, kg, box…" />
@@ -133,16 +136,19 @@ interface ReceiptPaymentFormProps {
 }
 
 export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaymentFormProps) {
-  const { parties, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
+  const { company, parties, accounts, accountCategories, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
   const isReceipt = type === 'Receipt'
   const partyType = isReceipt ? 'customer' : 'supplier'
+  const partyTerms = partyTerminology(partyType)
   const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
   const [partyAccountId, setPartyAccountId] = useState('')
   const [amount, setAmount] = useState('')
-  const [mode, setMode] = useState<'cash' | 'bank'>('cash')
+  const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
+  const banks = bankAccounts(accounts, accountCategories, !!voucher)
+  const [moneyAccountId, setMoneyAccountId] = useState('')
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -152,26 +158,28 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       setDateBs(voucher.date_bs)
       setPartyAccountId(voucher.party_account_id || '')
       setAmount(String(voucher.total || ''))
-      setMode(voucher.is_cash ? 'cash' : 'bank')
+      setMoneyAccountId(legacySettlementAccountId(voucher) || cashAccountId)
       setNarration(voucher.narration || '')
       setError('')
+    } else if (open) {
+      setMoneyAccountId(cashAccountId)
     } else if (!open) {
-      setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMode('cash'); setNarration(''); setError('')
+      setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
     }
-  }, [open, voucher])
+  }, [open, voucher, cashAccountId])
 
   const handleSave = async () => {
-    if (!partyAccountId) { setError(`Select a ${partyType}.`); return }
+    if (!partyAccountId) { setError(`Select a ${partyTerms.singular}.`); return }
     const amt = Number(amount)
     if (!amt || amt <= 0) { setError('Enter a valid amount.'); return }
     setSaving(true)
     try {
       if (isReceipt) {
-        if (voucher) await updateReceipt(voucher.id, { party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
-        else await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to: mode, narration, date_bs: dateBs })
+        if (voucher) await updateReceipt(voucher.id, { party_account_id: partyAccountId, amount: amt, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
+        else await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
       } else {
-        if (voucher) await updatePayment(voucher.id, { party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
-        else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from: mode, narration, date_bs: dateBs })
+        if (voucher) await updatePayment(voucher.id, { party_account_id: partyAccountId, amount: amt, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
+        else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
       }
       onClose()
     } catch (e: unknown) {
@@ -190,7 +198,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
           </div>
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Received from' : 'Paid to'}</Label>
-            <SearchableSelect value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyType}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type}` }))} />
+            <SearchableSelect value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyTerms.singular}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -198,8 +206,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
               <Input type="number" step="any" min="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
             </div>
             <div className="space-y-1.5">
-              <Label>{isReceipt ? 'Deposit to' : 'Pay from'}</Label>
-              <SearchableSelect value={mode} onValueChange={v => setMode(v as 'cash' | 'bank')} options={[{ value: 'cash', label: 'Cash' }, { value: 'bank', label: 'Bank Account' }]} />
+              <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
+              <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -224,7 +232,7 @@ interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Vouch
 interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
-  const { accounts, saveJournal, updateJournal } = useAppStore()
+  const { accounts, accountCategories, saveJournal, updateJournal } = useAppStore()
   const nonPartyAccounts = accounts.filter(a => !a.is_party && !a.is_archived)
   const isEditing = !!voucher
 
@@ -297,12 +305,12 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           </div>
 
           {/* Lines header */}
-          <div className="grid grid-cols-[2fr_1fr_1fr_auto] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          <div className="hidden grid-cols-[2fr_1fr_1fr_auto] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid">
             <span>Account</span><span>Debit</span><span>Credit</span><span></span>
           </div>
           {jLines.map((line, idx) => (
-            <div key={idx} className="grid grid-cols-[2fr_1fr_1fr_auto] gap-2 items-center">
-              <SearchableSelect value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={nonPartyAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(a => ({ value: a.id, label: a.name, searchText: `${a.group} ${a.type}` }))} />
+            <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
+              <SearchableSelect className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={nonPartyAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(a => ({ value: a.id, label: a.name, searchText: `${categoryPath(accountCategories, a.category_id)} ${a.group} ${a.type}` }))} />
               <Input type="number" min="0" step="any" value={line.debit || ''} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right" />
               <Input type="number" min="0" step="any" value={line.credit || ''} onChange={e => updateLine(idx, 'credit', e.target.value)} placeholder="0.00" className="text-right" />
               <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"

@@ -18,9 +18,10 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import type { Voucher } from '@/types'
+import { bankAccounts } from '@/lib/banks'
 
 export function Dashboard() {
-  const { company, accounts, rawAccounts, vouchers, stock, parties, closingStockValue } = useAppStore()
+  const { company, accounts, rawAccounts, accountCategories, vouchers, stock, parties, closingStockValue } = useAppStore()
   const navigate = useNavigate()
   const [editing, setEditing] = useState<Voucher | null>(null)
   const vatEnabled = company?.vat_enabled ?? true
@@ -72,7 +73,7 @@ export function Dashboard() {
   }
 
   const cash = systemBalance('cash')
-  const bank = systemBalance('bank')
+  const bank = bankAccounts(accounts, accountCategories, true).reduce((sum, account) => sum + (account.balance || 0), 0)
 
   const debtorsTotal = parties
     .filter(p => p.type === 'customer')
@@ -143,13 +144,13 @@ export function Dashboard() {
           </CardContent>
         </Card>
         {/* Stat grid */}
-        <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4 lg:gap-4">
           <StatCard label="Cash + Bank" value={cash + bank} Icon={Wallet}
             color={cash + bank >= 0 ? 'default' : 'negative'} />
-          <StatCard label="Receivable (Debtors)" value={debtorsTotal} Icon={TrendingUp}
-            color="positive" sub="Money customers owe you" />
-          <StatCard label="Payable (Creditors)" value={creditorsTotal} Icon={TrendingDown}
-            color="negative" sub="Money you owe suppliers" />
+          <StatCard label="Sundry Debtors (Customers)" value={debtorsTotal} Icon={TrendingUp}
+            color="positive" sub="Money Sundry Debtors owe you" />
+          <StatCard label="Sundry Creditors (Suppliers)" value={creditorsTotal} Icon={TrendingDown}
+            color="negative" sub="Money you owe Sundry Creditors" />
           <StatCard label="Stock Value" value={totalStockValue} Icon={Package}
             sub={`${useAppStore.getState().items.length} item(s)`} />
         </div>

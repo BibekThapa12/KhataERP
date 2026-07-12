@@ -3,6 +3,9 @@ import { useAppStore, type ReturnSaveParams } from '@/store/useAppStore'
 import { buildReturnVoucherData, round2, type ReturnItemInput } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
+import { partyTerminology } from '@/lib/partyTerminology'
+import { resolveSystemAccountId } from '@/lib/engine'
+import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -25,7 +28,7 @@ interface ReturnLine extends ReturnItemInput {
 }
 
 export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
-  const { company, vouchers, items, stock, getPartyByAccountId, saveReturnVoucher, updateReturnVoucher } = useAppStore()
+  const { company, vouchers, items, stock, accounts, accountCategories, getPartyByAccountId, saveReturnVoucher, updateReturnVoucher } = useAppStore()
   const originalType = type === 'Sales Return' ? 'Sales' : 'Purchase'
   const isSalesReturn = type === 'Sales Return'
   const vatEnabled = company?.vat_enabled ?? true
@@ -33,6 +36,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const [dateBs, setDateBs] = useState(todayBs())
   const [lines, setLines] = useState<ReturnLine[]>([])
   const [settlementMode, setSettlementMode] = useState<'party' | 'cash' | 'bank'>('party')
+  const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
+  const banks = bankAccounts(accounts, accountCategories, !!voucher)
+  const defaultBankId = banks[0]?.id || ''
+  const [settlementAccountId, setSettlementAccountId] = useState('')
   const [restock, setRestock] = useState(true)
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
@@ -69,7 +76,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
   useEffect(() => {
     if (!open) {
-      setOriginalId(''); setDateBs(todayBs()); setLines([]); setSettlementMode('party'); setRestock(true); setReason(''); setError('')
+      setOriginalId(''); setDateBs(todayBs()); setLines([]); setSettlementMode('party'); setSettlementAccountId(''); setRestock(true); setReason(''); setError('')
       return
     }
     if (voucher) {
@@ -77,23 +84,25 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       setOriginalId(voucher.original_voucher_id || '')
       setDateBs(voucher.date_bs)
       setSettlementMode(voucher.settlement_mode || (source?.party_account_id ? 'party' : 'cash'))
+      setSettlementAccountId(legacySettlementAccountId(voucher) || (voucher.is_cash ? cashAccountId : defaultBankId))
       setRestock(voucher.restock_items !== false)
       setReason(voucher.return_reason || voucher.narration || '')
       if (source) setLines(makeLines(source, voucher))
     }
-  }, [open, voucher, vouchers, makeLines])
+  }, [open, voucher, vouchers, makeLines, cashAccountId, defaultBankId])
 
   const selectOriginal = (id: string) => {
     const source = originals.find(entry => entry.id === id)
     setOriginalId(id)
     if (!source) return setLines([])
     setSettlementMode(source.party_account_id ? 'party' : 'cash')
+    setSettlementAccountId(cashAccountId)
     setLines(makeLines(source))
   }
 
   const selectedItems = lines.filter(line => line.qty > 0)
   const preview = original && selectedItems.length ? buildReturnVoucherData({
-    type, original, items: selectedItems, settlement_mode: settlementMode,
+    type, original, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId,
     restock_items: restock, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
 
@@ -106,7 +115,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       const remaining = round2(line.original_qty - line.returned_qty)
       if (line.qty > remaining + 0.0001) return setError(`${line.item_name} has only ${remaining} ${line.unit} remaining to return.`)
     }
-    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: selectedItems, settlement_mode: settlementMode, restock_items: restock, return_reason: reason.trim(), date_bs: dateBs }
+    if (settlementMode !== 'party' && !settlementAccountId) return setError('Select a settlement account.')
+    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId, restock_items: restock, return_reason: reason.trim(), date_bs: dateBs }
     setSaving(true)
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params)
@@ -133,11 +143,11 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(line.rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</td></tr>})}</tbody></table></div>}
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => setSettlementMode(value as 'party' | 'cash' | 'bank')} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${isSalesReturn ? 'customer' : 'supplier'} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank ${isSalesReturn ? 'refund' : 'received'}` }]} /></div>
+            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}</div>
             {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><SearchableSelect value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')} options={[{ value: 'restock', label: 'Return to sellable stock' }, { value: 'damaged', label: 'Damaged - do not restock' }]} /></div>}
           </div>
 
-          <div className="space-y-1.5"><Label>Return Reason</Label><Textarea value={reason} onChange={event => setReason(event.target.value)} rows={2} placeholder="Damaged goods, wrong item, customer return..." /></div>
+          <div className="space-y-1.5"><Label>Return Reason</Label><Textarea value={reason} onChange={event => setReason(event.target.value)} rows={2} placeholder="Damaged goods, wrong item, sundry debtor return..." /></div>
 
           {preview && <div className="ml-auto w-full max-w-sm space-y-1.5 rounded-md bg-muted/40 p-4 text-sm"><div className="flex justify-between"><span>Gross Return</span><span className="num">{fmtMoney(preview.subtotal)}</span></div><div className="flex justify-between"><span>Allocated Discount</span><span className="num">- {fmtMoney(preview.discount)}</span></div>{vatEnabled && <div className="flex justify-between"><span>VAT Reversal ({preview.vat_rate}%)</span><span className="num">{fmtMoney(preview.vat_amount)}</span></div>}<div className="flex justify-between border-t pt-2 font-serif text-base font-bold"><span>Return Total</span><span className="num">{fmtMoney(preview.total)}</span></div></div>}
           {error && <p className="text-sm text-destructive">{error}</p>}

@@ -28,7 +28,7 @@ export function SalesPage() {
   const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
-      <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to customers' : 'Internal sales records for bookkeeping'}
+      <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to Sundry Debtors (Customers)' : 'Internal sales records for bookkeeping'}
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale</Button>} />
       <PageContent>
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
@@ -45,7 +45,7 @@ export function PurchasePage() {
   const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
-      <PageHeader title="Purchase Bills" description="Goods bought from suppliers"
+      <PageHeader title="Purchase Bills" description="Goods bought from Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Purchase</Button>} />
       <PageContent>
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
@@ -64,7 +64,7 @@ function ReturnPage({ type }: { type: 'Sales Return' | 'Purchase Return' }) {
   const title = vatEnabled ? (isSales ? 'Sales Returns / Credit Notes' : 'Purchase Returns / Debit Notes') : `${type}s`
   return (
     <div>
-      <PageHeader title={title} description={isSales ? 'Goods returned by customers' : 'Goods returned to suppliers'}
+      <PageHeader title={title} description={isSales ? 'Goods returned by Sundry Debtors (Customers)' : 'Goods returned to Sundry Creditors (Suppliers)'}
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New {isSales ? 'Sales' : 'Purchase'} Return</Button>} />
       <PageContent><Card><VoucherTable vouchers={vouchers} onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></Card></PageContent>
       <ReturnForm type={type} open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
@@ -82,7 +82,7 @@ export function ReceiptsPage() {
   const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
-      <PageHeader title="Receipts" description="Money received from customers"
+      <PageHeader title="Receipts" description="Money received from Sundry Debtors (Customers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Receipt</Button>} />
       <PageContent>
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
@@ -99,7 +99,7 @@ export function PaymentsPage() {
   const [editing, setEditing] = useState<Voucher | null>(null)
   return (
     <div>
-      <PageHeader title="Payments" description="Money paid to suppliers"
+      <PageHeader title="Payments" description="Money paid to Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Payment</Button>} />
       <PageContent>
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>

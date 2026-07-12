@@ -7,6 +7,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import type { Party } from '@/types'
+import { partyTerminology } from '@/lib/partyTerminology'
 
 interface PartyFormProps {
   open: boolean
@@ -25,6 +26,7 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
   const [openingBalance, setOpeningBalance] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const terminology = partyTerminology(type)
 
   useEffect(() => {
     if (!open) { setName(''); setPhone(''); setPanVat(''); setAddress(''); setOpeningBalance(0); setError('') }
@@ -56,9 +58,9 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
           </div>
           <div className="space-y-1.5">
             <Label>Type</Label>
-            <SearchableSelect value={type} onValueChange={v => setType(v as 'customer' | 'supplier')} disabled={!!defaultType} options={[{ value: 'customer', label: 'Customer' }, { value: 'supplier', label: 'Supplier' }]} />
+            <SearchableSelect value={type} onValueChange={v => setType(v as 'customer' | 'supplier')} disabled={!!defaultType} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Phone</Label>
               <Input value={phone} onChange={e => setPhone(e.target.value)} placeholder="98XXXXXXXX" />
@@ -76,7 +78,7 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
             <Label>Opening Balance (Rs)</Label>
             <Input type="number" step="any" value={openingBalance || ''} onChange={e => setOpeningBalance(Number(e.target.value))} placeholder="0" />
             <p className="text-xs text-muted-foreground">
-              {type === 'customer' ? 'Amount they currently owe you.' : 'Amount you currently owe them.'}
+              {terminology.singular}: {type === 'customer' ? 'amount they currently owe you.' : 'amount you currently owe them.'}
             </p>
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
