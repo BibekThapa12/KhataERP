@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { AccountType } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -45,12 +45,7 @@ function AddAccountDialog({ open, onClose }: { open: boolean; onClose: () => voi
           </div>
           <div className="space-y-1.5">
             <Label>Type</Label>
-            <Select value={type} onValueChange={v => setType(v as AccountType)}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {ACCOUNT_TYPES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <SearchableSelect value={type} onValueChange={v => setType(v as AccountType)} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} />
           </div>
           <div className="space-y-1.5">
             <Label>Group</Label>

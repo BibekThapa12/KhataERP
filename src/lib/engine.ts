@@ -9,6 +9,9 @@ import { makeBsKey } from '@/lib/nepaliDate'
 export const round2 = (n: number): number =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100
 
+const round4 = (n: number): number =>
+  Math.round((Number(n) + Number.EPSILON) * 10000) / 10000
+
 export function normalSide(type: AccountType): 'debit' | 'credit' {
   return type === 'Asset' || type === 'Expense' ? 'debit' : 'credit'
 }
@@ -124,12 +127,86 @@ export function recomputeStock(items: Item[], vouchers: Voucher[]): StockEntry[]
   return Array.from(stock.values())
 }
 
+export interface StockSummaryMovement {
+  id: string
+  opening_qty: number
+  opening_value: number
+  inward_qty: number
+  inward_value: number
+  outward_qty: number
+  outward_value: number
+  closing_qty: number
+  closing_rate: number
+  closing_value: number
+}
+
+/** Replays active stock movements chronologically so outward value uses the
+ * weighted-average cost that applied at the time of each movement. */
+export function computeStockSummary(items: Item[], vouchers: Voucher[]): StockSummaryMovement[] {
+  const summary = new Map(items.map(item => {
+    const openingQty = item.opening_qty || 0
+    const openingValue = round2(openingQty * (item.opening_rate || 0))
+    return [item.id, {
+      id: item.id,
+      opening_qty: openingQty,
+      opening_value: openingValue,
+      inward_qty: 0,
+      inward_value: 0,
+      outward_qty: 0,
+      outward_value: 0,
+      closing_qty: openingQty,
+      closing_rate: item.opening_rate || 0,
+      closing_value: openingValue,
+    }]
+  }))
+
+  const sorted = [...vouchers].sort((a, b) =>
+    (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
+  )
+  for (const voucher of sorted) {
+    if (voucher.cancelled || !voucher.stock_lines) continue
+    for (const line of voucher.stock_lines) {
+      const row = summary.get(line.item_id)
+      if (!row) continue
+      if (line.direction === 'in') {
+        const movementValue = round2(line.qty * line.rate)
+        row.inward_qty = round2(row.inward_qty + line.qty)
+        row.inward_value = round2(row.inward_value + movementValue)
+        row.closing_qty = round2(row.closing_qty + line.qty)
+        row.closing_value = round2(row.closing_value + movementValue)
+        row.closing_rate = row.closing_qty > 0 ? round2(row.closing_value / row.closing_qty) : 0
+      } else {
+        const movementValue = round2(line.qty * row.closing_rate)
+        row.outward_qty = round2(row.outward_qty + line.qty)
+        row.outward_value = round2(row.outward_value + movementValue)
+        row.closing_qty = round2(row.closing_qty - line.qty)
+        row.closing_value = round2(row.closing_value - movementValue)
+        if (row.closing_qty <= 0.0001) {
+          row.closing_qty = 0
+          row.closing_value = 0
+          row.closing_rate = 0
+        }
+      }
+    }
+  }
+  return [...summary.values()]
+}
+
 // ─── Voucher Builders ─────────────────────────────────────────────────────────
+
+export interface InvoiceEntryInput {
+  item_id: string
+  qty: number
+  rate: number
+  entry_unit?: string
+  conversion_factor?: number
+  cost_rate?: number
+}
 
 interface InvoiceParams {
   party_account_id: string | null
   is_cash: boolean
-  items: { item_id: string; qty: number; rate: number }[]
+  items: InvoiceEntryInput[]
   vat_rate: number
   discount?: number
   narration?: string
@@ -152,8 +229,9 @@ export function buildSalesVoucherData(p: InvoiceParams) {
     { account_id: sys(p.system_accounts, 'sales'), debit: 0, credit: taxable },
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: l.qty, rate: l.rate, direction: 'out' as const }))
-  return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items: p.items }
+  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: round4(l.qty * (l.conversion_factor || 1)) }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: round4(l.qty * (l.conversion_factor || 1)), rate: round2(l.rate / (l.conversion_factor || 1)), direction: 'out' as const }))
+  return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
 export function buildPurchaseVoucherData(p: InvoiceParams) {
@@ -167,8 +245,9 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
   lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: l.qty, rate: l.rate, direction: 'in' as const }))
-  return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items: p.items }
+  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: round4(l.qty * (l.conversion_factor || 1)) }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: round4(l.qty * (l.conversion_factor || 1)), rate: round2(l.rate / (l.conversion_factor || 1)), direction: 'in' as const }))
+  return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
 export interface ReturnItemInput {
@@ -180,6 +259,9 @@ export interface ReturnItemInput {
   qty: number
   rate: number
   cost_rate: number
+  entry_unit?: string
+  conversion_factor?: number
+  base_qty?: number
 }
 
 export interface ReturnVoucherParams {
@@ -240,8 +322,8 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
         ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_receivable'), debit: 0, credit: vat_amount }] : []),
       ]
   const stock_lines = isSalesReturn
-    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: item.qty, rate: item.cost_rate, direction: 'in' as const })) : [])
-    : p.items.map(item => ({ item_id: item.item_id, qty: item.qty, rate: item.cost_rate, direction: 'out' as const }))
+    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: round4(item.qty * (item.conversion_factor || 1)), rate: item.cost_rate, direction: 'in' as const })) : [])
+    : p.items.map(item => ({ item_id: item.item_id, qty: round4(item.qty * (item.conversion_factor || 1)), rate: item.cost_rate, direction: 'out' as const }))
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 

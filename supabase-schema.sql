@@ -258,6 +258,8 @@ create table if not exists items (
   company_id       uuid not null references companies(id) on delete cascade,
   name             text not null,
   unit             text not null default 'pcs',
+  alternate_unit   text,
+  alternate_conversion numeric(14,4),
   sell_rate        numeric(14,2) not null default 0,
   opening_qty      numeric(14,4) not null default 0,
   opening_rate     numeric(14,2) not null default 0,
@@ -274,6 +276,8 @@ create table if not exists item_categories (
   created_at         timestamptz not null default now(),
   unique(company_id, name)
 );
+alter table items add column if not exists alternate_unit text;
+alter table items add column if not exists alternate_conversion numeric(14,4);
 
 alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
 alter table items add column if not exists sku text;
@@ -402,6 +406,9 @@ alter table invoice_items add column if not exists discount_amount numeric(14,2)
 alter table invoice_items add column if not exists taxable_amount numeric(14,2);
 alter table invoice_items add column if not exists vat_amount numeric(14,2);
 alter table invoice_items add column if not exists cost_rate numeric(14,2);
+alter table invoice_items add column if not exists entry_unit text;
+alter table invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
+alter table invoice_items add column if not exists base_qty numeric(14,4);
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 create index if not exists idx_accounts_company   on accounts(company_id);

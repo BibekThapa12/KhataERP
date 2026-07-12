@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue, Textarea } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Voucher } from '@/types'
 
@@ -55,6 +56,9 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       item_id: line.item_id,
       item_name: line.item_name || items.find(item => item.id === line.item_id)?.name || line.item_id,
       unit: line.unit || items.find(item => item.id === line.item_id)?.unit || '',
+      entry_unit: line.entry_unit || line.unit || items.find(item => item.id === line.item_id)?.unit || '',
+      conversion_factor: line.conversion_factor || 1,
+      base_qty: (existing?.qty || 0) * (line.conversion_factor || 1),
       qty: existing?.qty || 0,
       rate: line.rate,
       cost_rate: existing?.cost_rate ?? line.cost_rate ?? stock.find(entry => entry.id === line.item_id)?.avg_cost ?? 0,
@@ -121,7 +125,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
-            <div className="space-y-1.5"><Label>Original {originalType === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</Label><Select value={originalId} onValueChange={selectOriginal} disabled={!!voucher}><SelectTrigger><SelectValue placeholder={`Select original ${originalType.toLowerCase()}`} /></SelectTrigger><SelectContent>{originals.map(entry => <SelectItem key={entry.id} value={entry.id}>{entry.invoice_no || entry.seq} | {fmtDate(entry.date_bs)} | {entry.party_account_id ? getPartyByAccountId(entry.party_account_id)?.name : 'Cash'} | {fmtMoney(entry.total)}</SelectItem>)}</SelectContent></Select></div>
+            <div className="space-y-1.5"><Label>Original {originalType === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</Label><SearchableSelect value={originalId} onValueChange={selectOriginal} disabled={!!voucher} placeholder={`Select original ${originalType.toLowerCase()}`} options={originals.map(entry => { const party = entry.party_account_id ? getPartyByAccountId(entry.party_account_id)?.name : 'Cash'; return { value: entry.id, label: `${entry.invoice_no || entry.seq} | ${fmtDate(entry.date_bs)} | ${party} | ${fmtMoney(entry.total)}`, searchText: `${entry.type} ${entry.date_bs} ${party} ${entry.total}` } })} /></div>
           </div>
 
           {original && <div className="rounded-md border bg-muted/20 p-3 text-sm"><span className="font-medium">Original document:</span> {original.invoice_no || original.seq} | {party?.name || 'Cash'} | VAT {original.vat_rate || 0}% | Total {fmtMoney(original.total)}</div>}
@@ -129,8 +133,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(line.rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</td></tr>})}</tbody></table></div>}
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Settlement</Label><Select value={settlementMode} onValueChange={value => setSettlementMode(value as 'party' | 'cash' | 'bank')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{original?.party_account_id && <SelectItem value="party">Adjust {isSalesReturn ? 'customer' : 'supplier'} balance</SelectItem>}<SelectItem value="cash">Cash {isSalesReturn ? 'refund' : 'received'}</SelectItem><SelectItem value="bank">Bank {isSalesReturn ? 'refund' : 'received'}</SelectItem></SelectContent></Select></div>
-            {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><Select value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="restock">Return to sellable stock</SelectItem><SelectItem value="damaged">Damaged - do not restock</SelectItem></SelectContent></Select></div>}
+            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => setSettlementMode(value as 'party' | 'cash' | 'bank')} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${isSalesReturn ? 'customer' : 'supplier'} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank ${isSalesReturn ? 'refund' : 'received'}` }]} /></div>
+            {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><SearchableSelect value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')} options={[{ value: 'restock', label: 'Return to sellable stock' }, { value: 'damaged', label: 'Damaged - do not restock' }]} /></div>}
           </div>
 
           <div className="space-y-1.5"><Label>Return Reason</Label><Textarea value={reason} onChange={event => setReason(event.target.value)} rows={2} placeholder="Damaged goods, wrong item, customer return..." /></div>

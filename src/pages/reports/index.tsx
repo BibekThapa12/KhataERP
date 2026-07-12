@@ -1,9 +1,11 @@
 // ─── Shared report helpers ────────────────────────────────────────────────────
 import { useState, useMemo } from 'react'
+import { Search } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport } from '@/lib/engine'
+import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary } from '@/lib/engine'
 import { fmtMoney } from '@/lib/utils'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
+import { formatStockQuantity } from '@/lib/units'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/StatCard'
@@ -11,6 +13,8 @@ import { VoucherTable } from '@/components/tables/VoucherTable'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
+import { Input } from '@/components/ui/input'
+import { normalizeSearch } from '@/lib/search'
 import type { Account } from '@/types'
 
 function ReportTable({
@@ -293,25 +297,52 @@ export function VatReportPage() {
 
 // ─── Stock Report ─────────────────────────────────────────────────────────────
 export function StockReportPage() {
-  const { items, stock } = useAppStore()
+  const { items, stock, vouchers, itemCategories } = useAppStore()
+  const [showDetails, setShowDetails] = useState(false)
+  const [search, setSearch] = useState('')
+  const q = normalizeSearch(search)
+  const categoryNames = new Map(itemCategories.map(category => [category.id, category.name]))
+  const movements = useMemo(() => computeStockSummary(items, vouchers), [items, vouchers])
   const rows = items
-    .map(item => ({ item, s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 } }))
+    .filter(item => !q || normalizeSearch(`${item.name} ${categoryNames.get(item.category_id || '') || ''} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q))
+    .map(item => ({
+      item,
+      s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 },
+      movement: movements.find(entry => entry.id === item.id)!,
+    }))
     .sort((a, b) => a.item.name.localeCompare(b.item.name))
   const totalValue = rows.reduce((s, r) => s + r.s.value, 0)
+  const canTotalQuantities = new Set(rows.map(row => row.item.unit.toLowerCase())).size <= 1
+  const movementTotals = rows.reduce((totals, row) => ({
+    openingQty: totals.openingQty + row.movement.opening_qty,
+    openingValue: totals.openingValue + row.movement.opening_value,
+    inwardQty: totals.inwardQty + row.movement.inward_qty,
+    inwardValue: totals.inwardValue + row.movement.inward_value,
+    outwardQty: totals.outwardQty + row.movement.outward_qty,
+    outwardValue: totals.outwardValue + row.movement.outward_value,
+    closingQty: totals.closingQty + row.movement.closing_qty,
+    closingValue: totals.closingValue + row.movement.closing_value,
+  }), { openingQty: 0, openingValue: 0, inwardQty: 0, inwardValue: 0, outwardQty: 0, outwardValue: 0, closingQty: 0, closingValue: 0 })
 
   return (
     <div>
-      <PageHeader title="Stock Summary" description="Current quantities at weighted-average cost" />
-      <PageContent>
+      <PageHeader title="Stock Summary" description={showDetails ? 'Opening, inward, outward and closing stock at weighted-average cost' : 'Current quantities at weighted-average cost'} />
+      <PageContent className="space-y-3">
+        <div className="flex flex-wrap justify-end gap-2">
+          <div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock…" className="w-64 pl-8" /></div>
+          <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>
+            {showDetails ? 'Hide Details' : 'Show Details'}
+          </Button>
+        </div>
         <Card>
           {rows.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <p className="text-3xl mb-3 opacity-30">▣</p>
-              <p className="font-medium text-foreground">No items yet</p>
+              <p className="font-medium text-foreground">{search ? 'No matching stock items' : 'No items yet'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full text-sm border-collapse">
+              {!showDetails ? <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-muted/50">
                     <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
@@ -325,7 +356,7 @@ export function StockReportPage() {
                   {rows.map(({ item, s }) => (
                     <tr key={item.id} className="border-t border-border hover:bg-muted/20">
                       <td className="px-4 py-2.5 font-medium">{item.name}</td>
-                      <td className="px-4 py-2.5 text-right num font-semibold">{s.qty}</td>
+                      <td className="px-4 py-2.5 text-right num font-semibold">{formatStockQuantity(s.qty, item)}</td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground">{item.unit}</td>
                       <td className="px-4 py-2.5 text-right num">{fmtMoney(s.avg_cost)}</td>
                       <td className="px-4 py-2.5 text-right num font-semibold">{fmtMoney(s.value)}</td>
@@ -338,7 +369,46 @@ export function StockReportPage() {
                     <td className="px-4 py-2.5 text-right num">{fmtMoney(totalValue)}</td>
                   </tr>
                 </tfoot>
-              </table>
+              </table> : <table className="w-full min-w-[900px] text-sm border-collapse">
+                <thead>
+                  <tr className="bg-muted/50 border-b border-border">
+                    <th rowSpan={2} className="border-r border-border px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
+                    {['Opening', 'Inward', 'Outward', 'Closing'].map(label => <th key={label} colSpan={2} className="border-r border-border px-4 py-2 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</th>)}
+                  </tr>
+                  <tr className="bg-muted/30 border-b border-border">
+                    {['opening', 'inward', 'outward', 'closing'].flatMap(group => [
+                      <th key={`${group}-qty`} className="border-r border-border px-3 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Qty</th>,
+                      <th key={`${group}-value`} className="border-r border-border px-3 py-1.5 text-right text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">Value</th>,
+                    ])}
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(({ item, movement }) => <tr key={item.id} className="border-b border-border hover:bg-muted/20">
+                    <td className="border-r border-border px-4 py-2.5 font-medium">{item.name}<span className="ml-1.5 text-xs font-normal text-muted-foreground">({item.unit})</span></td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{movement.opening_qty}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movement.opening_value)}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{movement.inward_qty}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movement.inward_value)}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{movement.outward_qty}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movement.outward_value)}</td>
+                    <td className={`border-r border-border px-3 py-2.5 text-right num font-semibold ${movement.closing_qty < 0 ? 'text-destructive' : ''}`}>{movement.closing_qty}{item.alternate_unit && <span className="block text-[10px] font-normal text-muted-foreground">{formatStockQuantity(movement.closing_qty, item)}</span>}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num font-semibold">{fmtMoney(movement.closing_value)}</td>
+                  </tr>)}
+                </tbody>
+                <tfoot>
+                  <tr className="border-t-2 border-border bg-muted/30 font-semibold">
+                    <td className="border-r border-border px-4 py-2.5 text-center">Total</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.openingQty : '—'}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movementTotals.openingValue)}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.inwardQty : '—'}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movementTotals.inwardValue)}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.outwardQty : '—'}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movementTotals.outwardValue)}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.closingQty : '—'}</td>
+                    <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movementTotals.closingValue)}</td>
+                  </tr>
+                </tfoot>
+              </table>}
             </div>
           )}
         </Card>

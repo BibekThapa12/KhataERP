@@ -4,11 +4,13 @@ import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
 import { round2 } from '@/lib/engine'
+import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
-import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
@@ -26,6 +28,9 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const itemCategories = useAppStore(s => s.itemCategories)
   const [name, setName] = useState('')
   const [unit, setUnit] = useState('pcs')
+  const [alternateUnit, setAlternateUnit] = useState('')
+  const [alternateConversion, setAlternateConversion] = useState(0)
+  const [openingUnitMode, setOpeningUnitMode] = useState<UnitMode>('main')
   const [sellRate, setSellRate] = useState(0)
   const [openingQty, setOpeningQty] = useState(0)
   const [openingRate, setOpeningRate] = useState(0)
@@ -39,14 +44,19 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('pcs'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
+    if (!open) { setName(''); setUnit('pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Enter an item name.'); return }
+    const mainUnit = unit.trim() || 'pcs'
+    const altUnit = alternateUnit.trim()
+    if (altUnit && altUnit.toLowerCase() === mainUnit.toLowerCase()) { setError('Main and alternative units must be different.'); return }
+    if (altUnit && alternateConversion <= 1) { setError('Main units per alternative must be greater than 1.'); return }
+    const factor = openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     setSaving(true)
     try {
-      const item = await addItem({ name: name.trim(), unit: unit.trim() || 'pcs', sell_rate: sellRate, opening_qty: openingQty, opening_rate: openingRate, reorder_level: reorderLevel ? Number(reorderLevel) : undefined, category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable })
+      const item = await addItem({ name: name.trim(), unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: toBaseQty(openingQty, factor), opening_rate: toBaseRate(openingRate, factor), reorder_level: reorderLevel ? Number(reorderLevel) : undefined, category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -56,7 +66,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>New Item</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -65,33 +75,39 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <Select value={categoryId} onValueChange={setCategoryId}><SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger><SelectContent>{itemCategories.filter(category => !category.is_archived).map(category => <SelectItem key={category.id} value={category.id}>{category.name}</SelectItem>)}</SelectContent></Select>
+            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: category.name }))} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
-              <Label>Unit</Label>
+              <Label>Main Unit</Label>
               <Input value={unit} onChange={e => setUnit(e.target.value)} placeholder="pcs, kg, box…" />
             </div>
             <div className="space-y-1.5">
-              <Label>Default Sell Rate (Rs)</Label>
+              <Label>Default Sell Rate / Main Unit (Rs)</Label>
               <Input type="number" step="any" value={sellRate || ''} onChange={e => setSellRate(Number(e.target.value))} placeholder="0" />
             </div>
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><Input value={alternateUnit} onChange={e => setAlternateUnit(e.target.value)} placeholder="box, carton…" /></div>
+            <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder="Enter manually" /><p className="text-[11px] text-muted-foreground">Number of main units in one alternative unit</p></div>
+          </div>
+          {alternateUnit.trim() && alternateConversion > 1 && <p className="text-xs text-muted-foreground">1 {alternateUnit.trim()} = {alternateConversion} {unit.trim() || 'pcs'}</p>}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Opening Stock Qty</Label>
               <Input type="number" step="any" value={openingQty || ''} onChange={e => setOpeningQty(Number(e.target.value))} placeholder="0" />
             </div>
             <div className="space-y-1.5">
-              <Label>Opening Cost/Unit (Rs)</Label>
+              <Label>Opening Cost / Selected Unit (Rs)</Label>
               <Input type="number" step="any" value={openingRate || ''} onChange={e => setOpeningRate(Number(e.target.value))} placeholder="0" />
             </div>
           </div>
+          {alternateUnit.trim() && alternateConversion > 1 && <div className="space-y-1.5"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: unit.trim() || 'pcs' }, { value: 'alternate', label: alternateUnit.trim() }]} /></div>}
           <div className="space-y-1.5">
             <Label>Reorder Level (optional)</Label>
             <Input type="number" step="any" value={reorderLevel} onChange={e => setReorderLevel(e.target.value)} placeholder="Alert when stock falls below…" />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={e => setSku(e.target.value)} placeholder="Optional" /></div>
             <div className="space-y-1.5"><Label>Barcode</Label><Input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Optional" /></div>
           </div>
@@ -174,27 +190,16 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
           </div>
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Received from' : 'Paid to'}</Label>
-            <Select value={partyAccountId} onValueChange={setPartyAccountId}>
-              <SelectTrigger><SelectValue placeholder={`Select ${partyType}…`} /></SelectTrigger>
-              <SelectContent>
-                {partyList.map(p => <SelectItem key={p.account_id} value={p.account_id}>{p.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <SearchableSelect value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyType}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type}` }))} />
           </div>
-          <div className="grid grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Amount (Rs)</Label>
               <Input type="number" step="any" min="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
             </div>
             <div className="space-y-1.5">
               <Label>{isReceipt ? 'Deposit to' : 'Pay from'}</Label>
-              <Select value={mode} onValueChange={v => setMode(v as 'cash' | 'bank')}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="cash">Cash</SelectItem>
-                  <SelectItem value="bank">Bank Account</SelectItem>
-                </SelectContent>
-              </Select>
+              <SearchableSelect value={mode} onValueChange={v => setMode(v as 'cash' | 'bank')} options={[{ value: 'cash', label: 'Cash' }, { value: 'bank', label: 'Bank Account' }]} />
             </div>
           </div>
           <div className="space-y-1.5">
@@ -297,14 +302,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           </div>
           {jLines.map((line, idx) => (
             <div key={idx} className="grid grid-cols-[2fr_1fr_1fr_auto] gap-2 items-center">
-              <Select value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)}>
-                <SelectTrigger><SelectValue placeholder="Select account…" /></SelectTrigger>
-                <SelectContent>
-                  {nonPartyAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(a => (
-                    <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <SearchableSelect value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={nonPartyAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(a => ({ value: a.id, label: a.name, searchText: `${a.group} ${a.type}` }))} />
               <Input type="number" min="0" step="any" value={line.debit || ''} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right" />
               <Input type="number" min="0" step="any" value={line.credit || ''} onChange={e => updateLine(idx, 'credit', e.target.value)} placeholder="0.00" className="text-right" />
               <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"

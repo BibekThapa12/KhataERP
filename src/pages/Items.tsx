@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Plus, AlertTriangle } from 'lucide-react'
+import { Plus, AlertTriangle, Search } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
@@ -9,9 +9,11 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
-import { Badge, Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
+import { Badge, Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { normalizeSearch } from '@/lib/search'
 
 function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => void }) {
   const { items, saveStockAdjustment } = useAppStore()
@@ -51,12 +53,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
           </div>
           <div className="space-y-1.5">
             <Label>Item</Label>
-            <Select value={itemId} onValueChange={setItemId}>
-              <SelectTrigger><SelectValue placeholder="Select item" /></SelectTrigger>
-              <SelectContent>
-                {items.filter(item => !item.is_archived).map(item => <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>)}
-              </SelectContent>
-            </Select>
+            <SearchableSelect value={itemId} onValueChange={setItemId} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">
@@ -84,11 +81,14 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
 }
 
 export function ItemsPage() {
-  const { items, stock } = useAppStore()
+  const { items, stock, itemCategories } = useAppStore()
   const [showForm, setShowForm] = useState(false)
   const [showAdjustment, setShowAdjustment] = useState(false)
+  const [search, setSearch] = useState('')
+  const q = normalizeSearch(search)
+  const categoryNames = new Map(itemCategories.map(category => [category.id, category.name]))
 
-  const rows = items.filter(item => !item.is_archived)
+  const rows = items.filter(item => !item.is_archived && (!q || normalizeSearch(`${item.name} ${categoryNames.get(item.category_id || '') || ''} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q)))
     .map(item => ({ item, s: stock.find(e => e.id === item.id) ?? { qty: 0, avg_cost: 0, value: 0 } }))
     .sort((a, b) => a.item.name.localeCompare(b.item.name))
 
@@ -97,15 +97,15 @@ export function ItemsPage() {
       <PageHeader
         title="Items & Stock"
         description="Inventory tracked at weighted-average cost"
-        action={<div className="flex gap-2"><Button variant="outline" onClick={() => setShowAdjustment(true)}>Stock Adjustment</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Item</Button></div>}
+        action={<div className="flex flex-wrap gap-2"><div className="relative"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-56 pl-8" /></div><Button variant="outline" onClick={() => setShowAdjustment(true)}>Stock Adjustment</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Item</Button></div>}
       />
       <PageContent>
         <Card>
           {rows.length === 0 ? (
             <div className="text-center py-16 text-muted-foreground">
               <p className="text-3xl mb-3 opacity-30">▣</p>
-              <p className="font-medium text-foreground">No items yet</p>
-              <p className="text-sm mt-1">Add an item to start tracking stock and generating invoices.</p>
+              <p className="font-medium text-foreground">{search ? 'No matching items' : 'No items yet'}</p>
+              <p className="text-sm mt-1">{search ? 'Try a different name, SKU, barcode, category, or unit.' : 'Add an item to start tracking stock and generating invoices.'}</p>
             </div>
           ) : (
             <div className="overflow-x-auto">

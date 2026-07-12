@@ -1,29 +1,30 @@
-import { Component, useEffect, useRef, useState } from 'react'
+import { Component, Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { logAppError, supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
-import { LoginPage } from '@/pages/Login'
-import { Dashboard } from '@/pages/Dashboard'
-import { SalesPage } from '@/pages/Sales'
-import { PurchasePage } from '@/pages/Purchase'
-import { SalesReturnPage } from '@/pages/SalesReturn'
-import { PurchaseReturnPage } from '@/pages/PurchaseReturn'
-import { ReceiptsPage } from '@/pages/Receipts'
-import { PaymentsPage } from '@/pages/Payments'
-import { JournalPage } from '@/pages/Journal'
-import { PartiesPage } from '@/pages/Parties'
-import { ItemsPage } from '@/pages/Items'
-import { TrialBalancePage } from '@/pages/reports/TrialBalance'
-import { ProfitLossPage } from '@/pages/reports/ProfitLoss'
-import { BalanceSheetPage } from '@/pages/reports/BalanceSheet'
-import { VatReportPage } from '@/pages/reports/VatReport'
-import { StockReportPage } from '@/pages/reports/StockReport'
-import { DaybookPage } from '@/pages/reports/Daybook'
-import { LedgerReportPage } from '@/pages/reports/LedgerReport'
-import { SettingsPage } from '@/pages/Settings'
-import { DeveloperDashboard } from '@/pages/DeveloperDashboard'
-import { MastersPage } from '@/pages/Masters'
+
+const LoginPage = lazy(() => import('@/pages/Login').then(m => ({ default: m.LoginPage })))
+const Dashboard = lazy(() => import('@/pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const SalesPage = lazy(() => import('@/pages/Sales').then(m => ({ default: m.SalesPage })))
+const PurchasePage = lazy(() => import('@/pages/Purchase').then(m => ({ default: m.PurchasePage })))
+const SalesReturnPage = lazy(() => import('@/pages/SalesReturn').then(m => ({ default: m.SalesReturnPage })))
+const PurchaseReturnPage = lazy(() => import('@/pages/PurchaseReturn').then(m => ({ default: m.PurchaseReturnPage })))
+const ReceiptsPage = lazy(() => import('@/pages/Receipts').then(m => ({ default: m.ReceiptsPage })))
+const PaymentsPage = lazy(() => import('@/pages/Payments').then(m => ({ default: m.PaymentsPage })))
+const JournalPage = lazy(() => import('@/pages/Journal').then(m => ({ default: m.JournalPage })))
+const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
+const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
+const MastersPage = lazy(() => import('@/pages/Masters').then(m => ({ default: m.MastersPage })))
+const TrialBalancePage = lazy(() => import('@/pages/reports/TrialBalance').then(m => ({ default: m.TrialBalancePage })))
+const ProfitLossPage = lazy(() => import('@/pages/reports/ProfitLoss').then(m => ({ default: m.ProfitLossPage })))
+const BalanceSheetPage = lazy(() => import('@/pages/reports/BalanceSheet').then(m => ({ default: m.BalanceSheetPage })))
+const VatReportPage = lazy(() => import('@/pages/reports/VatReport').then(m => ({ default: m.VatReportPage })))
+const StockReportPage = lazy(() => import('@/pages/reports/StockReport').then(m => ({ default: m.StockReportPage })))
+const DaybookPage = lazy(() => import('@/pages/reports/Daybook').then(m => ({ default: m.DaybookPage })))
+const LedgerReportPage = lazy(() => import('@/pages/reports/LedgerReport').then(m => ({ default: m.LedgerReportPage })))
+const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default: m.SettingsPage })))
+const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -90,7 +91,7 @@ export default function App() {
       setAuthReady(true)
     })
     return () => subscription.unsubscribe()
-  }, [])
+  }, [loadAll, setUserId])
 
   useEffect(() => {
     if (!userId) return
@@ -150,6 +151,7 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <BrowserRouter>
+        <Suspense fallback={<FullPageStatus message="Loading page..." />}>
         <Routes>
           <Route path="/login" element={!authReady ? <FullPageStatus message="Checking session..." /> : userId ? <Navigate to="/" replace /> : <LoginPage />} />
           <Route path="/" element={<ProtectedRoute authReady={authReady}><AppShell /></ProtectedRoute>}>
@@ -187,6 +189,7 @@ export default function App() {
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </AppErrorBoundary>
   )

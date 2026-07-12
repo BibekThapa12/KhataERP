@@ -4,7 +4,7 @@ A full-stack double-entry accounting ERP for small retail/trading businesses in 
 React + TypeScript + Tailwind + shadcn/ui frontend, Supabase backend.
 
 ## Stack
-- **Frontend:** React 18, TypeScript, Vite, Tailwind CSS v3, shadcn/ui, Zustand, React Router
+- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v3, shadcn/ui, Zustand, React Router
 - **Backend:** Supabase (PostgreSQL + Auth + Row-Level Security)
 
 ## Quick Setup
@@ -15,6 +15,9 @@ React + TypeScript + Tailwind + shadcn/ui frontend, Supabase backend.
 SQL Editor → paste `supabase-schema.sql` → Run.
 
 ### 3. Set environment variables
+Apply `supabase-integrity-migration.sql` after the base schema to enable database-level numbering and journal-balance guards.
+Apply `supabase-alternative-units-migration.sql` to enable main and alternative item units.
+
 ```bash
 cp .env.example .env.local
 # Fill in VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY from Supabase → Settings → API

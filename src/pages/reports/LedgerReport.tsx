@@ -7,15 +7,16 @@ import { todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { Account, Voucher } from '@/types'
+import type { Voucher } from '@/types'
 
 export function LedgerReportPage() {
-  const { company, rawAccounts, vouchers } = useAppStore()
+  const { company, rawAccounts, vouchers, parties } = useAppStore()
   const [searchParams] = useSearchParams()
   const sortedAccounts = useMemo(() => [...rawAccounts].sort((a, b) => a.type.localeCompare(b.type) || a.name.localeCompare(b.name)), [rawAccounts])
   const [accountId, setAccountId] = useState(() => searchParams.get('account') || '')
@@ -37,10 +38,7 @@ export function LedgerReportPage() {
     () => getLedgerRows(accountId, rawAccounts, vouchers, from, to, showCancelled),
     [accountId, rawAccounts, vouchers, from, to, showCancelled],
   )
-  const accountsByType = useMemo(() => sortedAccounts.reduce<Record<string, Account[]>>((groups, account) => {
-    ;(groups[account.type] ||= []).push(account)
-    return groups
-  }, {}), [sortedAccounts])
+  const partyByAccount = useMemo(() => new Map(parties.map(party => [party.account_id, party])), [parties])
 
   return (
     <div className="report-page">
@@ -58,18 +56,7 @@ export function LedgerReportPage() {
           <CardContent className="p-4 space-y-4">
             <div className="max-w-xl space-y-1.5">
               <Label htmlFor="ledger-account">Ledger Account</Label>
-              <select
-                id="ledger-account"
-                value={accountId}
-                onChange={event => setAccountId(event.target.value)}
-                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-2 text-sm shadow-sm focus:outline-none focus:ring-1 focus:ring-ring"
-              >
-                {Object.entries(accountsByType).map(([type, accounts]) => (
-                  <optgroup key={type} label={type}>
-                    {accounts.map(account => <option key={account.id} value={account.id}>{account.name} - {account.group}</option>)}
-                  </optgroup>
-                ))}
-              </select>
+              <SearchableSelect id="ledger-account" value={accountId} onValueChange={setAccountId} placeholder="Select ledger account" searchPlaceholder="Search ledgers…" options={sortedAccounts.map(account => ({ value: account.id, label: `${account.name} - ${account.group}`, group: account.type, searchText: `${account.group} ${account.type} ${partyByAccount.get(account.id)?.name || ''}` }))} />
             </div>
             <div className="flex flex-wrap items-end justify-between gap-4">
               <ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} />

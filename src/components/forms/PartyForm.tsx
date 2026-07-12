@@ -3,7 +3,8 @@ import { useAppStore } from '@/store/useAppStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import type { Party } from '@/types'
 
@@ -55,13 +56,7 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
           </div>
           <div className="space-y-1.5">
             <Label>Type</Label>
-            <Select value={type} onValueChange={v => setType(v as 'customer' | 'supplier')} disabled={!!defaultType}>
-              <SelectTrigger><SelectValue /></SelectTrigger>
-              <SelectContent>
-                <SelectItem value="customer">Customer</SelectItem>
-                <SelectItem value="supplier">Supplier</SelectItem>
-              </SelectContent>
-            </Select>
+            <SearchableSelect value={type} onValueChange={v => setType(v as 'customer' | 'supplier')} disabled={!!defaultType} options={[{ value: 'customer', label: 'Customer' }, { value: 'supplier', label: 'Supplier' }]} />
           </div>
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-1.5">

@@ -11,6 +11,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 
 export function SettingsPage() {
   const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError } = useAppStore()
@@ -308,10 +309,7 @@ export function SettingsPage() {
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Default Print Format</Label>
-                <select value={printFormat} onChange={e => setPrintFormat(e.target.value as 'A5' | 'A4')} className="h-9 w-full rounded-md border border-input bg-background px-3 text-sm">
-                  <option value="A5">A5</option>
-                  <option value="A4">A4</option>
-                </select>
+                <SearchableSelect value={printFormat} onValueChange={value => setPrintFormat(value as 'A5' | 'A4')} options={[{ value: 'A5', label: 'A5' }, { value: 'A4', label: 'A4' }]} />
               </div>
               <div className="space-y-1.5">
                 <Label>Logo URL</Label>

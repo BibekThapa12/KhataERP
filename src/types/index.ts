@@ -40,6 +40,8 @@ export interface Item {
   company_id: string
   name: string
   unit: string
+  alternate_unit?: string | null
+  alternate_conversion?: number | null
   sell_rate: number
   opening_qty: number
   opening_rate: number
@@ -84,6 +86,9 @@ export interface InvoiceItem {
   source_invoice_item_id?: string
   item_name?: string
   unit?: string
+  entry_unit?: string
+  conversion_factor?: number
+  base_qty?: number
   discount_amount?: number
   taxable_amount?: number
   vat_amount?: number

@@ -538,6 +538,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     .single()
   if (ve) throw ve
 
+  try {
   let newLines: VoucherLine[] = []
   if (lines.length) {
     const { data, error: le } = await supabase
@@ -574,6 +575,13 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     stock_lines: newStockLines,
     invoice_items: newInvoiceItems,
   } as Voucher
+  } catch (error) {
+    // Child rows cascade from the voucher. Best-effort cleanup prevents a
+    // partially posted header when a later request fails.
+    const { error: cleanupError } = await supabase.from('vouchers').delete().eq('id', v.id)
+    if (cleanupError) console.error('Failed to clean up partial voucher', cleanupError)
+    throw error
+  }
 }
 
 export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items }: UpdateVoucherPayload): Promise<Voucher> {

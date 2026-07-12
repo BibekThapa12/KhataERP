@@ -11,7 +11,7 @@ import {
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
-  buildReturnVoucherData, resolveSystemAccountId, validateBalanced, type ReturnItemInput, type SystemAccountKey,
+  buildReturnVoucherData, resolveSystemAccountId, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey,
 } from '@/lib/engine'
 import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
 
@@ -47,7 +47,7 @@ interface AppState {
   saveCompany: (updates: Partial<Company>) => Promise<void>
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; opening_balance?: number }) => Promise<Party>
-  addItem: (data: { name: string; unit: string; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean }) => Promise<Item>
+  addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean }) => Promise<Item>
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number }) => Promise<Account>
   addAccountCategory: (data: { name: string; account_type: Account['type'] }) => Promise<void>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
@@ -57,15 +57,15 @@ interface AppState {
   alterParty: (id: string, updates: Partial<Party>) => Promise<void>
   alterItem: (id: string, updates: Partial<Item>) => Promise<void>
 
-  saveSalesVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
-  savePurchaseVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  saveSalesVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: InvoiceEntryInput[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  savePurchaseVoucher: (params: { party_account_id: string | null; is_cash: boolean; items: InvoiceEntryInput[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
   saveReceipt: (params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   savePayment: (params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
   saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string }) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams) => Promise<void>
-  updateSalesVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
-  updatePurchaseVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: {item_id: string; qty: number; rate: number}[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  updateSalesVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: InvoiceEntryInput[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
+  updatePurchaseVoucher: (id: string, params: { party_account_id: string | null; is_cash: boolean; items: InvoiceEntryInput[]; vat_rate: number; discount?: number; narration?: string; date_bs: string }) => Promise<void>
   updateReceipt: (id: string, params: { party_account_id: string; amount: number; deposit_to: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   updatePayment: (id: string, params: { party_account_id: string; amount: number; paid_from: 'cash' | 'bank'; narration?: string; date_bs: string }) => Promise<void>
   updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
@@ -97,14 +97,17 @@ function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
   return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
 }
 
-function invoiceItemSnapshots(lines: { item_id: string; qty: number; rate: number }[], items: Item[], stock: StockEntry[], isSales: boolean) {
+function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: StockEntry[], isSales: boolean) {
   return lines.map(line => {
     const item = items.find(entry => entry.id === line.item_id)
     return {
       ...line,
       item_name: item?.name,
-      unit: item?.unit,
-      cost_rate: isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : line.rate,
+      unit: line.entry_unit || item?.unit,
+      entry_unit: line.entry_unit || item?.unit,
+      conversion_factor: line.conversion_factor || 1,
+      base_qty: line.qty * (line.conversion_factor || 1),
+      cost_rate: line.cost_rate ?? (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : line.rate / (line.conversion_factor || 1)),
     }
   })
 }
@@ -150,7 +153,7 @@ function validateReturnRequest(vouchers: Voucher[], stock: StockEntry[], params:
 
   if (params.type === 'Purchase Return') {
     const requestedByItem = new Map<string, number>()
-    for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + item.qty)
+    for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + item.qty * (item.conversion_factor || 1))
     const editing = editingId ? vouchers.find(voucher => voucher.id === editingId) : undefined
     for (const [itemId, qty] of requestedByItem) {
       const currentReturnQty = editing?.stock_lines?.filter(line => line.item_id === itemId && line.direction === 'out').reduce((sum, line) => sum + line.qty, 0) || 0
@@ -429,7 +432,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
-      invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
+      invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
     })
     const vouchers = [newVoucher, ...get().vouchers]
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
@@ -557,7 +560,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       voucher: { ...dateFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
-      invoice_items: data.invoice_items,
+      invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
@@ -652,7 +655,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       },
       lines: data.lines,
       stock_lines: data.stock_lines,
-      invoice_items: data.invoice_items,
+      invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     set({ vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers) })

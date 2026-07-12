@@ -17,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge, Textarea } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { Account, Company, Item, Party, Voucher } from '@/types'
 
 type DeveloperEvent = {
@@ -188,20 +189,11 @@ function DeveloperCompanyRow({
         <p className="text-xs text-muted-foreground">{lastActivity ? `${daysAgo(lastActivity)} day(s) ago` : 'Signed up only'}</p>
       </td>
       <td className="px-3 py-3">
-        <select value={plan} onChange={e => setPlan(e.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs">
-          <option value="free">Free</option>
-          <option value="trial">Trial</option>
-          <option value="paid">Paid</option>
-          <option value="expired">Expired</option>
-        </select>
+        <SearchableSelect value={plan} onValueChange={setPlan} className="h-8 text-xs" options={[{ value: 'free', label: 'Free' }, { value: 'trial', label: 'Trial' }, { value: 'paid', label: 'Paid' }, { value: 'expired', label: 'Expired' }]} />
         <Input type="date" value={trialEndsAt} onChange={e => setTrialEndsAt(e.target.value)} className="mt-2 h-8 text-xs" />
       </td>
       <td className="px-3 py-3">
-        <select value={support} onChange={e => setSupport(e.target.value)} className="h-8 w-full rounded-md border border-input bg-background px-2 text-xs">
-          <option value="normal">Normal</option>
-          <option value="needs_help">Needs help</option>
-          <option value="blocked">Blocked</option>
-        </select>
+        <SearchableSelect value={support} onValueChange={setSupport} className="h-8 text-xs" options={[{ value: 'normal', label: 'Normal' }, { value: 'needs_help', label: 'Needs help' }, { value: 'blocked', label: 'Blocked' }]} />
         <label className="mt-2 flex items-center gap-2 text-xs">
           <input type="checkbox" checked={suspended} onChange={e => setSuspended(e.target.checked)} />
           Suspended

@@ -3,17 +3,19 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
+import { formatStockQuantity, fromBaseRate, toBaseQty, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
-import { Textarea, Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/misc'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
 import type { Voucher } from '@/types'
 
-interface LineItem { item_id: string; qty: number; rate: number }
+interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100 }
 
@@ -32,7 +34,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [dateBs, setDateBs] = useState(todayBs())
   const [isCash, setIsCash] = useState(false)
   const [partyAccountId, setPartyAccountId] = useState('')
-  const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0 }])
+  const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
   const [vatRate, setVatRate] = useState(13)
   const [discount, setDiscount] = useState(0)
   const [narration, setNarration] = useState('')
@@ -58,22 +60,27 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setDateBs(voucher.date_bs)
       setIsCash(voucher.is_cash)
       setPartyAccountId(voucher.party_account_id || '')
-      setLines((voucher.invoice_items || []).map(i => ({ item_id: i.item_id, qty: i.qty, rate: i.rate })))
+      setLines((voucher.invoice_items || []).map(i => {
+        const item = items.find(entry => entry.id === i.item_id)
+        const factor = i.conversion_factor || 1
+        return { item_id: i.item_id, qty: i.qty, rate: i.rate, unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
+      }))
       setVatRate(vatEnabled ? (voucher.vat_rate ?? 13) : 0)
       setDiscount(voucher.discount ?? 0)
       setNarration(voucher.narration ?? '')
       setError('')
     } else if (!open) {
       setDateBs(todayBs()); setIsCash(false); setPartyAccountId('')
-      setLines([{ item_id: '', qty: 1, rate: 0 }]); setVatRate(vatEnabled ? 13 : 0)
+      setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setNarration(''); setError('')
     }
-  }, [open, voucher, vatEnabled])
+  }, [open, voucher, vatEnabled, items])
 
   const updateLine = (idx: number, field: keyof LineItem, value: string | number) => {
     const next = [...lines]
     if (field === 'item_id') {
-      next[idx] = { ...next[idx], item_id: value as string }
+      const item = items.find(i => i.id === value)
+      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1 }
       if (!isSales) {
         const stock = getStockEntry(value as string)
         if (stock.avg_cost > 0) next[idx].rate = stock.avg_cost
@@ -89,6 +96,17 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setLines(next)
   }
 
+  const updateUnit = (idx: number, mode: UnitMode) => {
+    const next = [...lines]
+    const line = next[idx]
+    const item = items.find(entry => entry.id === line.item_id)
+    const oldFactor = line.conversion_factor || unitFactor(item, line.unit_mode)
+    const baseRate = line.rate / oldFactor
+    const factor = unitFactor(item, mode)
+    next[idx] = { ...line, unit_mode: mode, entry_unit: unitName(item, mode), conversion_factor: factor, rate: fromBaseRate(baseRate, factor) }
+    setLines(next)
+  }
+
   const handleSave = async () => {
     setError('')
     const validLines = lines.filter(l => l.item_id && l.qty > 0 && l.rate > 0)
@@ -96,14 +114,16 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!isCash && !partyAccountId) { setError(`Select a ${partyType} or check "Cash".`); return }
 
     if (isSales) {
-      for (const l of validLines) {
-        const s = getStockEntry(l.item_id)
+      const requestedByItem = new Map<string, number>()
+      for (const line of validLines) requestedByItem.set(line.item_id, (requestedByItem.get(line.item_id) || 0) + toBaseQty(line.qty, line.conversion_factor || 1))
+      for (const [itemId, requestedBaseQty] of requestedByItem) {
+        const s = getStockEntry(itemId)
         const currentVoucherQty = voucher?.stock_lines
-          ?.filter(sl => sl.item_id === l.item_id && sl.direction === 'out')
+          ?.filter(sl => sl.item_id === itemId && sl.direction === 'out')
           .reduce((sum, sl) => sum + sl.qty, 0) ?? 0
-        if (s.qty + currentVoucherQty < l.qty) {
-          const item = items.find(i => i.id === l.item_id)
-          setError(`Not enough stock for "${item?.name}": have ${s.qty + currentVoucherQty}, selling ${l.qty}.`)
+        if (s.qty + currentVoucherQty < requestedBaseQty) {
+          const item = items.find(i => i.id === itemId)
+          setError(`Not enough stock for "${item?.name}": have ${item ? formatStockQuantity(s.qty + currentVoucherQty, item) : s.qty}, selling ${requestedBaseQty} ${item?.unit || ''}.`)
           return
         }
       }
@@ -111,7 +131,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines, vat_rate: effectiveVatRate, discount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params)
         else await saveSalesVoucher(params)
@@ -151,16 +171,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                 </div>
                 {!isCash && (
                   <div className="flex gap-1.5">
-                    <Select value={partyAccountId} onValueChange={setPartyAccountId}>
-                      <SelectTrigger className="flex-1">
-                        <SelectValue placeholder={`Select ${partyType}…`} />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {partyList.map(p => (
-                          <SelectItem key={p.account_id} value={p.account_id}>{p.name}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyType}…`} searchPlaceholder={`Search ${partyType}s…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type}` }))} />
                     <Button type="button" variant="outline" size="sm" onClick={() => setShowPartyForm(true)}>+ New</Button>
                   </div>
                 )}
@@ -169,8 +180,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
             {/* Line items */}
             <div>
-              <div className="grid grid-cols-[2fr_0.7fr_1fr_1fr_auto] gap-2 mb-1.5">
-                {['Item', 'Qty', 'Rate', 'Amount', ''].map(h => (
+              <div className="grid grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 mb-1.5">
+                {['Item', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
                   <p key={h} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{h}</p>
                 ))}
               </div>
@@ -179,30 +190,28 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   const amt = round2Local(line.qty * line.rate)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   return (
-                    <div key={idx} className="grid grid-cols-[2fr_0.7fr_1fr_1fr_auto] gap-2 items-start">
+                    <div key={idx} className="grid grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 items-start">
                       <div className="flex gap-1">
-                        <Select value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)}>
-                          <SelectTrigger>
-                            <SelectValue placeholder="Select item…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {items.filter(i => !i.is_archived).map(i => (
-                              <SelectItem key={i.id} value={i.id}>
-                                {i.name} {isSales ? `(${getStockEntry(i.id).qty} ${i.unit})` : `(${i.unit})`}
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
+                        <SearchableSelect value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: `${i.name} ${isSales ? `(${formatStockQuantity(getStockEntry(i.id).qty, i)})` : `(${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`}`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''}` }))} />
                         <Button type="button" variant="outline" size="icon" className="h-9 w-9 flex-shrink-0" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
                       </div>
                       <div>
                         <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" />
-                        {isSales && stock && stock.qty < line.qty && line.qty > 0 && (
-                          <p className="text-xs text-destructive mt-0.5">Only {stock.qty} in stock</p>
+                        {isSales && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
+                          <p className="text-xs text-destructive mt-0.5">Only {items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : stock.qty} in stock</p>
                         )}
                       </div>
+                      {(() => {
+                        const item = items.find(entry => entry.id === line.item_id)
+                        const snapshotMatchesCurrent = line.unit_mode === 'main'
+                          ? !line.entry_unit || line.entry_unit === item?.unit
+                          : line.entry_unit === item?.alternate_unit
+                        return item?.alternate_unit && snapshotMatchesCurrent
+                          ? <SearchableSelect value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
+                          : <div className="h-9 flex items-center text-sm text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
+                      })()}
                       <Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" />
                       <div className="h-9 flex items-center num font-semibold text-sm">{fmtMoney(amt)}</div>
                       <Button type="button" variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
@@ -212,7 +221,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   )
                 })}
               </div>
-              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setLines([...lines, { item_id: '', qty: 1, rate: 0 }])}>
+              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setLines([...lines, { item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])}>
                 <Plus className="h-3.5 w-3.5 mr-1" /> Add line
               </Button>
             </div>
@@ -226,13 +235,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               {vatEnabled && (
                 <div className="space-y-1.5">
                   <Label>VAT Rate</Label>
-                  <Select value={String(vatRate)} onValueChange={v => setVatRate(Number(v))}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="13">13% (Standard)</SelectItem>
-                      <SelectItem value="0">0% (Exempt)</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect value={String(vatRate)} onValueChange={v => setVatRate(Number(v))} options={[{ value: '13', label: '13% (Standard)' }, { value: '0', label: '0% (Exempt)' }]} />
                 </div>
               )}
             </div>
@@ -270,7 +273,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         onCreated={(item: import('@/types').Item) => {
           if (newItemLineIdx !== null) {
             const next = [...lines]
-            next[newItemLineIdx] = { ...next[newItemLineIdx], item_id: item.id, rate: item.sell_rate || 0 }
+            next[newItemLineIdx] = { ...next[newItemLineIdx], item_id: item.id, rate: item.sell_rate || 0, unit_mode: 'main', entry_unit: item.unit, conversion_factor: 1 }
             setLines(next)
           }
           setShowItemForm(false)
