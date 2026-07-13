@@ -21,7 +21,7 @@ function voucherBadgeVariant(type: string, cancelled: boolean) {
   return map[type] ?? 'default' as const
 }
 
-function VoucherDetail({ voucher }: { voucher: Voucher }) {
+export function VoucherDetail({ voucher }: { voucher: Voucher }) {
   const { company, vouchers, getAccount, getItem, getPartyByAccountId } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
   const settlementId = legacySettlementAccountId(voucher)

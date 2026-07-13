@@ -1,248 +1,190 @@
-import { useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { TrendingUp, TrendingDown, Wallet, Package } from 'lucide-react'
+import {
+  ArrowDownCircle, ArrowUpCircle, BookOpen, Building2, Landmark,
+  ReceiptText, ShoppingBag, ShoppingCart, TrendingDown, TrendingUp, Users, Wallet,
+} from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeProfitAndLoss, recomputeAllBalances } from '@/lib/engine'
-import { resolveSystemAccountId, type SystemAccountKey } from '@/lib/engine'
-import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
-import { fmtMoney } from '@/lib/utils'
+import { computeProfitAndLoss, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
+import { todayBs } from '@/lib/nepaliDate'
+import { bankAccounts } from '@/lib/banks'
+import { computeCashFlow, fiscalYearStartBs, getDaybookRows } from '@/lib/reports'
+import {
+  accountBalance, buildDashboardSeries, dashboardVouchersInRange, dashboardVouchersThrough,
+  isPostedDashboardVoucher, topSellingItems,
+} from '@/lib/dashboard'
+import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
-import { StatCard } from '@/components/StatCard'
-import { VoucherTable } from '@/components/tables/VoucherTable'
-import { InvoiceForm } from '@/components/forms/InvoiceForm'
-import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
-import { ReturnForm } from '@/components/forms/ReturnForm'
+import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
+import { VoucherDetail } from '@/components/tables/VoucherTable'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
-import { Label } from '@/components/ui/label'
-import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Voucher } from '@/types'
-import { bankAccounts } from '@/lib/banks'
+
+const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
+const CashFlowChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.CashFlowChart })))
+const CHART_MODE_KEY = 'khata-dashboard-chart-mode'
+
+const quickActions = [
+  { label: 'Sales', path: '/sales?new=1', Icon: ShoppingCart, className: 'border-emerald-100 bg-emerald-50/70 text-emerald-700' },
+  { label: 'Purchase', path: '/purchase?new=1', Icon: ShoppingBag, className: 'border-orange-100 bg-orange-50/70 text-orange-700' },
+  { label: 'Receipt', path: '/receipts?new=1', Icon: ArrowDownCircle, className: 'border-blue-100 bg-blue-50/70 text-blue-700' },
+  { label: 'Payment', path: '/payments?new=1', Icon: ArrowUpCircle, className: 'border-violet-100 bg-violet-50/70 text-violet-700' },
+  { label: 'Journal Entry', path: '/journal?new=1', Icon: BookOpen, className: 'border-slate-200 bg-slate-50 text-slate-700' },
+]
+
+function DashboardMetric({ label, value, Icon, tone = 'navy', sub }: {
+  label: string
+  value: number
+  Icon: typeof Wallet
+  tone?: 'navy' | 'green' | 'red' | 'orange' | 'blue' | 'violet'
+  sub?: string
+}) {
+  const tones = {
+    navy: 'bg-slate-100 text-[#1B2A4A]', green: 'bg-emerald-50 text-emerald-600', red: 'bg-red-50 text-red-600',
+    orange: 'bg-orange-50 text-orange-600', blue: 'bg-blue-50 text-blue-600', violet: 'bg-violet-50 text-violet-600',
+  }
+  return <Card className="shadow-none">
+    <CardContent className="flex items-start gap-3 p-4">
+      <div className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-lg ${tones[tone]}`}><Icon className="h-5 w-5" /></div>
+      <div className="min-w-0">
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p className={`mt-1 font-serif text-xl font-bold num ${value < 0 ? 'text-red-600' : 'text-[#1B2A4A]'}`}>{fmtMoney(value)}</p>
+        {sub && <p className="mt-1 text-[11px] text-muted-foreground">{sub}</p>}
+      </div>
+    </CardContent>
+  </Card>
+}
+
+function voucherBadge(type: Voucher['type']) {
+  if (type === 'Sales' || type === 'Sales Return') return 'sales' as const
+  if (type === 'Purchase' || type === 'Purchase Return') return 'purchase' as const
+  if (type === 'Receipt') return 'receipt' as const
+  if (type === 'Payment') return 'payment' as const
+  return 'journal' as const
+}
 
 export function Dashboard() {
-  const { company, accounts, rawAccounts, accountCategories, vouchers, stock, parties, closingStockValue } = useAppStore()
+  const { company, rawAccounts, accountCategories, vouchers, parties, items } = useAppStore()
   const navigate = useNavigate()
-  const [editing, setEditing] = useState<Voucher | null>(null)
-  const vatEnabled = company?.vat_enabled ?? true
-  const currentBs = todayBs()
-  const fiscalStartMonthDay = company?.fiscal_year_start ? adToBs(company.fiscal_year_start).slice(5) : firstOfCurrentBsMonth().slice(5)
-  const fiscalStartThisYear = `${currentBs.slice(0, 4)}-${fiscalStartMonthDay}`
-  const fiscalStartBs = makeBsKey(currentBs) >= makeBsKey(fiscalStartThisYear)
-    ? fiscalStartThisYear
-    : `${Number(currentBs.slice(0, 4)) - 1}-${fiscalStartMonthDay}`
-  const [range, setRange] = useState<'today' | 'month' | 'fiscal' | 'custom'>('fiscal')
-  const [from, setFrom] = useState(fiscalStartBs)
+  const fiscalStart = fiscalYearStartBs(company)
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(fiscalStart)
   const [to, setTo] = useState(todayBs())
-
-  useEffect(() => {
-    if (range !== 'fiscal') return
-    setFrom(fiscalStartBs)
-    setTo(todayBs())
-  }, [fiscalStartBs, range])
-
-  const applyPreset = (preset: 'today' | 'month' | 'fiscal') => {
-    setRange(preset)
-    if (preset === 'today') {
-      setFrom(todayBs())
-      setTo(todayBs())
-    } else if (preset === 'month') {
-      setFrom(firstOfCurrentBsMonth())
-      setTo(todayBs())
-    } else {
-      setFrom(fiscalStartBs)
-      setTo(todayBs())
-    }
-  }
-
-  const filteredVouchers = useMemo(() => {
-    const fromKey = makeBsKey(from)
-    const toKey = makeBsKey(to)
-    return vouchers.filter(v => {
-      const key = v.date_bs_key || makeBsKey(v.date_bs)
-      return key >= fromKey && key <= toKey
-    })
-  }, [vouchers, from, to])
-
-  const periodAccounts = useMemo(() => recomputeAllBalances(rawAccounts, filteredVouchers), [rawAccounts, filteredVouchers])
-  const pnl = useMemo(() => computeProfitAndLoss(periodAccounts, closingStockValue()), [periodAccounts, closingStockValue])
-
-  const systemBalance = (key: SystemAccountKey) => {
-    if (!company) return 0
-    return accounts.find(a => a.id === resolveSystemAccountId(accounts, company.id, key))?.balance ?? 0
-  }
-
-  const cash = systemBalance('cash')
-  const bank = bankAccounts(accounts, accountCategories, true).reduce((sum, account) => sum + (account.balance || 0), 0)
-
-  const debtorsTotal = parties
-    .filter(p => p.type === 'customer')
-    .reduce((s, p) => s + (accounts.find(a => a.id === p.account_id)?.balance ?? 0), 0)
-
-  const creditorsTotal = parties
-    .filter(p => p.type === 'supplier')
-    .reduce((s, p) => s + (accounts.find(a => a.id === p.account_id)?.balance ?? 0), 0)
-
-  const totalStockValue = stock.reduce((s, e) => s + e.value, 0)
-
-  const vatPayable = systemBalance('vat_payable')
-  const vatReceivable = systemBalance('vat_receivable')
-  const netVat = vatPayable - vatReceivable
-
-  const recent = [...filteredVouchers].filter(v => !v.cancelled)
-    .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
-    .slice(0, 10)
-
-  const lowStockItems = useAppStore(s => s.items).filter(item => {
-    const s = stock.find(e => e.id === item.id)
-    return item.reorder_level != null && (s?.qty ?? 0) <= item.reorder_level
+  const [detail, setDetail] = useState<Voucher | null>(null)
+  const [chartMode, setChartMode] = useState(() => {
+    try { return localStorage.getItem(CHART_MODE_KEY) !== 'false' } catch { return true }
   })
 
-  const closeEdit = () => setEditing(null)
-  const companySetupIncomplete = !!company && (
-    company.name === 'My Trading Co.' ||
-    !company.address ||
-    !company.phone ||
-    !company.pan_vat
-  )
+  useEffect(() => {
+    if (range === 'fiscal') setFrom(fiscalStart)
+  }, [fiscalStart, range])
+  useEffect(() => {
+    try { localStorage.setItem(CHART_MODE_KEY, String(chartMode)) } catch { /* local storage may be unavailable */ }
+  }, [chartMode])
 
-  return (
-    <div>
-      <PageHeader title="Dashboard" description="Your business at a glance" />
-      <PageContent className="space-y-5">
-        {companySetupIncomplete && (
-          <Card className="border-amber-200 bg-amber-50/50">
-            <CardContent className="p-4 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-semibold text-amber-800">Complete company setup</p>
-                <p className="text-xs text-amber-700 mt-0.5">
-                  Add company name, address, phone, PAN/VAT, VAT mode, and fiscal year from Settings.
-                </p>
-              </div>
-              <Button size="sm" onClick={() => navigate('/settings')}>Open Settings</Button>
-            </CardContent>
-          </Card>
-        )}
-        <Card>
-          <CardContent className="p-4">
-            <div className="flex flex-wrap items-end gap-3">
-              <div className="flex gap-2">
-                <Button variant={range === 'today' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('today')}>Today</Button>
-                <Button variant={range === 'month' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('month')}>This Month</Button>
-                <Button variant={range === 'fiscal' ? 'default' : 'outline'} size="sm" onClick={() => applyPreset('fiscal')}>Fiscal Year</Button>
-                <Button variant={range === 'custom' ? 'default' : 'outline'} size="sm" onClick={() => setRange('custom')}>Custom</Button>
-              </div>
-              <div className="space-y-1.5">
-                <Label>From</Label>
-                <NepaliDateInput value={from} onChange={v => { setFrom(v); setRange('custom') }} className="w-40" />
-              </div>
-              <div className="space-y-1.5">
-                <Label>To</Label>
-                <NepaliDateInput value={to} onChange={v => { setTo(v); setRange('custom') }} className="w-40" />
-              </div>
-            </div>
-          </CardContent>
-        </Card>
-        {/* Stat grid */}
-        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-4 lg:gap-4">
-          <StatCard label="Cash + Bank" value={cash + bank} Icon={Wallet}
-            color={cash + bank >= 0 ? 'default' : 'negative'} />
-          <StatCard label="Sundry Debtors (Customers)" value={debtorsTotal} Icon={TrendingUp}
-            color="positive" sub="Money Sundry Debtors owe you" />
-          <StatCard label="Sundry Creditors (Suppliers)" value={creditorsTotal} Icon={TrendingDown}
-            color="negative" sub="Money you owe Sundry Creditors" />
-          <StatCard label="Stock Value" value={totalStockValue} Icon={Package}
-            sub={`${useAppStore.getState().items.length} item(s)`} />
+  const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
+  const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
+  const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
+  const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
+
+  const asOfAccounts = useMemo(() => recomputeAllBalances(rawAccounts, throughTo), [rawAccounts, throughTo])
+  const periodAccounts = useMemo(() => recomputeAllBalances(
+    rawAccounts.map(account => ({ ...account, opening_balance: 0, balance: 0 })), periodVouchers,
+  ), [rawAccounts, periodVouchers])
+  const asOfMap = useMemo(() => new Map(asOfAccounts.map(account => [account.id, account])), [asOfAccounts])
+  const periodMap = useMemo(() => new Map(periodAccounts.map(account => [account.id, account])), [periodAccounts])
+
+  const stockBefore = useMemo(() => recomputeStock(items, beforeFrom, valuationMethod), [items, beforeFrom, valuationMethod])
+  const stockAsOf = useMemo(() => recomputeStock(items, throughTo, valuationMethod), [items, throughTo, valuationMethod])
+  const openingStockValue = round2(stockBefore.reduce((sum, row) => sum + row.value, 0))
+  const closingStockValue = round2(stockAsOf.reduce((sum, row) => sum + row.value, 0))
+  const pnl = useMemo(() => computeProfitAndLoss(periodAccounts, round2(closingStockValue - openingStockValue)), [periodAccounts, closingStockValue, openingStockValue])
+
+  const systemId = (key: SystemAccountKey) => company ? resolveSystemAccountId(rawAccounts, company.id, key) : ''
+  const cash = accountBalance(asOfMap.get(systemId('cash')))
+  const banks = bankAccounts(asOfAccounts, accountCategories, true)
+  const totalBanks = round2(banks.reduce((sum, account) => sum + accountBalance(account), 0))
+  const debtors = round2(parties.filter(party => party.type === 'customer').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
+  const creditors = round2(parties.filter(party => party.type === 'supplier').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
+
+  const salesId = systemId('sales')
+  const salesReturnId = systemId('sales_return')
+  const purchaseId = systemId('purchase')
+  const purchaseReturnId = systemId('purchase_return')
+  const totalSales = round2(accountBalance(periodMap.get(salesId)) - accountBalance(periodMap.get(salesReturnId)))
+  const totalPurchases = round2(accountBalance(periodMap.get(purchaseId)) - accountBalance(periodMap.get(purchaseReturnId)))
+  const excludedExpenseIds = new Set([purchaseId, salesReturnId])
+  const totalExpenses = round2(periodAccounts.filter(account => account.type === 'Expense' && !excludedExpenseIds.has(account.id)).reduce((sum, account) => sum + (account.balance || 0), 0))
+
+  const cashFlow = useMemo(() => company
+    ? computeCashFlow(company.id, rawAccounts, accountCategories, postedVouchers, from, to)
+    : null, [company, rawAccounts, accountCategories, postedVouchers, from, to])
+  const cashMovements = useMemo(() => cashFlow?.sections.flatMap(section => section.rows.map(row => ({ voucher: row.voucher, amount: row.amount }))) || [], [cashFlow])
+  const chartSeries = useMemo(() => buildDashboardSeries(postedVouchers, cashMovements, from, to), [postedVouchers, cashMovements, from, to])
+  const topItems = useMemo(() => topSellingItems(postedVouchers, items, from, to), [postedVouchers, items, from, to])
+  const stockMap = useMemo(() => new Map(stockAsOf.map(row => [row.id, row])), [stockAsOf])
+  const lowStock = useMemo(() => items
+    .filter(item => !item.is_archived && item.reorder_level != null && (stockMap.get(item.id)?.qty || 0) <= Number(item.reorder_level))
+    .map(item => ({ item, qty: stockMap.get(item.id)?.qty || 0 }))
+    .sort((left, right) => left.qty - right.qty || left.item.name.localeCompare(right.item.name))
+    .slice(0, 5), [items, stockMap])
+
+  const recentRows = useMemo(() => getDaybookRows(periodVouchers, rawAccounts, parties)
+    .sort((left, right) => right.date_bs_key - left.date_bs_key || right.voucher.seq - left.voucher.seq)
+    .slice(0, 8), [periodVouchers, rawAccounts, parties])
+
+  const companySetupIncomplete = !!company && (company.name === 'My Trading Co.' || !company.address || !company.phone || !company.pan_vat)
+  const rangeLabel = chartSeries.grouping === 'daily' ? 'Daily' : chartSeries.grouping === 'weekly' ? 'Weekly' : 'Monthly'
+
+  return <div>
+    <PageHeader title="Dashboard" description="Overview of your business" action={
+      <button type="button" role="switch" aria-checked={chartMode} onClick={() => setChartMode(value => !value)} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50">
+        <span>Chart Mode</span><span className={`relative h-5 w-9 rounded-full transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-[18px]' : 'translate-x-0.5'}`} /></span>
+      </button>
+    } />
+    <PageContent className="space-y-4">
+      {companySetupIncomplete && <Card className="border-amber-200 bg-amber-50/50"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-semibold text-amber-800">Complete company setup</p><p className="mt-0.5 text-xs text-amber-700">Add company name, address, phone, PAN/VAT, VAT mode, and fiscal year from Settings.</p></div><Button size="sm" onClick={() => navigate('/settings')}>Open Settings</Button></CardContent></Card>}
+
+      <Card className="shadow-none"><CardContent className="p-3 sm:p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
+
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-5 md:gap-3">
+        {quickActions.map(({ label, path, Icon, className }) => <button key={label} type="button" onClick={() => navigate(path)} className={`flex min-h-12 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm font-semibold transition-transform hover:-translate-y-0.5 hover:shadow-sm ${className}`}><Icon className="h-4 w-4" />{label}</button>)}
+      </div>
+
+      <section className="space-y-2" aria-labelledby="account-balance-heading">
+        <h2 id="account-balance-heading" className="font-serif text-base font-bold text-[#1B2A4A]">Account Balance <span className="font-sans text-xs font-normal text-muted-foreground">as of {fmtDate(to)}</span></h2>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <DashboardMetric label="Total Debtors" value={debtors} Icon={Users} tone="green" />
+          <DashboardMetric label="Total Creditors" value={creditors} Icon={Building2} tone="red" />
+          <DashboardMetric label="Cash in Hand" value={cash} Icon={Wallet} tone="green" />
+          <DashboardMetric label="Total in Banks" value={totalBanks} Icon={Landmark} tone="blue" sub={`${banks.length} bank account${banks.length === 1 ? '' : 's'}`} />
         </div>
+      </section>
 
-        <div className={`grid grid-cols-1 ${vatEnabled ? 'lg:grid-cols-2' : ''} gap-4`}>
-          <Card>
-            <CardContent className="p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Net Profit / Loss</p>
-              <p className={`font-serif text-2xl font-bold mt-2 num ${pnl.net_profit >= 0 ? 'text-[#2D5F4C]' : 'text-[#B5482E]'}`}>
-                {fmtMoney(pnl.net_profit)}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Income {fmtMoney(pnl.total_income)} − Expense {fmtMoney(pnl.total_expense)}
-              </p>
-            </CardContent>
-          </Card>
-          {vatEnabled && (
-          <Card>
-            <CardContent className="p-5">
-              <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">VAT Position</p>
-              <p className={`font-serif text-2xl font-bold mt-2 num ${netVat > 0 ? 'text-[#B5482E]' : 'text-[#2D5F4C]'}`}>
-                {fmtMoney(Math.abs(netVat))} {netVat > 0 ? 'payable' : 'credit'}
-              </p>
-              <p className="text-xs text-muted-foreground mt-1">
-                Output {fmtMoney(vatPayable)} − Input {fmtMoney(vatReceivable)}
-              </p>
-            </CardContent>
-          </Card>
-          )}
-        </div>
+      <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Business performance">
+        <DashboardMetric label="Total Sales" value={totalSales} Icon={TrendingUp} tone="green" />
+        <DashboardMetric label="Total Purchases" value={totalPurchases} Icon={ShoppingBag} tone="orange" />
+        <DashboardMetric label="Net Profit / Loss" value={pnl.net_profit} Icon={pnl.net_profit >= 0 ? TrendingUp : TrendingDown} tone="violet" />
+        <DashboardMetric label="Total Expenses" value={totalExpenses} Icon={ReceiptText} tone="navy" />
+      </section>
 
-        {/* Low stock alerts */}
-        {lowStockItems.length > 0 && (
-          <Card className="border-amber-200 bg-amber-50/50">
-            <CardContent className="p-4">
-              <p className="text-sm font-semibold text-amber-700 mb-2">⚠ Low Stock Alert</p>
-              <div className="flex flex-wrap gap-2">
-                {lowStockItems.map(item => {
-                  const s = stock.find(e => e.id === item.id)
-                  return (
-                    <Badge key={item.id} variant="outline" className="border-amber-300 text-amber-700">
-                      {item.name} — {s?.qty ?? 0} {item.unit} left
-                    </Badge>
-                  )
-                })}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+      {chartMode && <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-12" aria-label="Dashboard analytics">
+        <Card className="xl:col-span-6"><CardHeader className="flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-base">Sales vs Purchase</CardTitle><span className="text-xs text-muted-foreground">{rangeLabel}</span></CardHeader><CardContent className="h-72 px-2 pb-3"><Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading chart…</div>}><SalesPurchaseChart data={chartSeries.points} /></Suspense></CardContent></Card>
+        <Card className="xl:col-span-6"><CardHeader className="flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-base">Cash Flow</CardTitle><span className="text-xs text-muted-foreground">Net {fmtMoney(cashFlow?.net_change || 0)}</span></CardHeader><CardContent className="h-72 px-2 pb-3"><Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading chart…</div>}><CashFlowChart data={chartSeries.points} /></Suspense></CardContent></Card>
+        <Card className="lg:col-span-1 xl:col-span-6"><CardHeader className="flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-base">Top Selling Items</CardTitle><Button variant="outline" size="sm" onClick={() => navigate('/items')}>View All</Button></CardHeader><CardContent className="space-y-1 pb-4">{topItems.length ? topItems.map((row, index) => <div key={row.itemId} className="flex items-center gap-3 rounded-md px-1 py-2 text-sm hover:bg-muted/30"><span className="flex h-6 w-6 items-center justify-center rounded-full bg-muted text-xs font-semibold">{index + 1}</span><span className="min-w-0 flex-1 truncate font-medium">{row.item?.name}</span><span className="num text-muted-foreground">{row.qty} {row.item?.unit}</span></div>) : <div className="py-8 text-center text-sm text-muted-foreground">No sales in this period.</div>}</CardContent></Card>
+        <Card className="lg:col-span-1 xl:col-span-6"><CardHeader className="flex-row items-center justify-between space-y-0 pb-2"><CardTitle className="text-base">Low Stock Alert</CardTitle><Button variant="outline" size="sm" onClick={() => navigate('/stock-report')}>View All</Button></CardHeader><CardContent className="space-y-1 pb-4">{lowStock.length ? lowStock.map(({ item, qty }) => { const severe = qty <= 0 || qty <= Number(item.reorder_level || 0) / 2; return <div key={item.id} className="flex items-center gap-3 rounded-md px-1 py-2 text-sm hover:bg-muted/30"><span className={`h-2.5 w-2.5 rounded-full ${severe ? 'bg-red-500' : 'bg-orange-400'}`} aria-label={severe ? 'Critical stock' : 'Low stock'} /><span className="min-w-0 flex-1 truncate font-medium">{item.name}</span><span className="text-right"><span className="num">{qty} {item.unit}</span><span className="block text-[10px] text-muted-foreground">Reorder {item.reorder_level}</span></span></div> }) : <div className="py-8 text-center text-sm text-muted-foreground">No low-stock items.</div>}</CardContent></Card>
+      </section>}
 
-        {/* Recent activity */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Recent Activity</CardTitle>
-          </CardHeader>
-          <CardContent className="p-0 pb-2">
-            <VoucherTable vouchers={recent} onEdit={setEditing} />
-          </CardContent>
-        </Card>
-      </PageContent>
+      <Card>
+        <CardHeader className="flex-row items-center justify-between space-y-0 pb-3"><CardTitle className="text-base">Recent Transactions</CardTitle><Button variant="outline" size="sm" onClick={() => navigate('/reports/daybook')}>View All</Button></CardHeader>
+        <CardContent className="p-0 pb-2"><div className="overflow-x-auto"><table className="w-full min-w-[820px] text-sm"><thead><tr className="border-y bg-muted/35"><th className="report-th text-left">Date</th><th className="report-th text-left">Voucher No.</th><th className="report-th text-left">Type</th><th className="report-th text-left">Party / Account</th><th className="report-th text-right">Amount</th><th className="report-th text-left">Status</th></tr></thead><tbody>{recentRows.length ? recentRows.map(row => <tr key={row.voucher.id} tabIndex={0} onClick={() => setDetail(row.voucher)} onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setDetail(row.voucher) } }} className="cursor-pointer border-t transition-colors hover:bg-muted/25 focus-visible:bg-muted/25 focus-visible:outline-none"><td className="report-td">{fmtDate(row.date_bs)}</td><td className="report-td font-mono">{row.voucher_no}</td><td className="report-td"><Badge variant={voucherBadge(row.voucher_type)}>{row.voucher_type}</Badge></td><td className="report-td font-medium">{row.particulars}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.total)}</td><td className="report-td"><Badge variant="sales" className="bg-emerald-50 text-emerald-700">Active</Badge></td></tr>) : <tr><td colSpan={6} className="px-4 py-10 text-center text-muted-foreground">No posted transactions in this period.</td></tr>}</tbody></table></div></CardContent>
+      </Card>
+    </PageContent>
 
-      <InvoiceForm
-        type="Sales"
-        open={editing?.type === 'Sales'}
-        voucher={editing?.type === 'Sales' ? editing : null}
-        onClose={closeEdit}
-      />
-      <InvoiceForm
-        type="Purchase"
-        open={editing?.type === 'Purchase'}
-        voucher={editing?.type === 'Purchase' ? editing : null}
-        onClose={closeEdit}
-      />
-      <ReceiptPaymentForm
-        type="Receipt"
-        open={editing?.type === 'Receipt'}
-        voucher={editing?.type === 'Receipt' ? editing : null}
-        onClose={closeEdit}
-      />
-      <ReceiptPaymentForm
-        type="Payment"
-        open={editing?.type === 'Payment'}
-        voucher={editing?.type === 'Payment' ? editing : null}
-        onClose={closeEdit}
-      />
-      <JournalForm
-        open={editing?.type === 'Journal'}
-        voucher={editing?.type === 'Journal' ? editing : null}
-        onClose={closeEdit}
-      />
-      <ReturnForm type="Sales Return" open={editing?.type === 'Sales Return'} voucher={editing?.type === 'Sales Return' ? editing : null} onClose={closeEdit} />
-      <ReturnForm type="Purchase Return" open={editing?.type === 'Purchase Return'} voucher={editing?.type === 'Purchase Return' ? editing : null} onClose={closeEdit} />
-    </div>
-  )
+    <Dialog open={!!detail} onOpenChange={open => !open && setDetail(null)}><DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{detail?.type} {detail?.invoice_no ? `· ${detail.invoice_no}` : ''}</DialogTitle></DialogHeader>{detail && <VoucherDetail voucher={detail} />}</DialogContent></Dialog>
+  </div>
 }

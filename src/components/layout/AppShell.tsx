@@ -62,8 +62,8 @@ export function AppShell() {
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    const active = NAV_SECTIONS.find(section => section.label !== 'Overview' && section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
-    return new Set(active ? [active.label] : ['Transactions'])
+    const active = NAV_SECTIONS.find(section => section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    return new Set(active && active.label !== 'Overview' ? [active.label] : [])
   })
 
   useEffect(() => {
@@ -71,15 +71,18 @@ export function AppShell() {
   }, [])
 
   useEffect(() => {
-    const active = NAV_SECTIONS.find(section => section.label !== 'Overview' && section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
-    if (active) setOpenSections(current => current.has(active.label) ? current : new Set([...current, active.label]))
+    const active = NAV_SECTIONS.find(section => section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    if (!active) return
+    const activeLabel = active.label === 'Overview' ? null : active.label
+    setOpenSections(current => {
+      if (activeLabel && current.size === 1 && current.has(activeLabel)) return current
+      if (!activeLabel && current.size === 0) return current
+      return new Set(activeLabel ? [activeLabel] : [])
+    })
   }, [location.pathname])
 
   const toggleSection = (label: string) => setOpenSections(current => {
-    const next = new Set(current)
-    if (next.has(label)) next.delete(label)
-    else next.add(label)
-    return next
+    return current.has(label) ? new Set() : new Set([label])
   })
 
   const handleSignOut = async () => {
@@ -132,30 +135,34 @@ export function AppShell() {
             const expanded = !collapsible || openSections.has(section.label)
             const visibleItems = section.items.filter(item => vatEnabled || item.to !== '/vat-report')
             return <div key={section.label}>
-              {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center px-2 text-left text-[10px] font-semibold uppercase tracking-widest text-blue-300/50 hover:text-blue-200/80">
-                <span>{section.label}</span>{expanded ? <ChevronDown className="ml-auto h-3.5 w-3.5" /> : <ChevronRight className="ml-auto h-3.5 w-3.5" />}
+              {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium uppercase tracking-wider text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white">
+                <span>{section.label}</span><ChevronDown className={cn('ml-auto h-3.5 w-3.5 transition-transform duration-300 ease-out motion-reduce:transition-none', !expanded && '-rotate-90')} />
               </button> : <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">{section.label}</div>}
-              {expanded && <div id={`nav-section-${section.label.toLowerCase()}`} className="space-y-0.5">
-                {visibleItems.map(({ to, label, Icon, end }) => (
-                  <NavLink
-                    key={to}
-                    to={to}
-                    end={end}
-                    onClick={() => setMobileOpen(false)}
-                    className={({ isActive }) =>
-                      cn(
-                        'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
-                        isActive
-                          ? 'bg-white text-[#1B2A4A] font-semibold'
-                          : 'text-blue-100/80 hover:bg-white/10 hover:text-white'
-                      )
-                    }
-                  >
-                    <Icon className="h-4 w-4 flex-shrink-0" />
-                    <span>{label}</span>
-                  </NavLink>
-                ))}
-              </div>}
+              <div className={cn('grid', collapsible && 'transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
+                <div className="min-h-0 overflow-hidden">
+                  <div id={`nav-section-${section.label.toLowerCase()}`} aria-hidden={collapsible && !expanded} inert={collapsible && !expanded ? true : undefined} className="space-y-0.5">
+                    {visibleItems.map(({ to, label, Icon, end }) => (
+                      <NavLink
+                        key={to}
+                        to={to}
+                        end={end}
+                        onClick={() => setMobileOpen(false)}
+                        className={({ isActive }) =>
+                          cn(
+                            'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
+                            isActive
+                              ? 'bg-white text-[#1B2A4A] font-semibold'
+                              : 'text-blue-100/80 hover:bg-white/10 hover:text-white'
+                          )
+                        }
+                      >
+                        <Icon className="h-4 w-4 flex-shrink-0" />
+                        <span>{label}</span>
+                      </NavLink>
+                    ))}
+                  </div>
+                </div>
+              </div>
             </div>
           })}
           {developerAdmin && (

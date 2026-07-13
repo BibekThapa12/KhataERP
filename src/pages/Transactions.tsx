@@ -1,4 +1,5 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -20,12 +21,25 @@ function useVouchersByType(type: VoucherType) {
   )
 }
 
+function useCreateEntryRequest(setOpen: Dispatch<SetStateAction<boolean>>) {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requested = searchParams.get('new') === '1'
+  useEffect(() => {
+    if (!requested) return
+    setOpen(true)
+    const next = new URLSearchParams(searchParams)
+    next.delete('new')
+    setSearchParams(next, { replace: true })
+  }, [requested, searchParams, setOpen, setSearchParams])
+}
+
 // ─── Sales ────────────────────────────────────────────────────────────────────
 export function SalesPage() {
   const vatEnabled = useAppStore(s => s.company?.vat_enabled ?? true)
   const vouchers = useVouchersByType('Sales')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
+  useCreateEntryRequest(setOpen)
   return (
     <div>
       <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to Sundry Debtors (Customers)' : 'Internal sales records for bookkeeping'}
@@ -43,6 +57,7 @@ export function PurchasePage() {
   const vouchers = useVouchersByType('Purchase')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
+  useCreateEntryRequest(setOpen)
   return (
     <div>
       <PageHeader title="Purchase Bills" description="Goods bought from Sundry Creditors (Suppliers)"
@@ -80,6 +95,7 @@ export function ReceiptsPage() {
   const vouchers = useVouchersByType('Receipt')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
+  useCreateEntryRequest(setOpen)
   return (
     <div>
       <PageHeader title="Receipts" description="Money received from Sundry Debtors (Customers)"
@@ -97,6 +113,7 @@ export function PaymentsPage() {
   const vouchers = useVouchersByType('Payment')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
+  useCreateEntryRequest(setOpen)
   return (
     <div>
       <PageHeader title="Payments" description="Money paid to Sundry Creditors (Suppliers)"
@@ -114,6 +131,7 @@ export function JournalPage() {
   const vouchers = useVouchersByType('Journal')
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
+  useCreateEntryRequest(setOpen)
   return (
     <div>
       <PageHeader title="Journal Entries" description="Manual adjustments — depreciation, write-offs, opening balances"
