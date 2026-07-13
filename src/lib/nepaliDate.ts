@@ -23,6 +23,20 @@ export function formatBsParts({ year, month, day }: NepaliDateParts): string {
   return `${year}-${pad2(month)}-${pad2(day)}`
 }
 
+export function normalizeBsDateInput(value: string): string | null {
+  const input = value.trim()
+  if (parseBsDate(input)) return input
+
+  const compact = input.match(/^\d{6}$|^\d{8}$/)?.[0]
+  if (!compact) return null
+  const yearLength = compact.length === 6 ? 2 : 4
+  const year = Number(compact.slice(0, yearLength)) + (yearLength === 2 ? 2000 : 0)
+  const month = Number(compact.slice(yearLength, yearLength + 2))
+  const day = Number(compact.slice(yearLength + 2, yearLength + 4))
+  const formatted = formatBsParts({ year, month, day })
+  return parseBsDate(formatted) ? formatted : null
+}
+
 export function makeBsKey(bsDate: string): number {
   const parts = parseBsDate(bsDate)
   if (!parts) return 0

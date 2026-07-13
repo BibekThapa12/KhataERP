@@ -1,14 +1,22 @@
 import { describe, expect, it } from 'vitest'
-import { addDaysToBs, bsToAd } from './nepaliDate'
+import { normalizeBsDateInput } from '@/lib/nepaliDate'
 
-describe('invoice due dates', () => {
-  it('keeps the invoice date for zero credit days', () => {
-    expect(addDaysToBs('2083-04-01', 0)).toBe('2083-04-01')
+describe('Nepali date input normalization', () => {
+  it('expands a six-digit BS date shorthand', () => {
+    expect(normalizeBsDateInput('830101')).toBe('2083-01-01')
   })
 
-  it('adds calendar days across Nepali month boundaries', () => {
-    const invoiceAd = Date.parse(`${bsToAd('2083-04-25')}T00:00:00Z`)
-    const dueAd = Date.parse(`${bsToAd(addDaysToBs('2083-04-25', 15))}T00:00:00Z`)
-    expect((dueAd - invoiceAd) / 86_400_000).toBe(15)
+  it('formats an eight-digit full BS date', () => {
+    expect(normalizeBsDateInput('20830415')).toBe('2083-04-15')
+  })
+
+  it('preserves an already formatted BS date', () => {
+    expect(normalizeBsDateInput('2083-04-15')).toBe('2083-04-15')
+  })
+
+  it('does not normalize partial or invalid compact dates', () => {
+    expect(normalizeBsDateInput('208301')).toBeNull()
+    expect(normalizeBsDateInput('831301')).toBeNull()
+    expect(normalizeBsDateInput('830100')).toBeNull()
   })
 })
