@@ -1,6 +1,7 @@
 import type { Account, AccountCategory, AccountType, Company, Party, Voucher } from '@/types'
-import { buildCategoryTree, type CategoryTreeNode } from '@/lib/categoryHierarchy'
-import { normalSide, round2 } from '@/lib/engine'
+import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/categoryHierarchy'
+import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
+import { bankAccounts } from '@/lib/banks'
 import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 
 export interface DaybookRow {
@@ -37,6 +38,36 @@ export interface LedgerReport {
   rows: LedgerRow[]
   total_debit: number
   total_credit: number
+  closing_balance: number
+}
+
+export type CashFlowActivity = 'operating' | 'investing' | 'financing'
+
+export interface CashFlowRow {
+  voucher: Voucher
+  activity: CashFlowActivity
+  account_id: string
+  account_name: string
+  cash_accounts: string
+  amount: number
+}
+
+export interface CashFlowSection {
+  activity: CashFlowActivity
+  label: string
+  rows: CashFlowRow[]
+  inflow: number
+  outflow: number
+  net: number
+}
+
+export interface CashFlowReport {
+  cash_accounts: Account[]
+  opening_balance: number
+  sections: CashFlowSection[]
+  total_inflow: number
+  total_outflow: number
+  net_change: number
   closing_balance: number
 }
 
@@ -234,4 +265,105 @@ export function formatLedgerBalance(balance: number, account: Account | null) {
     ? (naturalSide === 'debit' ? 'Dr' : 'Cr')
     : (naturalSide === 'debit' ? 'Cr' : 'Dr')
   return `${Math.abs(balance).toLocaleString('en-NP', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${suffix}`
+}
+
+const CASH_FLOW_LABELS: Record<CashFlowActivity, string> = {
+  operating: 'Operating Activities',
+  investing: 'Investing Activities',
+  financing: 'Financing Activities',
+}
+
+export function classifyCashFlowAccount(account: Account, categories: AccountCategory[]): CashFlowActivity {
+  if (account.is_party || account.type === 'Income' || account.type === 'Expense') return 'operating'
+  if (account.type === 'Equity') return 'financing'
+
+  const classificationText = `${categoryPath(categories, account.category_id)} ${account.group} ${account.name}`.toLowerCase()
+  if (account.type === 'Asset' && /fixed asset|property|plant|equipment|furniture|vehicle|land|building|investment/.test(classificationText)) {
+    return 'investing'
+  }
+  if (account.type === 'Liability' && /loan|borrow|mortgage|finance/.test(classificationText)) {
+    return 'financing'
+  }
+  return 'operating'
+}
+
+export function computeCashFlow(
+  companyId: string,
+  accounts: Account[],
+  categories: AccountCategory[],
+  vouchers: Voucher[],
+  fromDate: string,
+  toDate: string,
+): CashFlowReport {
+  const cashId = resolveSystemAccountId(accounts, companyId, 'cash')
+  const defaultBankId = resolveSystemAccountId(accounts, companyId, 'bank')
+  const cashAccountIds = new Set([
+    cashId,
+    defaultBankId,
+    ...bankAccounts(accounts, categories, true).map(account => account.id),
+  ])
+  const cashAccounts = accounts.filter(account => cashAccountIds.has(account.id))
+  const accountMap = new Map(accounts.map(account => [account.id, account]))
+  const fromKey = makeBsKey(fromDate)
+  const toKey = makeBsKey(toDate)
+  let openingBalance = round2(cashAccounts.reduce((sum, account) => sum + (account.opening_balance || 0), 0))
+  const rows: CashFlowRow[] = []
+
+  for (const voucher of [...vouchers].sort(sortVouchers)) {
+    if (voucher.cancelled) continue
+    const key = voucherKey(voucher)
+    const cashLines = (voucher.lines || []).filter(line => cashAccountIds.has(line.account_id))
+    const cashMovement = round2(cashLines.reduce((sum, line) => sum + (line.debit || 0) - (line.credit || 0), 0))
+    if (key < fromKey) {
+      openingBalance = round2(openingBalance + cashMovement)
+      continue
+    }
+    if (key > toKey || Math.abs(cashMovement) < 0.005) continue
+
+    const candidates = (voucher.lines || []).flatMap(line => {
+      if (cashAccountIds.has(line.account_id)) return []
+      const account = accountMap.get(line.account_id)
+      const amount = cashMovement > 0 ? (line.credit || 0) : (line.debit || 0)
+      return account && amount > 0 ? [{ account, amount }] : []
+    })
+    const candidateTotal = candidates.reduce((sum, candidate) => sum + candidate.amount, 0)
+    if (candidateTotal <= 0) continue
+
+    const signedTotal = cashMovement
+    let allocated = 0
+    candidates.forEach((candidate, index) => {
+      const amount = index === candidates.length - 1
+        ? round2(signedTotal - allocated)
+        : round2(signedTotal * candidate.amount / candidateTotal)
+      allocated = round2(allocated + amount)
+      rows.push({
+        voucher,
+        activity: classifyCashFlowAccount(candidate.account, categories),
+        account_id: candidate.account.id,
+        account_name: candidate.account.name,
+        cash_accounts: [...new Set(cashLines.map(line => accountMap.get(line.account_id)?.name || line.account_id))].join(', '),
+        amount,
+      })
+    })
+  }
+
+  const sections = (['operating', 'investing', 'financing'] as CashFlowActivity[]).map(activity => {
+    const sectionRows = rows.filter(row => row.activity === activity)
+    const inflow = round2(sectionRows.reduce((sum, row) => sum + Math.max(row.amount, 0), 0))
+    const outflow = round2(sectionRows.reduce((sum, row) => sum + Math.max(-row.amount, 0), 0))
+    return { activity, label: CASH_FLOW_LABELS[activity], rows: sectionRows, inflow, outflow, net: round2(inflow - outflow) }
+  })
+  const totalInflow = round2(sections.reduce((sum, section) => sum + section.inflow, 0))
+  const totalOutflow = round2(sections.reduce((sum, section) => sum + section.outflow, 0))
+  const netChange = round2(totalInflow - totalOutflow)
+
+  return {
+    cash_accounts: cashAccounts,
+    opening_balance: openingBalance,
+    sections,
+    total_inflow: totalInflow,
+    total_outflow: totalOutflow,
+    net_change: netChange,
+    closing_balance: round2(openingBalance + netChange),
+  }
 }

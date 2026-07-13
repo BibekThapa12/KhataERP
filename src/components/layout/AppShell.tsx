@@ -1,12 +1,12 @@
 import { useEffect, useState } from 'react'
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { isDeveloperAdmin, signOut } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X
+  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
@@ -33,6 +33,7 @@ const NAV_SECTIONS: {
   {
     label: 'Masters',
     items: [
+      { to: '/accounts', label: 'Chart of Accounts', Icon: ListTree },
       { to: '/masters', label: 'Alter Masters', Icon: Database },
       { to: '/parties', label: 'Parties', Icon: Users },
       { to: '/items', label: 'Items & Stock', Icon: Package },
@@ -43,6 +44,7 @@ const NAV_SECTIONS: {
     items: [
       { to: '/reports/daybook', label: 'Daybook', Icon: CalendarDays },
       { to: '/reports/ledger', label: 'Ledger Report', Icon: Library },
+      { to: '/reports/cash-flow', label: 'Cash Flow', Icon: WalletCards },
       { to: '/trial-balance', label: 'Trial Balance', Icon: Scale },
       { to: '/profit-loss', label: 'Profit & Loss', Icon: BarChart2 },
       { to: '/balance-sheet', label: 'Balance Sheet', Icon: FileText },
@@ -55,13 +57,30 @@ const NAV_SECTIONS: {
 export function AppShell() {
   const company = useAppStore(s => s.company)
   const navigate = useNavigate()
+  const location = useLocation()
   const vatEnabled = company?.vat_enabled ?? true
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [openSections, setOpenSections] = useState<Set<string>>(() => {
+    const active = NAV_SECTIONS.find(section => section.label !== 'Overview' && section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    return new Set(active ? [active.label] : ['Transactions'])
+  })
 
   useEffect(() => {
     isDeveloperAdmin().then(setDeveloperAdmin)
   }, [])
+
+  useEffect(() => {
+    const active = NAV_SECTIONS.find(section => section.label !== 'Overview' && section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    if (active) setOpenSections(current => current.has(active.label) ? current : new Set([...current, active.label]))
+  }, [location.pathname])
+
+  const toggleSection = (label: string) => setOpenSections(current => {
+    const next = new Set(current)
+    if (next.has(label)) next.delete(label)
+    else next.add(label)
+    return next
+  })
 
   const handleSignOut = async () => {
     await signOut()
@@ -108,15 +127,16 @@ export function AppShell() {
 
         {/* Nav */}
         <nav className="flex-1 px-2 py-3 space-y-4">
-          {NAV_SECTIONS.map(section => (
-            <div key={section.label}>
-              <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">
-                {section.label}
-              </div>
-              <div className="space-y-0.5">
-                {section.items
-                  .filter(item => vatEnabled || item.to !== '/vat-report')
-                  .map(({ to, label, Icon, end }) => (
+          {NAV_SECTIONS.map(section => {
+            const collapsible = section.label !== 'Overview'
+            const expanded = !collapsible || openSections.has(section.label)
+            const visibleItems = section.items.filter(item => vatEnabled || item.to !== '/vat-report')
+            return <div key={section.label}>
+              {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center px-2 text-left text-[10px] font-semibold uppercase tracking-widest text-blue-300/50 hover:text-blue-200/80">
+                <span>{section.label}</span>{expanded ? <ChevronDown className="ml-auto h-3.5 w-3.5" /> : <ChevronRight className="ml-auto h-3.5 w-3.5" />}
+              </button> : <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">{section.label}</div>}
+              {expanded && <div id={`nav-section-${section.label.toLowerCase()}`} className="space-y-0.5">
+                {visibleItems.map(({ to, label, Icon, end }) => (
                   <NavLink
                     key={to}
                     to={to}
@@ -135,9 +155,9 @@ export function AppShell() {
                     <span>{label}</span>
                   </NavLink>
                 ))}
-              </div>
+              </div>}
             </div>
-          ))}
+          })}
           {developerAdmin && (
             <div>
               <div className="px-2 mb-1 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">

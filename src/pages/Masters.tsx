@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Archive, ExternalLink, Pencil, Plus, RotateCcw, Search } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
+import { AlertCircle, Archive, ChevronDown, ChevronRight, ExternalLink, FileText, Folder, FolderPlus, Landmark, MoreHorizontal, Package, Pencil, Plus, RotateCcw, Search, Tag, Trash2, UserRound, Wrench } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { fetchMasterChangeLogs } from '@/lib/supabase'
-import { fmtMoney } from '@/lib/utils'
-import { formatStockQuantity, toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
+import { cn, fmtMoney } from '@/lib/utils'
+import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
@@ -13,7 +14,6 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ItemForm } from '@/components/forms/OtherForms'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { normalizeSearch } from '@/lib/search'
 import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
@@ -22,7 +22,7 @@ import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterC
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
 
-function CategoryDialog({ kind, category, open, onClose }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void }) {
+export function CategoryDialog({ kind, category, parentCategory, open, onClose }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void }) {
   const { accountCategories, itemCategories, addAccountCategory, alterAccountCategory, addItemCategory, alterItemCategory } = useAppStore()
   const [name, setName] = useState('')
   const [type, setType] = useState<AccountType>('Expense')
@@ -33,10 +33,10 @@ function CategoryDialog({ kind, category, open, onClose }: { kind: 'account' | '
   useEffect(() => {
     if (!open) return
     setName(category?.name || '')
-    setType(kind === 'account' && category ? (category as AccountCategory).account_type : 'Expense')
-    setParentId(category?.parent_category_id || 'root')
+    setType(kind === 'account' && (category || parentCategory) ? ((category || parentCategory) as AccountCategory).account_type : 'Expense')
+    setParentId(category?.parent_category_id || parentCategory?.id || 'root')
     setError('')
-  }, [open, category, kind])
+  }, [open, category, parentCategory, kind])
 
   const save = async () => {
     if (!name.trim()) return setError('Enter a category name.')
@@ -73,7 +73,7 @@ function CategoryDialog({ kind, category, open, onClose }: { kind: 'account' | '
   )
 }
 
-function LedgerDialog({ account, party, open, onClose }: { account?: Account | null; party?: Party | null; open: boolean; onClose: () => void }) {
+export function LedgerDialog({ account, party, defaultCategoryId, open, onClose }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; open: boolean; onClose: () => void }) {
   const { accountCategories, addAccount, alterAccount, alterParty, vouchers } = useAppStore()
   const activeCategories = useMemo(() => accountCategories.filter(category => !category.is_archived), [accountCategories])
   const [name, setName] = useState('')
@@ -87,11 +87,11 @@ function LedgerDialog({ account, party, open, onClose }: { account?: Account | n
   useEffect(() => {
     if (!open) return
     setName(account?.name || '')
-    setCategoryId(account?.category_id || activeCategories[0]?.id || '')
+    setCategoryId(account?.category_id || defaultCategoryId || activeCategories[0]?.id || '')
     setPartyType(party?.type || 'customer')
     setOpeningBalance(String(account?.opening_balance || 0))
     setError('')
-  }, [open, account, party, activeCategories])
+  }, [open, account, party, defaultCategoryId, activeCategories])
 
   useEffect(() => {
     if (!party) return
@@ -141,7 +141,7 @@ function LedgerDialog({ account, party, open, onClose }: { account?: Account | n
   )
 }
 
-function ItemDialog({ item, open, onClose }: { item: Item | null; open: boolean; onClose: () => void }) {
+export function ItemDialog({ item, open, onClose }: { item: Item | null; open: boolean; onClose: () => void }) {
   const { itemCategories, vouchers, alterItem } = useAppStore()
   const [form, setForm] = useState({ name: '', category_id: '', unit: 'pcs', alternate_unit: '', alternate_conversion: '', sell_rate: '0', opening_qty: '0', opening_rate: '0', reorder_level: '', sku: '', barcode: '', vat_applicable: true })
   const [openingUnitMode, setOpeningUnitMode] = useState<UnitMode>('main')
@@ -201,26 +201,21 @@ function ItemDialog({ item, open, onClose }: { item: Item | null; open: boolean;
 
 export function MastersPage() {
   const navigate = useNavigate()
-  const { company, accounts, rawAccounts, accountCategories, parties, items, itemCategories, stock, alterAccount, alterParty, alterItem, alterAccountCategory, alterItemCategory } = useAppStore()
+  const { company, accounts, rawAccounts, accountCategories, parties, loading, error, alterAccount, alterParty, alterAccountCategory } = useAppStore()
   const [tab, setTab] = useState('ledgers')
-  const [searchByTab, setSearchByTab] = useState<Record<string, string>>({ ledgers: '', categories: '', items: '', history: '' })
+  const [searchByTab, setSearchByTab] = useState<Record<string, string>>({ ledgers: '', categories: '', history: '' })
   const [ledgerOpen, setLedgerOpen] = useState(false)
   const [editingAccount, setEditingAccount] = useState<Account | null>(null)
-  const [editingItem, setEditingItem] = useState<Item | null>(null)
-  const [newItemOpen, setNewItemOpen] = useState(false)
-  const [categoryDialog, setCategoryDialog] = useState<{ kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null } | null>(null)
+  const [categoryDialog, setCategoryDialog] = useState<{ category?: AccountCategory | null; parentCategory?: AccountCategory | null } | null>(null)
   const [changeLogs, setChangeLogs] = useState<MasterChangeLog[]>([])
   const [historyError, setHistoryError] = useState('')
   const search = searchByTab[tab] || ''
   const q = normalizeSearch(search)
   const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
-  const itemCategoryById = new Map(itemCategories.map(category => [category.id, { ...category, name: categoryPath(itemCategories, category.id) }]))
   const ledgerRows = rawAccounts.filter(account => { const party = partyByAccount.get(account.id); return !q || normalizeSearch(`${account.name} ${account.group} ${account.type} ${party?.name || ''} ${party ? partyTerminology(party.type).searchAliases : ''} ${account.is_archived || party?.is_archived ? 'archived' : account.is_system ? 'system' : 'active'}`).includes(q) }).sort((a, b) => a.name.localeCompare(b.name))
-  const itemRows = items.filter(item => !q || normalizeSearch(`${item.name} ${categoryPath(itemCategories, item.category_id)} ${item.unit} ${item.alternate_unit || ''} ${item.sku || ''} ${item.barcode || ''} ${item.is_archived ? 'archived' : 'active'}`).includes(q)).sort((a, b) => a.name.localeCompare(b.name))
-  const accountCategoryRows = flattenCategoryTree(buildCategoryTree(accountCategories, rawAccounts)).filter(node => !q || normalizeSearch(`${node.path} ${node.category.account_type} ${node.category.is_archived ? 'archived' : 'active'}`).includes(q))
-  const itemCategoryRows = flattenCategoryTree(buildCategoryTree(itemCategories, items)).filter(node => !q || normalizeSearch(`${node.path} item ${node.category.is_archived ? 'archived' : 'active'}`).includes(q))
+  const accountCategoryTree = buildCategoryTree(accountCategories, rawAccounts)
   const filteredChangeLogs = changeLogs.filter(log => !q || normalizeSearch(`${log.record_type} ${log.action} ${Object.keys(log.new_values || {}).join(' ')} ${new Date(log.created_at).toLocaleString()}`).includes(q))
-  const searchPlaceholder = `Search ${tab === 'items' ? 'items' : tab}…`
+  const searchPlaceholder = `Search ${tab}…`
   const selectedParty = editingAccount ? partyByAccount.get(editingAccount.id) : null
 
   useEffect(() => {
@@ -238,24 +233,145 @@ export function MastersPage() {
   return (
     <div><PageHeader title="Masters" description="Create, alter, categorize, archive, and restore business masters" />
       <PageContent className="space-y-4">
-        <Tabs value={tab} onValueChange={setTab}><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="ledgers">Ledgers</TabsTrigger><TabsTrigger value="categories">Categories</TabsTrigger><TabsTrigger value="items">Items & Stock</TabsTrigger><TabsTrigger value="history">Change History</TabsTrigger></TabsList></div>
-          <div className="flex flex-wrap gap-2"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearchByTab(current => ({ ...current, [tab]: event.target.value }))} placeholder={searchPlaceholder} className="w-full pl-8 sm:w-64" /></div>{tab === 'ledgers' && <Button onClick={() => openLedger()}><Plus className="mr-1.5 h-4 w-4" />New Ledger</Button>}{tab === 'items' && <Button onClick={() => setNewItemOpen(true)}><Plus className="mr-1.5 h-4 w-4" />New Item</Button>}</div></div>
-          {search && ((tab === 'ledgers' && ledgerRows.length === 0) || (tab === 'items' && itemRows.length === 0)) && <p className="w-full rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">No matching {tab}.</p>}
+        <Tabs value={tab} onValueChange={setTab}><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="ledgers">Ledgers</TabsTrigger><TabsTrigger value="categories">Account Categories</TabsTrigger><TabsTrigger value="history">Change History</TabsTrigger></TabsList></div>
+          <div className="flex flex-wrap gap-2">{tab !== 'categories' && <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearchByTab(current => ({ ...current, [tab]: event.target.value }))} placeholder={searchPlaceholder} className="w-full pl-8 sm:w-64" /></div>}{tab === 'ledgers' && <Button onClick={() => openLedger()}><Plus className="mr-1.5 h-4 w-4" />New Ledger</Button>}</div></div>
+          {search && tab === 'ledgers' && ledgerRows.length === 0 && <p className="w-full rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">No matching ledgers.</p>}
           <TabsContent value="ledgers"><Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Ledger</th><th className="report-th text-left">Category</th><th className="report-th text-left">Type</th><th className="report-th text-right">Balance</th><th className="report-th text-left">Status</th><th className="report-th"></th></tr></thead><tbody>{ledgerRows.map(account => { const current = accounts.find(item => item.id === account.id); const party = partyByAccount.get(account.id); const archived = party?.is_archived || account.is_archived; return <tr key={account.id} className={`border-t ${archived ? 'opacity-55' : ''}`}><td className="report-td font-medium">{account.name}{party && <span className="ml-2 text-xs text-muted-foreground">{partyTerminology(party.type).singular}</span>}</td><td className="report-td text-muted-foreground">{categoryPath(accountCategories, account.category_id) || account.group}</td><td className="report-td">{account.type}</td><td className="report-td text-right num font-semibold">{fmtMoney(current?.balance || 0)}</td><td className="report-td"><Badge variant={archived ? 'secondary' : account.is_system ? 'outline' : 'default'}>{archived ? 'Archived' : account.is_system ? 'System' : 'Active'}</Badge></td><td className="report-td"><div className="flex justify-end gap-1"><Button title="Open ledger report" variant="ghost" size="icon" onClick={() => navigate(`/reports/ledger?account=${encodeURIComponent(account.id)}`)}><ExternalLink className="h-4 w-4" /></Button><Button title="Alter ledger" variant="ghost" size="icon" onClick={() => openLedger(account)}><Pencil className="h-4 w-4" /></Button>{!account.is_system && <Button title={archived ? 'Restore ledger' : 'Archive ledger'} variant="ghost" size="icon" onClick={() => toggleLedger(account)}>{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button>}</div></td></tr>})}</tbody></table></div></Card></TabsContent>
-          <TabsContent value="categories"><div className="grid grid-cols-1 gap-4 xl:grid-cols-2"><CategoryTable title="Account Categories" rows={accountCategoryRows} onAdd={() => setCategoryDialog({ kind: 'account' })} onEdit={category => setCategoryDialog({ kind: 'account', category })} onArchive={category => alterAccountCategory(category.id, { is_archived: !category.is_archived })} /><CategoryTable title="Item Categories" rows={itemCategoryRows} onAdd={() => setCategoryDialog({ kind: 'item' })} onEdit={category => setCategoryDialog({ kind: 'item', category })} onArchive={category => alterItemCategory(category.id, { is_archived: !category.is_archived })} /></div></TabsContent>
-          <TabsContent value="items"><Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-left">Category</th><th className="report-th text-left">Units</th><th className="report-th text-right">Stock</th><th className="report-th text-right">Sell Rate</th><th className="report-th text-left">SKU / Barcode</th><th className="report-th"></th></tr></thead><tbody>{itemRows.map(item => { const current = stock.find(entry => entry.id === item.id); return <tr key={item.id} className={`border-t ${item.is_archived ? 'opacity-55' : ''}`}><td className="report-td font-medium">{item.name}{item.is_archived && <Badge variant="secondary" className="ml-2">Archived</Badge>}</td><td className="report-td text-muted-foreground">{itemCategoryById.get(item.category_id || '')?.name || 'General'}</td><td className="report-td">{item.unit}{item.alternate_unit ? <span className="block text-xs text-muted-foreground">1 {item.unit} = {item.alternate_conversion} {item.alternate_unit}</span> : null}</td><td className="report-td text-right num">{formatStockQuantity(current?.qty || 0, item)}</td><td className="report-td text-right num">{fmtMoney(item.sell_rate)}</td><td className="report-td text-xs text-muted-foreground">{item.sku || '-'} / {item.barcode || '-'}</td><td className="report-td"><div className="flex justify-end gap-1"><Button title="Alter item" variant="ghost" size="icon" onClick={() => setEditingItem(item)}><Pencil className="h-4 w-4" /></Button><Button title={item.is_archived ? 'Restore item' : 'Archive item'} variant="ghost" size="icon" onClick={() => alterItem(item.id, { is_archived: !item.is_archived })}>{item.is_archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button></div></td></tr>})}</tbody></table></div></Card></TabsContent>
+          <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="account" title="Account Categories" rows={accountCategoryTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as AccountCategory })} onEdit={category => setCategoryDialog({ category: category as AccountCategory })} onArchive={category => alterAccountCategory(category.id, { is_archived: !category.is_archived })} /><CategoryLegend kind="account" /></div></TabsContent>
           <TabsContent value="history"><Card className="overflow-hidden">{historyError ? <p className="p-4 text-sm text-destructive">{historyError}</p> : <div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">When</th><th className="report-th text-left">Record</th><th className="report-th text-left">Action</th><th className="report-th text-left">Changed Fields</th></tr></thead><tbody>{filteredChangeLogs.map(log => <tr key={log.id} className="border-t"><td className="report-td whitespace-nowrap text-muted-foreground">{new Date(log.created_at).toLocaleString()}</td><td className="report-td font-medium">{log.record_type.replaceAll('_', ' ')}</td><td className="report-td">{log.action.replaceAll('_', ' ')}</td><td className="report-td text-muted-foreground">{Object.keys(log.new_values || {}).join(', ') || '-'}</td></tr>)}{filteredChangeLogs.length === 0 && <tr><td colSpan={4} className="p-12 text-center text-muted-foreground">{search ? 'No matching history records.' : 'No master changes recorded yet.'}</td></tr>}</tbody></table></div>}</Card></TabsContent>
         </Tabs>
       </PageContent>
       <LedgerDialog account={editingAccount} party={selectedParty} open={ledgerOpen} onClose={() => { setLedgerOpen(false); setEditingAccount(null) }} />
-      <ItemDialog item={editingItem} open={!!editingItem} onClose={() => setEditingItem(null)} />
-      <ItemForm open={newItemOpen} onClose={() => setNewItemOpen(false)} />
-      <CategoryDialog kind={categoryDialog?.kind || 'account'} category={categoryDialog?.category} open={!!categoryDialog} onClose={() => setCategoryDialog(null)} />
+      <CategoryDialog kind="account" category={categoryDialog?.category} parentCategory={categoryDialog?.parentCategory} open={!!categoryDialog} onClose={() => setCategoryDialog(null)} />
     </div>
   )
 }
 
 type CategoryRow = CategoryTreeNode<AccountCategory, Account> | CategoryTreeNode<ItemCategory, Item>
-function CategoryTable({ title, rows, onAdd, onEdit, onArchive }: { title: string; rows: CategoryRow[]; onAdd: () => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => void }) {
-  return <Card className="overflow-hidden"><div className="flex items-center justify-between border-b p-4"><h3 className="font-serif font-bold">{title}</h3><Button size="sm" variant="outline" onClick={onAdd}><Plus className="mr-1 h-3.5 w-3.5" />New</Button></div><table className="w-full text-sm"><tbody>{rows.map(row => { const category = row.category; const system = 'is_system' in category && category.is_system; return <tr key={category.id} className={`border-t first:border-t-0 ${category.is_archived ? 'opacity-55' : ''}`}><td className="px-4 py-3 font-medium" style={{ paddingLeft: `${1 + (row.depth - 1) * 1.25}rem` }}>{category.name}<p className="text-xs font-normal text-muted-foreground">{'account_type' in category ? category.account_type : 'Item category'} · {row.directCount} direct / {row.totalCount} total</p></td><td className="px-4 py-3"><div className="flex justify-end gap-1">{!system && <Button title="Alter category" variant="ghost" size="icon" onClick={() => onEdit(category)}><Pencil className="h-4 w-4" /></Button>}<Button title={category.is_archived ? 'Restore category' : 'Archive category'} variant="ghost" size="icon" disabled={system || (!category.is_archived && row.totalCount > 0)} onClick={() => onArchive(category)}>{category.is_archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button></div></td></tr>})}{rows.length === 0 && <tr><td colSpan={2} className="p-10 text-center text-muted-foreground">No matching categories.</td></tr>}</tbody></table></Card>
+
+type CategoryStatus = 'all' | 'active' | 'inactive'
+
+function filterCategoryTree(rows: CategoryRow[], query: string, status: CategoryStatus): CategoryRow[] {
+  return rows.flatMap(row => {
+    const children = filterCategoryTree(row.children, query, status)
+    const statusMatches = status === 'all' || (status === 'inactive' ? row.category.is_archived : !row.category.is_archived)
+    const queryMatches = !query || normalizeSearch(`${row.path} ${'account_type' in row.category ? row.category.account_type : 'item category'} ${row.category.is_archived ? 'inactive archived' : 'active'}`).includes(query)
+    return (statusMatches && queryMatches) || children.length ? [{ ...row, children } as CategoryRow] : []
+  })
+}
+
+function flattenVisibleCategoryTree(rows: CategoryRow[], expanded: Set<string>, revealAll: boolean): CategoryRow[] {
+  return rows.flatMap(row => [row, ...(revealAll || expanded.has(row.category.id) ? flattenVisibleCategoryTree(row.children, expanded, revealAll) : [])])
+}
+
+function CategoryIcon({ kind, row, childCount = row.children.length, className = 'h-4 w-4' }: { kind: 'account' | 'item'; row: CategoryRow; childCount?: number; className?: string }) {
+  const name = row.category.name.toLowerCase()
+  const iconClass = cn(className, 'shrink-0 text-[#806f5b]')
+  if (childCount) return <Folder className={iconClass} />
+  if (kind === 'item') {
+    if (/repair|maintenance|service/.test(name)) return <Wrench className={iconClass} />
+    if (row.depth >= 3 || /accessor/.test(name)) return <Tag className={iconClass} />
+    return <Package className={iconClass} />
+  }
+  if (/bank/.test(name)) return <Landmark className={iconClass} />
+  if (/debtor|creditor|customer|supplier/.test(name)) return <UserRound className={iconClass} />
+  return <FileText className={iconClass} />
+}
+
+export function CategoryLegend({ kind }: { kind: 'account' | 'item' }) {
+  const entries = [
+    { label: 'Parent Category', icon: Folder },
+    { label: kind === 'account' ? 'Account Category' : 'Item Category', icon: kind === 'account' ? Landmark : Package },
+    { label: 'Sub Category', icon: Tag },
+    { label: 'Leaf Category', icon: FileText },
+  ]
+  return <div className="col-span-full flex flex-wrap items-center gap-x-8 gap-y-2 border-l px-4 py-1 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Legend:</span>{entries.map(entry => <span key={entry.label} className="flex items-center gap-2"><entry.icon className="h-4 w-4 text-[#806f5b]" />{entry.label}</span>)}</div>
+}
+
+function CategoryActions({ row, onAddChild, onEdit, onArchive, onError }: { row: CategoryRow; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void; onError: (message: string) => void }) {
+  const category = row.category
+  const system = 'is_system' in category && category.is_system
+  const canAddChild = row.depth < 3 && !category.is_archived
+  const canDelete = !system && !category.is_archived && row.totalCount === 0
+  const runArchive = async () => {
+    try { await onArchive(category) } catch (error: unknown) { onError((error as Error).message) }
+  }
+
+  return <DropdownMenuPrimitive.Root>
+    <DropdownMenuPrimitive.Trigger asChild>
+      <Button type="button" variant="ghost" size="icon" className="h-7 w-7 shrink-0" aria-label={`Actions for ${category.name}`} onClick={event => event.stopPropagation()}><MoreHorizontal className="h-4 w-4" /></Button>
+    </DropdownMenuPrimitive.Trigger>
+    <DropdownMenuPrimitive.Portal>
+      <DropdownMenuPrimitive.Content align="end" sideOffset={4} className="z-[80] min-w-44 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md">
+        <DropdownMenuPrimitive.Item disabled={system} onSelect={() => onEdit(category)} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><Pencil className="h-3.5 w-3.5" />Edit</DropdownMenuPrimitive.Item>
+        <DropdownMenuPrimitive.Item disabled={!canAddChild} onSelect={() => onAddChild(category)} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><FolderPlus className="h-3.5 w-3.5" />Add child category</DropdownMenuPrimitive.Item>
+        <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
+        {category.is_archived
+          ? <DropdownMenuPrimitive.Item disabled={system} onSelect={runArchive} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><RotateCcw className="h-3.5 w-3.5" />Restore</DropdownMenuPrimitive.Item>
+          : <DropdownMenuPrimitive.Item disabled={!canDelete} onSelect={runArchive} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-destructive outline-none focus:bg-destructive/10 data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><Trash2 className="h-3.5 w-3.5" />Delete</DropdownMenuPrimitive.Item>}
+      </DropdownMenuPrimitive.Content>
+    </DropdownMenuPrimitive.Portal>
+  </DropdownMenuPrimitive.Root>
+}
+
+export function CategoryTable({ kind, title, rows, loading, error, onAdd, onAddChild, onEdit, onArchive }: { kind: 'account' | 'item'; title: string; rows: CategoryRow[]; loading: boolean; error: string | null; onAdd: () => void; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void }) {
+  const initialIds = () => new Set(flattenCategoryTree(rows).filter(row => row.children.length).map(row => row.category.id))
+  const [expanded, setExpanded] = useState<Set<string>>(initialIds)
+  const [selectedId, setSelectedId] = useState<string | null>(() => rows[0]?.category.id || null)
+  const [search, setSearch] = useState('')
+  const [status, setStatus] = useState<CategoryStatus>('all')
+  const [actionError, setActionError] = useState('')
+  const knownIds = useRef(new Set(flattenCategoryTree(rows).map(row => row.category.id)))
+  const query = normalizeSearch(search)
+  const filteredTree = filterCategoryTree(rows, query, status)
+  const visibleRows = flattenVisibleCategoryTree(filteredTree, expanded, !!query)
+  const recordLabel = kind === 'account' ? 'account' : 'item'
+  const childCountById = new Map(flattenCategoryTree(rows).map(row => [row.category.id, row.children.length]))
+
+  useEffect(() => {
+    const allRows = flattenCategoryTree(rows)
+    const newParents = allRows.filter(row => row.children.length && !knownIds.current.has(row.category.id)).map(row => row.category.id)
+    if (newParents.length) setExpanded(current => new Set([...current, ...newParents]))
+    knownIds.current = new Set(allRows.map(row => row.category.id))
+  }, [rows])
+
+  useEffect(() => {
+    if (!selectedId && rows[0]) setSelectedId(rows[0].category.id)
+  }, [rows, selectedId])
+
+  const toggle = (id: string) => setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next })
+
+  return <Card className="min-w-0 overflow-hidden">
+    <div className="border-b p-4">
+      <div className="flex items-center justify-between gap-3"><h3 className="min-w-0 truncate font-serif font-bold">{title}</h3><Button size="sm" variant="outline" onClick={onAdd}><Plus className="mr-1 h-3.5 w-3.5" />New</Button></div>
+      <div className="mt-4 flex flex-col gap-2 sm:flex-row">
+        <div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}...`} className="w-full pl-8" /></div>
+        <SearchableSelect value={status} onValueChange={value => setStatus(value as CategoryStatus)} className="sm:w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} />
+      </div>
+    </div>
+    {(error || actionError) && <div role="alert" className="flex items-start gap-2 border-b bg-destructive/5 px-3 py-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" /><span>{actionError || error}</span></div>}
+    {loading ? <div className="space-y-px bg-border" aria-label={`Loading ${title.toLowerCase()}`}>{[0, 1, 2, 3].map(index => <div key={index} className="flex h-12 items-center gap-3 bg-card px-3"><div className="h-4 w-4 animate-pulse rounded bg-muted" /><div className="h-3 animate-pulse rounded bg-muted" style={{ width: `${45 + index * 8}%` }} /></div>)}</div>
+      : visibleRows.length ? <div role="tree" aria-label={title} className="divide-y">
+        {visibleRows.map(row => {
+          const category = row.category
+          const hasChildren = row.children.length > 0
+          const childCount = childCountById.get(category.id) || 0
+          const open = !!query || expanded.has(category.id)
+          const selected = selectedId === category.id
+          return <div key={category.id} role="treeitem" aria-level={row.depth} aria-expanded={hasChildren ? open : undefined} aria-selected={selected} tabIndex={0} onClick={() => setSelectedId(category.id)} onFocus={() => setSelectedId(category.id)} className={cn('group relative grid min-h-12 cursor-default grid-cols-[minmax(0,1fr)_auto] items-center gap-2 px-2 py-1.5 outline-none transition-colors hover:bg-muted/40 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-ring', selected && 'bg-muted/60', category.is_archived && 'text-muted-foreground')}>
+            {row.depth > 1 && <><span aria-hidden="true" className="pointer-events-none absolute inset-y-0 border-l border-dashed border-border" style={{ left: `${0.75 + (row.depth - 1) * 1.125}rem` }} /><span aria-hidden="true" className="pointer-events-none absolute w-4 border-t border-dashed border-border" style={{ left: `${0.75 + (row.depth - 1) * 1.125}rem`, top: '50%' }} /></>}
+            <div className="flex min-w-0 items-center" style={{ paddingLeft: `${(row.depth - 1) * 1.125}rem` }}>
+              {hasChildren ? <button type="button" aria-label={`${open ? 'Collapse' : 'Expand'} ${category.name}`} className="mr-1 flex h-6 w-6 shrink-0 items-center justify-center rounded-sm text-muted-foreground hover:bg-background hover:text-foreground" onClick={event => { event.stopPropagation(); toggle(category.id) }}>{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</button> : <span className="mr-1 h-6 w-6 shrink-0" />}
+              <CategoryIcon kind={kind} row={row} childCount={childCount} />
+              <div className="ml-3 min-w-0"><div className="flex min-w-0 items-center gap-2"><span className="truncate text-sm font-semibold">{category.name}</span>{category.is_archived && <Badge variant="secondary" className="shrink-0 px-1.5 py-0 text-[10px]">Inactive</Badge>}</div><p className="truncate text-[11px] text-muted-foreground">{'account_type' in category ? category.account_type : 'Item category'}</p></div>
+            </div>
+            <div className="flex items-center gap-1.5">
+              <div className="hidden items-center gap-3 whitespace-nowrap text-[11px] text-muted-foreground sm:flex"><span title={`Records directly assigned to ${category.name}`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{row.directCount}</strong> direct</span><span title={`Records in ${category.name} and all child categories`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{row.totalCount}</strong> total</span><span title={`Categories immediately below ${category.name}`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{childCount}</strong> {childCount === 1 ? 'child' : 'children'}</span></div>
+              <CategoryActions row={row} onAddChild={onAddChild} onEdit={onEdit} onArchive={onArchive} onError={setActionError} />
+            </div>
+            <p className="col-span-2 pl-7 text-[11px] text-muted-foreground sm:hidden" style={{ marginLeft: `${(row.depth - 1) * 1.125}rem` }}>{row.directCount} direct {recordLabel}{row.directCount === 1 ? '' : 's'} / {row.totalCount} total {recordLabel}{row.totalCount === 1 ? '' : 's'} / {childCount} {childCount === 1 ? 'child' : 'children'}</p>
+          </div>
+        })}
+      </div> : <div className="px-4 py-10 text-center"><p className="text-sm font-medium">{search || status !== 'all' ? 'No matching categories' : 'No categories yet'}</p><p className="mt-1 text-xs text-muted-foreground">{search || status !== 'all' ? 'Try changing your search or status filter.' : `Create a ${recordLabel} category to get started.`}</p></div>}
+  </Card>
 }

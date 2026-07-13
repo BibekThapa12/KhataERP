@@ -15,6 +15,7 @@ const PaymentsPage = lazy(() => import('@/pages/Payments').then(m => ({ default:
 const JournalPage = lazy(() => import('@/pages/Journal').then(m => ({ default: m.JournalPage })))
 const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
+const AccountsPage = lazy(() => import('@/pages/Accounts').then(m => ({ default: m.AccountsPage })))
 const MastersPage = lazy(() => import('@/pages/Masters').then(m => ({ default: m.MastersPage })))
 const TrialBalancePage = lazy(() => import('@/pages/reports/TrialBalance').then(m => ({ default: m.TrialBalancePage })))
 const ProfitLossPage = lazy(() => import('@/pages/reports/ProfitLoss').then(m => ({ default: m.ProfitLossPage })))
@@ -23,6 +24,7 @@ const VatReportPage = lazy(() => import('@/pages/reports/VatReport').then(m => (
 const StockReportPage = lazy(() => import('@/pages/reports/StockReport').then(m => ({ default: m.StockReportPage })))
 const DaybookPage = lazy(() => import('@/pages/reports/Daybook').then(m => ({ default: m.DaybookPage })))
 const LedgerReportPage = lazy(() => import('@/pages/reports/LedgerReport').then(m => ({ default: m.LedgerReportPage })))
+const CashFlowPage = lazy(() => import('@/pages/reports/CashFlow').then(m => ({ default: m.CashFlowPage })))
 const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default: m.SettingsPage })))
 const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
 
@@ -175,7 +177,7 @@ export default function App() {
             <Route path="transactions/journal" element={<JournalPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />
-            <Route path="accounts" element={<Navigate to="/masters" replace />} />
+            <Route path="accounts" element={<AccountsPage />} />
             <Route path="masters" element={<MastersPage />} />
             <Route path="trial-balance" element={<TrialBalancePage />} />
             <Route path="profit-loss" element={<ProfitLossPage />} />
@@ -184,6 +186,7 @@ export default function App() {
             <Route path="stock-report" element={<StockReportPage />} />
             <Route path="reports/daybook" element={<DaybookPage />} />
             <Route path="reports/ledger" element={<LedgerReportPage />} />
+            <Route path="reports/cash-flow" element={<CashFlowPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="developer" element={<DeveloperDashboard />} />
           </Route>

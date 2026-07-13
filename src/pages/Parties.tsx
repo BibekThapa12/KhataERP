@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import { Plus, Eye, Printer, Share2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent } from '@/lib/supabase'
@@ -109,7 +110,7 @@ function PartyLedger({ party }: { party: Party }) {
   )
 }
 
-function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
+function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 'supplier'; selectedPartyId?: string | null }) {
   const { parties, accounts } = useAppStore()
   const [selected, setSelected] = useState<Party | null>(null)
   const terminology = partyTerminology(partyType)
@@ -117,6 +118,12 @@ function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
     .filter(p => p.type === partyType && !p.is_archived)
     .map(p => ({ ...p, account: accounts.find(a => a.id === p.account_id) }))
     .sort((a, b) => a.name.localeCompare(b.name))
+
+  useEffect(() => {
+    if (!selectedPartyId) return
+    const party = parties.find(entry => entry.id === selectedPartyId && entry.type === partyType)
+    if (party) setSelected(party)
+  }, [selectedPartyId, partyType, parties])
 
   if (list.length === 0) {
     return (
@@ -178,20 +185,30 @@ function PartyTable({ partyType }: { partyType: 'customer' | 'supplier' }) {
 }
 
 export function PartiesPage() {
+  const [searchParams] = useSearchParams()
+  const parties = useAppStore(state => state.parties)
+  const selectedPartyId = searchParams.get('party')
+  const selectedParty = parties.find(party => party.id === selectedPartyId)
+  const [tab, setTab] = useState<'customer' | 'supplier'>(selectedParty?.type || 'customer')
   const [showForm, setShowForm] = useState(false)
+
+  useEffect(() => {
+    if (selectedParty) setTab(selectedParty.type)
+  }, [selectedParty])
+
   return (
     <div>
       <PageHeader title="Parties" description="Sundry Debtors (Customers) and Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button>} />
       <PageContent>
-        <Tabs defaultValue="customer">
+        <Tabs value={tab} onValueChange={value => setTab(value as 'customer' | 'supplier')}>
           <TabsList className="mb-4">
             <TabsTrigger value="customer">Sundry Debtors (Customers)</TabsTrigger>
             <TabsTrigger value="supplier">Sundry Creditors (Suppliers)</TabsTrigger>
           </TabsList>
           <Card>
-            <TabsContent value="customer" className="mt-0"><PartyTable partyType="customer" /></TabsContent>
-            <TabsContent value="supplier" className="mt-0"><PartyTable partyType="supplier" /></TabsContent>
+            <TabsContent value="customer" className="mt-0"><PartyTable partyType="customer" selectedPartyId={selectedPartyId} /></TabsContent>
+            <TabsContent value="supplier" className="mt-0"><PartyTable partyType="supplier" selectedPartyId={selectedPartyId} /></TabsContent>
           </Card>
         </Tabs>
       </PageContent>
