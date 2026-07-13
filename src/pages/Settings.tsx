@@ -12,6 +12,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import type { InventoryValuationMethod } from '@/types'
 
 export function SettingsPage() {
   const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError } = useAppStore()
@@ -20,6 +21,7 @@ export function SettingsPage() {
   const [panVat, setPanVat] = useState(company?.pan_vat ?? '')
   const [phone, setPhone] = useState(company?.phone ?? '')
   const [vatEnabled, setVatEnabled] = useState(company?.vat_enabled ?? true)
+  const [valuationMethod, setValuationMethod] = useState<InventoryValuationMethod>(company?.inventory_valuation_method || 'weighted_average')
   const [fiscalYearStartBs, setFiscalYearStartBs] = useState(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
   const [salesPrefix, setSalesPrefix] = useState(company?.sales_prefix ?? 'INV-')
   const [purchasePrefix, setPurchasePrefix] = useState(company?.purchase_prefix ?? 'PB-')
@@ -44,6 +46,7 @@ export function SettingsPage() {
     setPanVat(company?.pan_vat ?? '')
     setPhone(company?.phone ?? '')
     setVatEnabled(company?.vat_enabled ?? true)
+    setValuationMethod(company?.inventory_valuation_method || 'weighted_average')
     setFiscalYearStartBs(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
     setSalesPrefix(company?.sales_prefix ?? 'INV-')
     setPurchasePrefix(company?.purchase_prefix ?? 'PB-')
@@ -65,6 +68,7 @@ export function SettingsPage() {
       setSaveError('Enter fiscal year start in YYYY-MM-DD BS format.')
       return
     }
+    if (valuationMethod !== (company?.inventory_valuation_method || 'weighted_average') && !window.confirm('Changing the inventory valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
     setSaving(true)
     try {
       await saveCompany({
@@ -73,6 +77,7 @@ export function SettingsPage() {
         pan_vat: panVat.trim(),
         phone: phone.trim(),
         vat_enabled: vatEnabled,
+        inventory_valuation_method: valuationMethod,
         fiscal_year_start: fiscalYearStartAd,
         sales_prefix: salesPrefix.trim() || 'INV-',
         purchase_prefix: purchasePrefix.trim() || 'PB-',
@@ -143,7 +148,7 @@ export function SettingsPage() {
       if (backup.company) {
         const { id, user_id, created_at, ...companyUpdates } = backup.company
         void id; void user_id; void created_at
-        await saveCompany(companyUpdates)
+        await saveCompany({ ...companyUpdates, inventory_valuation_method: companyUpdates.inventory_valuation_method || 'weighted_average' })
       }
 
       const normalizedAccounts = Array.isArray(backup.accounts)
@@ -272,6 +277,11 @@ export function SettingsPage() {
               <p className="text-xs text-muted-foreground">
                 Stored as AD internally: {fiscalYearStartAd || 'Enter a valid BS date'}
               </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Inventory Valuation Method</Label>
+              <SearchableSelect value={valuationMethod} onValueChange={value => setValuationMethod(value as InventoryValuationMethod)} options={[{ value: 'weighted_average', label: 'Perpetual Weighted Average' }, { value: 'fifo', label: 'FIFO (First In, First Out)' }, { value: 'lifo', label: 'LIFO (Last In, First Out)' }]} />
+              <p className="text-xs text-muted-foreground">Controls stock value, issue cost, P&amp;L, and Balance Sheet calculations.</p>
             </div>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">

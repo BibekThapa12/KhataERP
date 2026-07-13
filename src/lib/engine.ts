@@ -1,6 +1,6 @@
 import type {
   Account, AccountType, Voucher, VoucherLine,
-  TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item
+  TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item, InventoryValuationMethod
 } from '@/types'
 import { makeBsKey } from '@/lib/nepaliDate'
 import { toBaseQty, toBaseRate } from '@/lib/units'
@@ -9,9 +9,6 @@ import { toBaseQty, toBaseRate } from '@/lib/units'
 
 export const round2 = (n: number): number =>
   Math.round((Number(n) + Number.EPSILON) * 100) / 100
-
-const round4 = (n: number): number =>
-  Math.round((Number(n) + Number.EPSILON) * 10000) / 10000
 
 export function normalSide(type: AccountType): 'debit' | 'credit' {
   return type === 'Asset' || type === 'Expense' ? 'debit' : 'credit'
@@ -97,36 +94,7 @@ export function recomputeAllBalances(accounts: Account[], vouchers: Voucher[]): 
   return Array.from(byId.values())
 }
 
-export function recomputeStock(items: Item[], vouchers: Voucher[]): StockEntry[] {
-  const stock = new Map(items.map(i => [i.id, {
-    id: i.id, name: i.name, unit: i.unit,
-    qty: i.opening_qty || 0,
-    avg_cost: i.opening_rate || 0,
-    value: round2((i.opening_qty || 0) * (i.opening_rate || 0)),
-  }]))
-  const sorted = [...vouchers].sort((a, b) =>
-    (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
-  )
-  for (const v of sorted) {
-    if (v.cancelled || !v.stock_lines) continue
-    for (const sl of v.stock_lines) {
-      const s = stock.get(sl.item_id)
-      if (!s) continue
-      if (sl.direction === 'in') {
-        const newQty = round2(s.qty + sl.qty)
-        const newValue = round2(s.value + sl.qty * sl.rate)
-        s.qty = newQty
-        s.value = newValue
-        s.avg_cost = newQty > 0 ? round2(newValue / newQty) : 0
-      } else {
-        s.qty = round2(s.qty - sl.qty)
-        s.value = round2(s.value - sl.qty * s.avg_cost)
-        if (s.qty <= 0.0001) { s.qty = 0; s.value = 0 }
-      }
-    }
-  }
-  return Array.from(stock.values())
-}
+const roundQty = (n: number) => Math.round((Number(n) + Number.EPSILON) * 10_000) / 10_000
 
 export interface StockSummaryMovement {
   id: string
@@ -141,9 +109,11 @@ export interface StockSummaryMovement {
   closing_value: number
 }
 
-/** Replays active stock movements chronologically so outward value uses the
- * weighted-average cost that applied at the time of each movement. */
-export function computeStockSummary(items: Item[], vouchers: Voucher[]): StockSummaryMovement[] {
+interface CostLayer { qty: number; rate: number; sourceVoucherId: string }
+interface InventoryState { qty: number; value: number; layers: CostLayer[] }
+interface IssueCost { qty: number; value: number; rate: number }
+
+function replayInventory(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod) {
   const summary = new Map(items.map(item => {
     const openingQty = item.opening_qty || 0
     const openingValue = round2(openingQty * (item.opening_rate || 0))
@@ -160,6 +130,13 @@ export function computeStockSummary(items: Item[], vouchers: Voucher[]): StockSu
       closing_value: openingValue,
     }]
   }))
+  const states = new Map(items.map(item => {
+    const qty = item.opening_qty || 0
+    const rate = item.opening_rate || 0
+    return [item.id, { qty, value: round2(qty * rate), layers: qty > 0 ? [{ qty, rate, sourceVoucherId: `opening:${item.id}` }] : [] } as InventoryState]
+  }))
+  const issueCosts = new Map<string, IssueCost>()
+  const voucherById = new Map(vouchers.map(voucher => [voucher.id, voucher]))
 
   const sorted = [...vouchers].sort((a, b) =>
     (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
@@ -168,29 +145,82 @@ export function computeStockSummary(items: Item[], vouchers: Voucher[]): StockSu
     if (voucher.cancelled || !voucher.stock_lines) continue
     for (const line of voucher.stock_lines) {
       const row = summary.get(line.item_id)
-      if (!row) continue
+      const state = states.get(line.item_id)
+      if (!row || !state) continue
       if (line.direction === 'in') {
-        const movementValue = round2(line.qty * line.rate)
+        const originalIssue = voucher.type === 'Sales Return' && voucher.original_voucher_id
+          ? issueCosts.get(`${voucher.original_voucher_id}:${line.item_id}`)
+          : undefined
+        const rate = originalIssue?.rate ?? line.rate
+        const movementValue = round2(line.qty * rate)
+        state.qty = roundQty(state.qty + line.qty)
+        state.value = round2(state.value + movementValue)
+        if (line.qty > 0) state.layers.push({ qty: line.qty, rate, sourceVoucherId: voucher.id })
         row.inward_qty = round2(row.inward_qty + line.qty)
         row.inward_value = round2(row.inward_value + movementValue)
-        row.closing_qty = round2(row.closing_qty + line.qty)
-        row.closing_value = round2(row.closing_value + movementValue)
-        row.closing_rate = row.closing_qty > 0 ? round2(row.closing_value / row.closing_qty) : 0
       } else {
-        const movementValue = round2(line.qty * row.closing_rate)
+        const original = voucher.original_voucher_id ? voucherById.get(voucher.original_voucher_id) : undefined
+        const originalRate = voucher.type === 'Purchase Return'
+          ? original?.stock_lines?.find(stockLine => stockLine.item_id === line.item_id && stockLine.direction === 'in')?.rate
+          : undefined
+        const availableQty = Math.min(line.qty, state.qty)
+        let movementValue = 0
+        if (method === 'weighted_average') {
+          const issueRate = originalRate ?? (state.qty > 0 ? state.value / state.qty : 0)
+          movementValue = round2(availableQty * issueRate)
+          state.qty = roundQty(state.qty - availableQty)
+          state.value = Math.max(0, round2(state.value - movementValue))
+          if (state.qty <= 0.0001) { state.qty = 0; state.value = 0 }
+        } else {
+          let remaining = availableQty
+          const consume = (preferredSource?: string) => {
+            const indexes = state.layers.map((_, index) => index)
+            if (method === 'lifo') indexes.reverse()
+            for (const index of indexes) {
+              const layer = state.layers[index]
+              if (remaining <= 0 || !layer || (preferredSource && layer.sourceVoucherId !== preferredSource)) continue
+              const used = Math.min(remaining, layer.qty)
+              movementValue = round2(movementValue + used * layer.rate)
+              layer.qty = roundQty(layer.qty - used)
+              remaining = roundQty(remaining - used)
+            }
+          }
+          if (voucher.type === 'Purchase Return' && voucher.original_voucher_id) consume(voucher.original_voucher_id)
+          consume()
+          state.layers = state.layers.filter(layer => layer.qty > 0.0001)
+          state.qty = roundQty(state.layers.reduce((sum, layer) => sum + layer.qty, 0))
+          state.value = round2(state.layers.reduce((sum, layer) => sum + layer.qty * layer.rate, 0))
+        }
+        const key = `${voucher.id}:${line.item_id}`
+        const prior = issueCosts.get(key) || { qty: 0, value: 0, rate: 0 }
+        const issueQty = roundQty(prior.qty + availableQty)
+        const issueValue = round2(prior.value + movementValue)
+        issueCosts.set(key, { qty: issueQty, value: issueValue, rate: issueQty > 0 ? round2(issueValue / issueQty) : 0 })
         row.outward_qty = round2(row.outward_qty + line.qty)
         row.outward_value = round2(row.outward_value + movementValue)
-        row.closing_qty = round2(row.closing_qty - line.qty)
-        row.closing_value = round2(row.closing_value - movementValue)
-        if (row.closing_qty <= 0.0001) {
-          row.closing_qty = 0
-          row.closing_value = 0
-          row.closing_rate = 0
-        }
       }
+      row.closing_qty = state.qty
+      row.closing_value = state.value
+      row.closing_rate = state.qty > 0 ? round2(state.value / state.qty) : 0
     }
   }
-  return [...summary.values()]
+  return { summary: [...summary.values()], issueCosts }
+}
+
+export function computeStockSummary(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod = 'weighted_average'): StockSummaryMovement[] {
+  return replayInventory(items, vouchers, method).summary
+}
+
+export function recomputeStock(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod = 'weighted_average'): StockEntry[] {
+  const summary = new Map(computeStockSummary(items, vouchers, method).map(row => [row.id, row]))
+  return items.map(item => {
+    const row = summary.get(item.id)
+    return { id: item.id, name: item.name, unit: item.unit, qty: row?.closing_qty || 0, avg_cost: row?.closing_rate || 0, value: row?.closing_value || 0 }
+  })
+}
+
+export function inventoryIssueCost(items: Item[], vouchers: Voucher[], voucherId: string, itemId: string, method: InventoryValuationMethod = 'weighted_average'): IssueCost | undefined {
+  return replayInventory(items, vouchers, method).issueCosts.get(`${voucherId}:${itemId}`)
 }
 
 // ─── Voucher Builders ─────────────────────────────────────────────────────────
@@ -329,22 +359,26 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
-export function buildReceiptData(party_account_id: string, amount: number, deposit_to_account_id: string) {
+export interface TransactionAllocation { account_id: string; amount: number }
+
+export function buildReceiptData(allocations: TransactionAllocation[], deposit_to_account_id: string) {
+  const total = round2(allocations.reduce((sum, allocation) => sum + allocation.amount, 0))
   return {
-    total: amount,
+    total,
     lines: [
-      { account_id: deposit_to_account_id, debit: amount, credit: 0 },
-      { account_id: party_account_id, debit: 0, credit: amount },
+      { account_id: deposit_to_account_id, debit: total, credit: 0 },
+      ...allocations.map(allocation => ({ account_id: allocation.account_id, debit: 0, credit: round2(allocation.amount) })),
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }
 
-export function buildPaymentData(party_account_id: string, amount: number, paid_from_account_id: string) {
+export function buildPaymentData(allocations: TransactionAllocation[], paid_from_account_id: string) {
+  const total = round2(allocations.reduce((sum, allocation) => sum + allocation.amount, 0))
   return {
-    total: amount,
+    total,
     lines: [
-      { account_id: party_account_id, debit: amount, credit: 0 },
-      { account_id: paid_from_account_id, debit: 0, credit: amount },
+      ...allocations.map(allocation => ({ account_id: allocation.account_id, debit: round2(allocation.amount), credit: 0 })),
+      { account_id: paid_from_account_id, debit: 0, credit: total },
     ] as Omit<VoucherLine, 'id' | 'voucher_id'>[],
   }
 }

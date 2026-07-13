@@ -1,6 +1,6 @@
 // ─── Shared report helpers ────────────────────────────────────────────────────
 import { Fragment, useState, useMemo } from 'react'
-import { ChevronDown, ChevronRight, Search } from 'lucide-react'
+import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide } from '@/lib/engine'
@@ -16,9 +16,11 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { Badge } from '@/components/ui/misc'
 import { normalizeSearch } from '@/lib/search'
-import { categoryPath } from '@/lib/categoryHierarchy'
-import type { Account } from '@/types'
+import { categoryDescendantIds, categoryPath } from '@/lib/categoryHierarchy'
+import type { Account, InventoryValuationMethod } from '@/types'
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
 function LedgerLink({ account }: { account: Account }) {
@@ -242,6 +244,68 @@ export function VatReportPage() {
 
 // ─── Stock Report ─────────────────────────────────────────────────────────────
 export function StockReportPage() {
+  const { company, items, vouchers, itemCategories, saveCompany } = useAppStore()
+  const [showDetails, setShowDetails] = useState(false)
+  const [search, setSearch] = useState('')
+  const [categoryId, setCategoryId] = useState('all')
+  const [status, setStatus] = useState<'all' | 'in' | 'low' | 'out'>('all')
+  const [methodError, setMethodError] = useState('')
+  const method = company?.inventory_valuation_method || 'weighted_average'
+  const movements = useMemo(() => computeStockSummary(items, vouchers, method), [items, vouchers, method])
+  const movementByItem = useMemo(() => new Map(movements.map(entry => [entry.id, entry])), [movements])
+  const allowedCategories = useMemo(() => categoryId === 'all' ? null : new Set([categoryId, ...categoryDescendantIds(itemCategories, categoryId)]), [categoryId, itemCategories])
+  const query = normalizeSearch(search)
+  const rows = items.map(item => {
+    const movement = movementByItem.get(item.id) || { id: item.id, opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_rate: 0, closing_value: 0 }
+    const rowStatus: 'in' | 'low' | 'out' = movement.closing_qty <= 0 ? 'out' : item.reorder_level != null && movement.closing_qty <= item.reorder_level ? 'low' : 'in'
+    return { item, movement, category: categoryPath(itemCategories, item.category_id), status: rowStatus }
+  }).filter(row => !query || normalizeSearch(`${row.item.name} ${row.category} ${row.item.sku || ''} ${row.item.barcode || ''} ${row.item.unit} ${row.item.alternate_unit || ''}`).includes(query))
+    .filter(row => !allowedCategories || (!!row.item.category_id && allowedCategories.has(row.item.category_id)))
+    .filter(row => status === 'all' || row.status === status)
+    .sort((left, right) => left.item.name.localeCompare(right.item.name))
+  const totalValue = rows.reduce((sum, row) => sum + row.movement.closing_value, 0)
+  const lowStockCount = rows.filter(row => row.status === 'low').length
+  const categoryCount = new Set(rows.map(row => row.item.category_id).filter(Boolean)).size
+  const sameUnit = new Set(rows.map(row => row.item.unit.toLowerCase())).size <= 1
+  const totals = rows.reduce((sum, row) => ({ opening: sum.opening + row.movement.opening_qty, inward: sum.inward + row.movement.inward_qty, outward: sum.outward + row.movement.outward_qty, closing: sum.closing + row.movement.closing_qty }), { opening: 0, inward: 0, outward: 0, closing: 0 })
+  const methodLabel = method === 'fifo' ? 'FIFO' : method === 'lifo' ? 'LIFO' : 'Weighted Average'
+  const qty = (value: number, item: typeof items[number]) => <><span className="block whitespace-nowrap num">{value.toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.unit}</span>{item.alternate_unit && <span className="block whitespace-nowrap text-[11px] text-muted-foreground">({(value * Number(item.alternate_conversion || 0)).toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.alternate_unit})</span>}</>
+  const badge = (value: 'in' | 'low' | 'out') => value === 'in' ? <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">In Stock</Badge> : value === 'low' ? <Badge className="border-amber-200 bg-amber-50 text-amber-700">Low</Badge> : <Badge className="border-red-200 bg-red-50 text-red-700">Out</Badge>
+  const changeMethod = async (value: string) => {
+    const next = value as InventoryValuationMethod
+    if (next === method || !window.confirm('Changing the valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
+    setMethodError('')
+    try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError((error as Error).message) }
+  }
+  const headings = showDetails ? ['Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
+
+  return <div>
+    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} />
+    <PageContent className="space-y-5">
+      <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Total Items" value={String(rows.length)} Icon={Boxes} />
+        <StatCard label={`Stock Value (${methodLabel})`} value={totalValue} Icon={TrendingUp} color="positive" />
+        <StatCard label="Low Stock Items" value={String(lowStockCount)} Icon={AlertTriangle} color="warning" />
+        <StatCard label="Categories" value={String(categoryCount)} Icon={Layers3} />
+      </div>
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+        <div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
+        <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryPath(itemCategories, category.id) }))]} />
+        <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, { value: 'low', label: 'Low Stock' }, { value: 'out', label: 'Out of Stock' }]} />
+        <SearchableSelect className="w-full lg:w-52" value={method} onValueChange={changeMethod} options={[{ value: 'weighted_average', label: 'Weighted Average' }, { value: 'fifo', label: 'FIFO' }, { value: 'lifo', label: 'LIFO' }]} />
+        <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
+      </div>
+      {methodError && <p className="text-sm text-destructive">{methodError}</p>}
+      <Card className="overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`w-full border-collapse text-sm ${showDetails ? 'min-w-[1120px]' : 'min-w-[820px]'}`}>
+        <thead><tr className="bg-muted/50">{headings.map((heading, index) => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${index >= 3 && heading !== 'Status' ? 'text-right' : 'text-left'}`}>{heading}</th>)}</tr></thead>
+        <tbody>{rows.map(row => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
+        <tfoot><tr className="border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr></tfoot>
+      </table></div>}</Card>
+    </PageContent>
+  </div>
+}
+
+export function LegacyStockReportPage() {
   const { items, stock, vouchers, itemCategories } = useAppStore()
   const [showDetails, setShowDetails] = useState(false)
   const [search, setSearch] = useState('')

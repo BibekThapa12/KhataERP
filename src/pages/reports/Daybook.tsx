@@ -1,9 +1,11 @@
 import { useMemo, useState } from 'react'
-import { Printer } from 'lucide-react'
+import { ArrowDown, ArrowUp, Columns3, Download, FileText, Info, MoreVertical, Printer, ScanLine, Search, SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { getDaybookRows } from '@/lib/reports'
 import { makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
+import { normalizeSearch } from '@/lib/search'
+import { legacySettlementAccountId } from '@/lib/banks'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { VoucherTable } from '@/components/tables/VoucherTable'
@@ -14,6 +16,8 @@ import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Input } from '@/components/ui/input'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { Voucher } from '@/types'
 
 const badgeVariant = (type: Voucher['type'], cancelled: boolean) => {
@@ -22,27 +26,59 @@ const badgeVariant = (type: Voucher['type'], cancelled: boolean) => {
   return type === 'Stock Adjustment' ? 'secondary' as const : variants[type]
 }
 
+function MetricCard({ label, value, note, Icon, tone = 'default' }: { label: string; value: string; note: string; Icon: typeof FileText; tone?: 'default' | 'debit' | 'credit' | 'warning' }) {
+  const colors = tone === 'debit' ? 'bg-red-50 text-red-600' : tone === 'credit' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'
+  return <Card><CardContent className="flex items-center gap-3 p-4"><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${colors}`}><Icon className="h-5 w-5" /></span><span className="min-w-0"><span className="block text-xs text-muted-foreground">{label}</span><span className="mt-0.5 block truncate font-serif text-xl font-bold num">{value}</span><span className="block text-xs text-muted-foreground">{note}</span></span></CardContent></Card>
+}
+
+type OptionalColumn = 'narration' | 'debit' | 'credit' | 'net' | 'status'
+
 export function DaybookPage() {
   const { company, rawAccounts, parties, vouchers } = useAppStore()
   const [range, setRange] = useState<ReportRange>('today')
   const [from, setFrom] = useState(todayBs())
   const [to, setTo] = useState(todayBs())
   const [showCancelled, setShowCancelled] = useState(false)
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'cancelled'>('all')
+  const [showFilters, setShowFilters] = useState(false)
+  const [showColumns, setShowColumns] = useState(false)
+  const [columns, setColumns] = useState<Set<OptionalColumn>>(() => new Set(['narration', 'debit', 'credit', 'net', 'status']))
   const [selected, setSelected] = useState<Voucher | null>(null)
   const [editing, setEditing] = useState<Voucher | null>(null)
 
   const rows = useMemo(() => {
     const fromKey = makeBsKey(from)
     const toKey = makeBsKey(to)
+    const query = normalizeSearch(search)
     return getDaybookRows(vouchers, rawAccounts, parties).filter(row =>
       row.date_bs_key >= fromKey && row.date_bs_key <= toKey && (showCancelled || !row.cancelled)
-    )
-  }, [vouchers, rawAccounts, parties, from, to, showCancelled])
+    ).filter(row => typeFilter === 'all' || row.voucher_type === typeFilter)
+      .filter(row => statusFilter === 'all' || (statusFilter === 'cancelled' ? row.cancelled : !row.cancelled))
+      .filter(row => !query || normalizeSearch(`${row.date_bs} ${row.voucher_type} ${row.voucher_no} ${row.particulars} ${row.narration}`).includes(query))
+  }, [vouchers, rawAccounts, parties, from, to, showCancelled, search, typeFilter, statusFilter])
 
   const activeRows = rows.filter(row => !row.cancelled)
   const totalDebit = activeRows.reduce((sum, row) => sum + row.debit, 0)
   const totalCredit = activeRows.reduce((sum, row) => sum + row.credit, 0)
-  const totalValue = activeRows.reduce((sum, row) => sum + row.total, 0)
+  const netTotal = totalDebit - totalCredit
+  const difference = Math.abs(netTotal)
+  const accountNames = useMemo(() => new Map(rawAccounts.map(account => [account.id, account.name])), [rawAccounts])
+  const partyNames = useMemo(() => new Map(parties.map(party => [party.account_id, party.name])), [parties])
+  const accountName = (id: string) => partyNames.get(id) || accountNames.get(id) || id
+  const rowParticulars = (row: typeof rows[number]) => {
+    if (row.voucher_type !== 'Receipt' && row.voucher_type !== 'Payment') return { primary: row.particulars, secondary: '' }
+    const settlementId = legacySettlementAccountId(row.voucher)
+    return { primary: settlementId ? accountName(settlementId) : row.particulars, secondary: row.particulars }
+  }
+  const toggleColumn = (column: OptionalColumn) => setColumns(current => { const next = new Set(current); if (next.has(column)) next.delete(column); else next.add(column); return next })
+  const exportCsv = () => {
+    const quote = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
+    const data = [['Date', 'Voucher Type', 'Voucher No.', 'Party / Account', 'Narration', 'Debit', 'Credit', 'Net Amount', 'Status'], ...rows.map(row => [row.date_bs, row.voucher_type, row.voucher_no, rowParticulars(row).primary, row.narration, row.debit, row.credit, row.debit - row.credit, row.cancelled ? 'Cancelled' : 'Active'])]
+    const blob = new Blob([data.map(record => record.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `daybook-${from}-to-${to}.csv`; link.click(); URL.revokeObjectURL(url)
+  }
 
   const editVoucher = (voucher: Voucher) => {
     setSelected(null)
@@ -53,9 +89,9 @@ export function DaybookPage() {
   return (
     <div className="report-page">
       <PageHeader
-        title="Daybook"
-        description="All voucher activity in chronological order"
-        action={<Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button>}
+        title="Day Book"
+        description="Summary of all transactions for the selected period"
+        action={<div className="flex gap-2"><Button variant="outline" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button></div>}
       />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden">
@@ -72,6 +108,24 @@ export function DaybookPage() {
           </CardContent>
         </Card>
 
+        <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-5">
+          <MetricCard label="Total Vouchers" value={String(activeRows.length)} note="Active vouchers" Icon={FileText} />
+          <MetricCard label="Total Debit" value={fmtMoney(totalDebit)} note="Debit movements" Icon={ArrowDown} tone="debit" />
+          <MetricCard label="Total Credit" value={fmtMoney(totalCredit)} note="Credit movements" Icon={ArrowUp} tone="credit" />
+          <MetricCard label="Net Total" value={fmtMoney(netTotal)} note="Debit - Credit" Icon={FileText} />
+          <MetricCard label="Difference" value={fmtMoney(difference)} note={difference < 0.01 ? 'Balanced' : 'Review required'} Icon={ScanLine} tone={difference < 0.01 ? 'default' : 'warning'} />
+        </div>
+
+        <Card className="report-controls"><CardContent className="space-y-3 p-3">
+          <div className="flex flex-col gap-2 md:flex-row md:items-center">
+            <Button variant="outline" size="sm" onClick={() => setShowColumns(value => !value)}><Columns3 className="mr-2 h-4 w-4" />Columns</Button>
+            <div className="relative min-w-0 flex-1 md:ml-auto md:max-w-md"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search voucher no., party, account…" className="pl-8" /></div>
+            <Button variant={showFilters ? 'default' : 'outline'} size="sm" onClick={() => setShowFilters(value => !value)}><SlidersHorizontal className="mr-2 h-4 w-4" />Filters</Button>
+          </div>
+          {showColumns && <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-md border bg-muted/20 p-3">{(['narration', 'debit', 'credit', 'net', 'status'] as OptionalColumn[]).map(column => <label key={column} className="flex items-center gap-2 text-sm capitalize"><input type="checkbox" checked={columns.has(column)} onChange={() => toggleColumn(column)} />{column === 'net' ? 'Net Amount' : column}</label>)}</div>}
+          {showFilters && <div className="grid gap-3 rounded-md border bg-muted/20 p-3 sm:grid-cols-2"><SearchableSelect value={typeFilter} onValueChange={setTypeFilter} options={[{ value: 'all', label: 'All Voucher Types' }, ...(['Sales', 'Purchase', 'Sales Return', 'Purchase Return', 'Receipt', 'Payment', 'Journal', 'Stock Adjustment'] as Voucher['type'][]).map(type => ({ value: type, label: type }))]} /><SearchableSelect value={statusFilter} onValueChange={value => { const next = value as typeof statusFilter; setStatusFilter(next); if (next === 'cancelled') setShowCancelled(true) }} options={[{ value: 'all', label: 'All Included Status' }, { value: 'active', label: 'Active' }, { value: 'cancelled', label: 'Cancelled' }]} /></div>}
+        </CardContent></Card>
+
         <Card className="report-table-card overflow-hidden">
           {rows.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted-foreground">No vouchers in this date range.</div>
@@ -84,11 +138,12 @@ export function DaybookPage() {
                     <th className="report-th text-left">Voucher Type</th>
                     <th className="report-th text-left">Voucher No.</th>
                     <th className="report-th text-left">Party / Account</th>
-                    <th className="report-th text-left">Narration</th>
-                    <th className="report-th text-right">Debit</th>
-                    <th className="report-th text-right">Credit</th>
-                    <th className="report-th text-right">Total</th>
-                    <th className="report-th text-left">Status</th>
+                    {columns.has('narration') && <th className="report-th text-left">Narration</th>}
+                    {columns.has('debit') && <th className="report-th text-right">Debit</th>}
+                    {columns.has('credit') && <th className="report-th text-right">Credit</th>}
+                    {columns.has('net') && <th className="report-th text-right">Net Amount</th>}
+                    {columns.has('status') && <th className="report-th text-left">Status</th>}
+                    <th className="report-th report-controls text-center">Action</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -101,22 +156,24 @@ export function DaybookPage() {
                       <td className="report-td whitespace-nowrap text-muted-foreground">{fmtDate(row.date_bs)}</td>
                       <td className="report-td"><Badge variant={badgeVariant(row.voucher_type, row.cancelled)}>{row.voucher_type}</Badge></td>
                       <td className="report-td num">{row.voucher_no}</td>
-                      <td className="report-td font-medium">{row.particulars}</td>
-                      <td className="report-td max-w-[220px] truncate text-muted-foreground">{row.narration || '-'}</td>
-                      <td className="report-td text-right num debit-amt">{fmtMoney(row.debit)}</td>
-                      <td className="report-td text-right num credit-amt">{fmtMoney(row.credit)}</td>
-                      <td className="report-td text-right num font-semibold">{fmtMoney(row.total)}</td>
-                      <td className="report-td">{row.cancelled ? 'Cancelled' : 'Active'}</td>
+                      <td className="report-td font-medium">{(() => { const names = rowParticulars(row); return <>{names.primary}{names.secondary && names.secondary !== names.primary && <span className="block text-xs font-normal text-muted-foreground">{names.secondary}</span>}</> })()}</td>
+                      {columns.has('narration') && <td className="report-td max-w-[220px] truncate text-muted-foreground">{row.narration || '-'}</td>}
+                      {columns.has('debit') && <td className="report-td text-right num debit-amt">{row.debit ? fmtMoney(row.debit) : '—'}</td>}
+                      {columns.has('credit') && <td className="report-td text-right num credit-amt">{row.credit ? fmtMoney(row.credit) : '—'}</td>}
+                      {columns.has('net') && <td className={`report-td text-right num font-semibold ${row.debit - row.credit > 0 ? 'debit-amt' : row.credit - row.debit > 0 ? 'credit-amt' : ''}`}>{fmtMoney(Math.abs(row.debit - row.credit))}</td>}
+                      {columns.has('status') && <td className="report-td"><Badge variant={row.cancelled ? 'cancelled' : 'default'}>{row.cancelled ? 'Cancelled' : 'Active'}</Badge></td>}
+                      <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher_no}`} onClick={event => { event.stopPropagation(); setSelected(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="report-td" colSpan={5}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
-                    <td className="report-td text-right num">{fmtMoney(totalDebit)}</td>
-                    <td className="report-td text-right num">{fmtMoney(totalCredit)}</td>
-                    <td className="report-td text-right num">{fmtMoney(totalValue)}</td>
-                    <td className="report-td"></td>
+                    <td className="report-td" colSpan={4 + (columns.has('narration') ? 1 : 0)}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
+                    {columns.has('debit') && <td className="report-td text-right num debit-amt">{fmtMoney(totalDebit)}</td>}
+                    {columns.has('credit') && <td className="report-td text-right num credit-amt">{fmtMoney(totalCredit)}</td>}
+                    {columns.has('net') && <td className="report-td text-right num">{fmtMoney(Math.abs(netTotal))}</td>}
+                    {columns.has('status') && <td className="report-td"></td>}
+                    <td className="report-td report-controls"></td>
                   </tr>
                 </tfoot>
               </table>
@@ -128,6 +185,8 @@ export function DaybookPage() {
             Warning: the selected vouchers are out of balance by {fmtMoney(Math.abs(totalDebit - totalCredit))}.
           </p>
         )}
+        <Card className="report-controls"><CardContent className="grid gap-4 p-4 text-sm sm:grid-cols-3"><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-red-50 text-red-600"><ArrowDown className="h-4 w-4" /></span><span><strong className="block">Debit</strong><span className="text-xs text-muted-foreground">Asset / expense increase</span></span></div><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><ArrowUp className="h-4 w-4" /></span><span><strong className="block">Credit</strong><span className="text-xs text-muted-foreground">Income / liability increase</span></span></div><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600"><FileText className="h-4 w-4" /></span><span><strong className="block">Net Amount</strong><span className="text-xs text-muted-foreground">Absolute debit-credit difference</span></span></div></CardContent></Card>
+        <div className="report-controls flex gap-3 rounded-lg border border-blue-100 bg-blue-50/60 p-4 text-sm"><Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><div><strong className="block">About Day Book</strong><p className="mt-1 text-xs text-muted-foreground">Day Book shows all vouchers in chronological order. Open any row to view, edit, print, or cancel the underlying voucher.</p></div></div>
       </PageContent>
 
       <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}>

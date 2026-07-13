@@ -18,8 +18,22 @@ describe('accounting engine integrity', () => {
   it('posts purchases, receipts, and payments as balanced journals', () => {
     const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items: [{ item_id: 'tea', qty: 3, rate: 50 }], vat_rate: 13, system_accounts: accounts })
     expect(validateBalanced(purchase.lines).valid).toBe(true)
-    expect(validateBalanced(buildReceiptData('customer', 500, 'cash').lines).valid).toBe(true)
-    expect(validateBalanced(buildPaymentData('supplier', 300, 'cash').lines).valid).toBe(true)
+    expect(validateBalanced(buildReceiptData([{ account_id: 'customer', amount: 500 }], 'cash').lines).valid).toBe(true)
+    expect(validateBalanced(buildPaymentData([{ account_id: 'supplier', amount: 300 }], 'cash').lines).valid).toBe(true)
+  })
+
+  it('posts multiple ledger allocations against one settlement account', () => {
+    const receipt = buildReceiptData([{ account_id: 'customer-a', amount: 1000 }, { account_id: 'income', amount: 500 }], 'bank-a')
+    expect(receipt).toMatchObject({ total: 1500, lines: [
+      { account_id: 'bank-a', debit: 1500, credit: 0 },
+      { account_id: 'customer-a', debit: 0, credit: 1000 },
+      { account_id: 'income', debit: 0, credit: 500 },
+    ] })
+    expect(validateBalanced(receipt.lines).valid).toBe(true)
+
+    const payment = buildPaymentData([{ account_id: 'supplier-a', amount: 700 }, { account_id: 'expense', amount: 300 }], 'cash')
+    expect(payment.lines.at(-1)).toEqual({ account_id: 'cash', debit: 0, credit: 1000 })
+    expect(validateBalanced(payment.lines).valid).toBe(true)
   })
 
   it('maintains weighted-average stock cost and ignores cancelled vouchers', () => {
@@ -39,6 +53,28 @@ describe('accounting engine integrity', () => {
       outward_qty: 5, outward_value: 75,
       closing_qty: 15, closing_rate: 15, closing_value: 225,
     })
+  })
+
+  it('supports perpetual weighted-average, FIFO, and LIFO valuation', () => {
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 10 } as Item
+    const voucher = (id: string, seq: number, type: Voucher['type'], direction: 'in' | 'out', qty: number, rate: number, original_voucher_id?: string) => ({ id, company_id: 'c', type, date: '2026-01-01', date_ad: '2026-01-01', date_bs: '2082-09-17', date_bs_key: 20820917, original_voucher_id, is_cash: true, total: 0, cancelled: false, seq, stock_lines: [{ item_id: 'tea', direction, qty, rate }] }) as Voucher
+    const purchasesAndSale = [voucher('purchase', 1, 'Purchase', 'in', 10, 20), voucher('sale', 2, 'Sales', 'out', 5, 999)]
+
+    expect(recomputeStock([item], purchasesAndSale, 'weighted_average')[0]).toMatchObject({ qty: 15, avg_cost: 15, value: 225 })
+    expect(recomputeStock([item], purchasesAndSale, 'fifo')[0]).toMatchObject({ qty: 15, avg_cost: 16.67, value: 250 })
+    expect(recomputeStock([item], purchasesAndSale, 'lifo')[0]).toMatchObject({ qty: 15, avg_cost: 13.33, value: 200 })
+
+    const withSalesReturn = [...purchasesAndSale, voucher('return', 3, 'Sales Return', 'in', 2, 0, 'sale')]
+    expect(recomputeStock([item], withSalesReturn, 'fifo')[0]).toMatchObject({ qty: 17, value: 270 })
+    expect(recomputeStock([item], withSalesReturn, 'lifo')[0]).toMatchObject({ qty: 17, value: 240 })
+  })
+
+  it('removes an original purchase layer first for purchase returns', () => {
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 10 } as Item
+    const purchase = { id: 'purchase', company_id: 'c', type: 'Purchase', date: '2026-01-01', date_ad: '2026-01-01', date_bs: '2082-09-17', date_bs_key: 20820917, is_cash: true, total: 0, cancelled: false, seq: 1, stock_lines: [{ item_id: 'tea', direction: 'in', qty: 10, rate: 20 }] } as Voucher
+    const returned = { ...purchase, id: 'return', type: 'Purchase Return', seq: 2, original_voucher_id: purchase.id, stock_lines: [{ item_id: 'tea', direction: 'out', qty: 3, rate: 20 }] } as Voucher
+    expect(recomputeStock([item], [purchase, returned], 'fifo')[0]).toMatchObject({ qty: 17, value: 240 })
+    expect(recomputeStock([item], [purchase, returned], 'lifo')[0]).toMatchObject({ qty: 17, value: 240 })
   })
 
   it('converts an alternative-unit invoice to canonical stock units', () => {

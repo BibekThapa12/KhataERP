@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
-import { todayBs } from '@/lib/nepaliDate'
+import { addDaysToBs, todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { Button } from '@/components/ui/button'
@@ -35,6 +35,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [dateBs, setDateBs] = useState(todayBs())
   const [isCash, setIsCash] = useState(false)
   const [partyAccountId, setPartyAccountId] = useState('')
+  const [creditDays, setCreditDays] = useState(0)
   const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
   const [vatRate, setVatRate] = useState(13)
   const [discount, setDiscount] = useState(0)
@@ -49,6 +50,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const partyTerms = partyTerminology(partyType)
   const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
+  const dueDateBs = (() => {
+    try { return addDaysToBs(dateBs, isCash ? 0 : creditDays) } catch { return '' }
+  })()
 
   // Totals
   const subtotal = round2Local(lines.reduce((s, l) => s + l.qty * l.rate, 0))
@@ -62,6 +66,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setDateBs(voucher.date_bs)
       setIsCash(voucher.is_cash)
       setPartyAccountId(voucher.party_account_id || '')
+      const voucherParty = parties.find(party => party.account_id === voucher.party_account_id)
+      setCreditDays(voucher.is_cash ? 0 : (voucher.credit_days ?? voucherParty?.default_credit_days ?? 0))
       setLines((voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
@@ -72,11 +78,21 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setNarration(voucher.narration ?? '')
       setError('')
     } else if (!open) {
-      setDateBs(todayBs()); setIsCash(false); setPartyAccountId('')
+      setDateBs(todayBs()); setIsCash(false); setPartyAccountId(''); setCreditDays(0)
       setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setNarration(''); setError('')
     }
-  }, [open, voucher, vatEnabled, items])
+  }, [open, voucher, vatEnabled, items, parties])
+
+  const selectParty = (accountId: string) => {
+    setPartyAccountId(accountId)
+    setCreditDays(parties.find(party => party.account_id === accountId)?.default_credit_days ?? 0)
+  }
+
+  const toggleCash = (checked: boolean) => {
+    setIsCash(checked)
+    setCreditDays(checked ? 0 : (parties.find(party => party.account_id === partyAccountId)?.default_credit_days ?? 0))
+  }
 
   const updateLine = (idx: number, field: keyof LineItem, value: string | number) => {
     const next = [...lines]
@@ -114,6 +130,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const validLines = lines.filter(l => l.item_id && l.qty > 0 && l.rate > 0)
     if (validLines.length === 0) { setError('Add at least one item with quantity and rate.'); return }
     if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
+    if (!Number.isInteger(creditDays) || creditDays < 0) { setError('Credit Days must be a whole number of 0 or more.'); return }
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
@@ -133,7 +150,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, discount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params)
         else await saveSalesVoucher(params)
@@ -166,17 +183,30 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               </div>
               <div className="space-y-1.5">
                 <div className="flex items-center gap-2 mb-1.5">
-                  <input type="checkbox" id="isCash" checked={isCash} onChange={e => setIsCash(e.target.checked)} className="rounded" />
+                  <input type="checkbox" id="isCash" checked={isCash} onChange={e => toggleCash(e.target.checked)} className="rounded" />
                   <Label htmlFor="isCash" className="font-normal cursor-pointer">
                     {isSales ? 'Cash sale' : 'Cash purchase'}
                   </Label>
                 </div>
                 {!isCash && (
                   <div className="flex gap-1.5">
-                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyTerms.singular}…`} searchPlaceholder={`Search ${partyTerms.plural}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
+                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}…`} searchPlaceholder={`Search ${partyTerms.plural}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
                     <Button type="button" variant="outline" size="sm" onClick={() => setShowPartyForm(true)}>+ New</Button>
                   </div>
                 )}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label>Credit Days</Label>
+                <Input type="number" min="0" step="1" value={isCash ? 0 : creditDays} disabled={isCash} onChange={e => setCreditDays(Number(e.target.value))} />
+                <p className="text-xs text-muted-foreground">This invoice only; the party default is unchanged.</p>
+              </div>
+              <div className="space-y-1.5">
+                <Label>Due Date</Label>
+                <Input value={dueDateBs} readOnly className="bg-muted/40" />
+                <p className="text-xs text-muted-foreground">Invoice date + credit days (B.S.)</p>
               </div>
             </div>
 
@@ -270,7 +300,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       </Dialog>
 
       <PartyForm open={showPartyForm} onClose={() => setShowPartyForm(false)} defaultType={partyType}
-        onCreated={p => { setPartyAccountId(p.account_id); setShowPartyForm(false) }} />
+        onCreated={p => { setPartyAccountId(p.account_id); setCreditDays(p.default_credit_days ?? 0); setShowPartyForm(false) }} />
       <ItemForm open={showItemForm} onClose={() => setShowItemForm(false)}
         onCreated={(item: import('@/types').Item) => {
           if (newItemLineIdx !== null) {

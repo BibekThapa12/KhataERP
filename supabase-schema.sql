@@ -155,6 +155,7 @@ create table if not exists companies (
   pan_vat          text,
   phone            text,
   vat_enabled      boolean not null default true,
+  inventory_valuation_method text not null default 'weighted_average' check (inventory_valuation_method in ('weighted_average','fifo','lifo')),
   sales_prefix     text not null default 'INV-',
   purchase_prefix  text not null default 'PB-',
   receipt_prefix   text not null default 'RCPT-',
@@ -178,6 +179,7 @@ create table if not exists companies (
 alter table companies add column if not exists owner_email text;
 alter table companies add column if not exists phone text;
 alter table companies add column if not exists vat_enabled boolean not null default true;
+alter table companies add column if not exists inventory_valuation_method text not null default 'weighted_average';
 alter table companies add column if not exists sales_prefix text not null default 'INV-';
 alter table companies add column if not exists purchase_prefix text not null default 'PB-';
 alter table companies add column if not exists receipt_prefix text not null default 'RCPT-';
@@ -251,6 +253,7 @@ create table if not exists parties (
   created_at       timestamptz not null default now()
 );
 alter table parties add column if not exists is_archived boolean not null default false;
+alter table parties add column if not exists default_credit_days integer not null default 0;
 
 -- ── Items ─────────────────────────────────────────────────────────────────────
 create table if not exists items (
@@ -331,6 +334,10 @@ create table if not exists vouchers (
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
+  credit_days      integer,
+  due_date_ad      date,
+  due_date_bs      text,
+  due_date_bs_key  integer,
   narration        text,
   original_voucher_id uuid references vouchers(id) on delete restrict,
   return_reason    text,

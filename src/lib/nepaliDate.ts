@@ -42,6 +42,14 @@ export function bsToAd(bsDate: string): string {
   return `${ad.getFullYear()}-${pad2(ad.getMonth() + 1)}-${pad2(ad.getDate())}`
 }
 
+export function addDaysToBs(bsDate: string, days: number): string {
+  const safeDays = Math.max(0, Math.trunc(Number(days) || 0))
+  const [year, month, day] = bsToAd(bsDate).split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day))
+  date.setUTCDate(date.getUTCDate() + safeDays)
+  return adToBs(`${date.getUTCFullYear()}-${pad2(date.getUTCMonth() + 1)}-${pad2(date.getUTCDate())}`)
+}
+
 export const DEFAULT_FISCAL_YEAR_START_BS = '2083-04-01'
 export const DEFAULT_FISCAL_YEAR_START_AD = bsToAd(DEFAULT_FISCAL_YEAR_START_BS)
 

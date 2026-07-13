@@ -79,6 +79,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
   const [name, setName] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [partyType, setPartyType] = useState<'customer' | 'supplier'>('customer')
+  const [defaultCreditDays, setDefaultCreditDays] = useState('0')
   const [openingBalance, setOpeningBalance] = useState('0')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -89,6 +90,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
     setName(account?.name || '')
     setCategoryId(account?.category_id || defaultCategoryId || activeCategories[0]?.id || '')
     setPartyType(party?.type || 'customer')
+    setDefaultCreditDays(String(party?.default_credit_days ?? 0))
     setOpeningBalance(String(account?.opening_balance || 0))
     setError('')
   }, [open, account, party, defaultCategoryId, activeCategories])
@@ -109,7 +111,9 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
     setSaving(true)
     try {
       if (party) {
-        await alterParty(party.id, { name: name.trim(), type: partyType })
+        const creditDays = Number(defaultCreditDays)
+        if (!Number.isInteger(creditDays) || creditDays < 0) throw new Error('Default Credit Days must be a whole number of 0 or more.')
+        await alterParty(party.id, { name: name.trim(), type: partyType, default_credit_days: creditDays })
         if (account && Number(openingBalance) !== account.opening_balance) await alterAccount(account.id, { opening_balance: Number(openingBalance) || 0 })
       } else if (account) {
         await alterAccount(account.id, { name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: Number(openingBalance) || 0 })
@@ -127,7 +131,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
         <div className="min-w-0 space-y-4 py-2">
           <div className="space-y-1.5"><Label>Ledger Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
           {party ? (
-            <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
+            <><div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div><div className="space-y-1.5"><Label>Default Credit Days</Label><Input type="number" min="0" step="1" value={defaultCreditDays} onChange={event => setDefaultCreditDays(event.target.value)} /><p className="text-xs text-muted-foreground">Used automatically on new credit invoices.</p></div></>
           ) : (
             <div className="space-y-1.5"><Label>Category</Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled={!!account?.is_system} placeholder="Select category" options={activeCategories.map(category => ({ value: category.id, label: `${categoryPath(accountCategories, category.id)} (${category.account_type})` }))} /></div>
           )}

@@ -17,7 +17,7 @@ function PartyLedger({ party }: { party: Party }) {
   const { company, vouchers, getAccount } = useAppStore()
   const account = getAccount(party.account_id)
   const related = vouchers
-    .filter(v => !v.cancelled && v.party_account_id === party.account_id)
+    .filter(v => !v.cancelled && (v.party_account_id === party.account_id || (v.lines || []).some(line => line.account_id === party.account_id)))
     .sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
 
   const isCustomer = party.type === 'customer'
@@ -143,6 +143,7 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Phone</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden lg:table-cell">PAN/VAT</th>
+            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden lg:table-cell">Credit Days</th>
             <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Balance</th>
             <th className="px-4 py-2.5 w-12"></th>
           </tr>
@@ -156,6 +157,7 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
                 <td className="px-4 py-3 font-semibold">{p.name}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{p.phone || '—'}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.pan_vat || '—'}</td>
+                <td className="px-4 py-3 text-right num text-muted-foreground hidden lg:table-cell">{p.default_credit_days ?? 0}</td>
                 <td className="px-4 py-3 text-right">
                   <span className={`num font-semibold ${isPositive ? (partyType === 'customer' ? 'credit-amt' : 'debit-amt') : 'text-muted-foreground'}`}>
                     {fmtMoney(Math.abs(bal))}

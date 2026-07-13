@@ -4,6 +4,7 @@ export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense
 export type VoucherType = 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
+export type InventoryValuationMethod = 'weighted_average' | 'fifo' | 'lifo'
 
 export interface Account {
   id: string
@@ -28,6 +29,7 @@ export interface Party {
   phone?: string
   pan_vat?: string
   address?: string
+  default_credit_days?: number
   account_id: string
   is_archived?: boolean
   created_at?: string
@@ -104,13 +106,17 @@ export interface Voucher {
   date_bs: string
   date_bs_key: number
   invoice_no?: string
+  credit_days?: number
+  due_date_ad?: string
+  due_date_bs?: string
+  due_date_bs_key?: number
   narration?: string
   original_voucher_id?: string
   return_reason?: string
   settlement_mode?: 'party' | 'cash' | 'bank'
   settlement_account_id?: string
   restock_items?: boolean
-  party_account_id?: string
+  party_account_id?: string | null
   is_cash: boolean
   subtotal?: number
   discount?: number
@@ -136,6 +142,7 @@ export interface Company {
   pan_vat?: string
   phone?: string
   vat_enabled?: boolean
+  inventory_valuation_method?: InventoryValuationMethod
   sales_prefix?: string
   purchase_prefix?: string
   receipt_prefix?: string

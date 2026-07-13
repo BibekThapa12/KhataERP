@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useAppStore, type ReturnSaveParams } from '@/store/useAppStore'
-import { buildReturnVoucherData, round2, type ReturnItemInput } from '@/lib/engine'
+import { buildReturnVoucherData, inventoryIssueCost, round2, type ReturnItemInput } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { partyTerminology } from '@/lib/partyTerminology'
@@ -58,6 +58,9 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       .flatMap(entry => entry.invoice_items || [])
       .filter(item => item.source_invoice_item_id === line.id)
       .reduce((sum, item) => sum + item.qty, 0) : 0
+    const derivedCostRate = source.type === 'Sales'
+      ? inventoryIssueCost(items, vouchers, source.id, line.item_id, company?.inventory_valuation_method)?.rate
+      : source.stock_lines?.find(stockLine => stockLine.item_id === line.item_id && stockLine.direction === 'in')?.rate
     return {
       id: existing?.id,
       source_invoice_item_id: line.id || '',
@@ -69,11 +72,11 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       base_qty: toBaseQty(existing?.qty || 0, line.conversion_factor || 1),
       qty: existing?.qty || 0,
       rate: line.rate,
-      cost_rate: existing?.cost_rate ?? line.cost_rate ?? stock.find(entry => entry.id === line.item_id)?.avg_cost ?? 0,
+      cost_rate: derivedCostRate ?? existing?.cost_rate ?? line.cost_rate ?? stock.find(entry => entry.id === line.item_id)?.avg_cost ?? 0,
       original_qty: line.qty,
       returned_qty: returned,
     }
-  }), [items, stock, type, voucher?.id, vouchers])
+  }), [company?.inventory_valuation_method, items, stock, type, voucher?.id, vouchers])
 
   useEffect(() => {
     if (!open) {

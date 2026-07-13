@@ -3,6 +3,7 @@ import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/ca
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
 import { bankAccounts } from '@/lib/banks'
 import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
+import { legacySettlementAccountId } from '@/lib/banks'
 
 export interface DaybookRow {
   voucher: Voucher
@@ -165,6 +166,11 @@ function accountDisplayName(accountId: string, accountMap: Map<string, Account>,
 }
 
 function voucherParticulars(voucher: Voucher, accountMap: Map<string, Account>, partyMap: Map<string, Party>) {
+  if (voucher.type === 'Receipt' || voucher.type === 'Payment') {
+    const settlementId = legacySettlementAccountId(voucher)
+    const names = [...new Set((voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => accountDisplayName(line.account_id, accountMap, partyMap)))]
+    if (names.length) return names.join(', ')
+  }
   if (voucher.party_account_id) {
     return accountDisplayName(voucher.party_account_id, accountMap, partyMap)
   }

@@ -23,21 +23,23 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
   const [phone, setPhone] = useState('')
   const [panVat, setPanVat] = useState('')
   const [address, setAddress] = useState('')
+  const [defaultCreditDays, setDefaultCreditDays] = useState(0)
   const [openingBalance, setOpeningBalance] = useState(0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const terminology = partyTerminology(type)
 
   useEffect(() => {
-    if (!open) { setName(''); setPhone(''); setPanVat(''); setAddress(''); setOpeningBalance(0); setError('') }
+    if (!open) { setName(''); setPhone(''); setPanVat(''); setAddress(''); setDefaultCreditDays(0); setOpeningBalance(0); setError('') }
     if (defaultType) setType(defaultType)
   }, [open, defaultType])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Enter a name.'); return }
+    if (!Number.isInteger(defaultCreditDays) || defaultCreditDays < 0) { setError('Default Credit Days must be a whole number of 0 or more.'); return }
     setSaving(true)
     try {
-      const party = await addParty({ name: name.trim(), type, phone: phone.trim(), pan_vat: panVat.trim(), address: address.trim(), opening_balance: openingBalance })
+      const party = await addParty({ name: name.trim(), type, phone: phone.trim(), pan_vat: panVat.trim(), address: address.trim(), default_credit_days: defaultCreditDays, opening_balance: openingBalance })
       onCreated?.(party)
       onClose()
     } catch (e: unknown) {
@@ -73,6 +75,11 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
           <div className="space-y-1.5">
             <Label>Address</Label>
             <Textarea value={address} onChange={e => setAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Default Credit Days</Label>
+            <Input type="number" min="0" step="1" value={defaultCreditDays} onChange={e => setDefaultCreditDays(Number(e.target.value))} />
+            <p className="text-xs text-muted-foreground">Automatically used on new credit invoices for this party.</p>
           </div>
           <div className="space-y-1.5">
             <Label>Opening Balance (Rs)</Label>

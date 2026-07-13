@@ -6,7 +6,6 @@ import { todayBs } from '@/lib/nepaliDate'
 import { resolveSystemAccountId, round2 } from '@/lib/engine'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
 import { categoryPath } from '@/lib/categoryHierarchy'
-import { partyTerminology } from '@/lib/partyTerminology'
 import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -136,16 +135,12 @@ interface ReceiptPaymentFormProps {
 }
 
 export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaymentFormProps) {
-  const { company, parties, accounts, accountCategories, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
+  const { company, accounts, accountCategories, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
   const isReceipt = type === 'Receipt'
-  const partyType = isReceipt ? 'customer' : 'supplier'
-  const partyTerms = partyTerminology(partyType)
-  const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
-  const [partyAccountId, setPartyAccountId] = useState('')
-  const [amount, setAmount] = useState('')
+  const [allocations, setAllocations] = useState<{ account_id: string; amount: string }[]>([{ account_id: '', amount: '' }])
   const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
   const banks = bankAccounts(accounts, accountCategories, !!voucher)
   const [moneyAccountId, setMoneyAccountId] = useState('')
@@ -156,30 +151,37 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   useEffect(() => {
     if (open && voucher) {
       setDateBs(voucher.date_bs)
-      setPartyAccountId(voucher.party_account_id || '')
-      setAmount(String(voucher.total || ''))
-      setMoneyAccountId(legacySettlementAccountId(voucher) || cashAccountId)
+      const settlementId = legacySettlementAccountId(voucher) || cashAccountId
+      setMoneyAccountId(settlementId)
+      const restored = (voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => ({ account_id: line.account_id, amount: String(isReceipt ? line.credit || 0 : line.debit || 0) })).filter(line => Number(line.amount) > 0)
+      setAllocations(restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || '') }])
       setNarration(voucher.narration || '')
       setError('')
     } else if (open) {
       setMoneyAccountId(cashAccountId)
     } else if (!open) {
-      setDateBs(todayBs()); setPartyAccountId(''); setAmount(''); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
+      setDateBs(todayBs()); setAllocations([{ account_id: '', amount: '' }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
     }
-  }, [open, voucher, cashAccountId])
+  }, [open, voucher, cashAccountId, isReceipt])
+
+  const moneyIds = new Set([cashAccountId, ...bankAccounts(accounts, accountCategories, true).map(account => account.id)])
+  const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
+  const allocationAccounts = accounts.filter(account => !moneyIds.has(account.id) && (!account.is_archived || (!!voucher && selectedIds.has(account.id))))
+  const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
+  const updateAllocation = (index: number, field: 'account_id' | 'amount', value: string) => setAllocations(current => current.map((allocation, row) => row === index ? { ...allocation, [field]: value } : allocation))
 
   const handleSave = async () => {
-    if (!partyAccountId) { setError(`Select a ${partyTerms.singular}.`); return }
-    const amt = Number(amount)
-    if (!amt || amt <= 0) { setError('Enter a valid amount.'); return }
+    const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount) }))
+    if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
+    if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
     setSaving(true)
     try {
       if (isReceipt) {
-        if (voucher) await updateReceipt(voucher.id, { party_account_id: partyAccountId, amount: amt, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
-        else await saveReceipt({ party_account_id: partyAccountId, amount: amt, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
+        if (voucher) await updateReceipt(voucher.id, { allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
+        else await saveReceipt({ allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
       } else {
-        if (voucher) await updatePayment(voucher.id, { party_account_id: partyAccountId, amount: amt, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
-        else await savePayment({ party_account_id: partyAccountId, amount: amt, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
+        if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
+        else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
       }
       onClose()
     } catch (e: unknown) {
@@ -189,7 +191,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -197,19 +199,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
             <NepaliDateInput value={dateBs} onChange={setDateBs} />
           </div>
           <div className="space-y-1.5">
-            <Label>{isReceipt ? 'Received from' : 'Paid to'}</Label>
-            <SearchableSelect value={partyAccountId} onValueChange={setPartyAccountId} placeholder={`Select ${partyTerms.singular}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
+            <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
+            <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
-              <Label>Amount (Rs)</Label>
-              <Input type="number" step="any" min="0.01" value={amount} onChange={e => setAmount(e.target.value)} placeholder="0.00" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
-              <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
-            </div>
-          </div>
+          <div className="space-y-2"><div className="hidden grid-cols-[minmax(0,1fr)_10rem_2.25rem] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>Ledger</span><span className="text-right">Amount</span><span /></div>{allocations.map((allocation, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]"><SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger…" options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} /><Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" /><Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>)}<div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '' }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div></div>
           <div className="space-y-1.5">
             <Label>Narration (optional)</Label>
             <Input value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note…" />
