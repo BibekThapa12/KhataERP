@@ -55,6 +55,7 @@
   @page { size: A4 landscape; margin: 10mm; }
   body { background: white; color: black; }
   body > #root > div > aside,
+  .app-mobile-nav,
   .report-page > div:first-child,
   .report-controls { display: none !important; }
   body > #root > div,
@@ -69,7 +70,17 @@
   .report-table-card { overflow: visible !important; }
   .report-table-card > div { overflow: visible !important; }
   .report-table-card table { min-width: 0 !important; font-size: 9px; }
+  .report-table-card thead { display: table-header-group; }
+  .report-table-card tfoot { display: table-footer-group; }
+  .report-table-card th { padding: 5px 6px !important; }
+  .report-table-card td { padding: 5px 6px !important; }
   .report-th { padding: 5px 6px !important; font-size: 8px !important; }
   .report-td { padding: 5px 6px !important; }
   .report-table-card tr { break-inside: avoid; }
+  .report-summary > div { break-inside: avoid; box-shadow: none !important; }
+  .report-print-columns > .report-table-card { break-inside: avoid; }
+  .report-section-header { padding: 6px !important; }
+  .report-section-header svg { display: none !important; }
+  .report-section-header + div { display: block !important; }
+  .report-page button { color: inherit !important; text-decoration: none !important; }
 }

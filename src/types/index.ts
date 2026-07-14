@@ -97,6 +97,16 @@ export interface InvoiceItem {
   cost_rate?: number
 }
 
+export interface VoucherSettlement {
+  id?: string
+  company_id: string
+  settlement_voucher_id: string
+  invoice_voucher_id: string
+  party_account_id: string
+  amount: number
+  created_at?: string
+}
+
 export interface Voucher {
   id: string
   company_id: string
@@ -130,6 +140,7 @@ export interface Voucher {
   lines?: VoucherLine[]
   stock_lines?: StockLine[]
   invoice_items?: InvoiceItem[]
+  settlements?: VoucherSettlement[]
   party?: Party
 }
 

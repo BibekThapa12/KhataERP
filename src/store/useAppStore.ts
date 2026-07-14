@@ -11,7 +11,7 @@ import {
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
-  buildReturnVoucherData, resolveSystemAccountId, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
+  buildReturnVoucherData, resolveSystemAccountId, round2, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
 } from '@/lib/engine'
 import { addDaysToBs, bsToAd, makeBsKey } from '@/lib/nepaliDate'
 import { categoryDepth, categoryDescendantIds, subtreeHeight } from '@/lib/categoryHierarchy'
@@ -173,6 +173,14 @@ function validateAllocations(allocations: TransactionAllocation[], settlementId:
 
 function singlePartyAccountId(allocations: TransactionAllocation[], parties: Party[]) {
   return allocations.length === 1 && parties.some(party => party.account_id === allocations[0].account_id) ? allocations[0].account_id : null
+}
+
+function settlementRows(allocations: TransactionAllocation[]) {
+  return allocations.flatMap(allocation => (allocation.invoice_allocations || []).filter(row => row.amount > 0).map(row => ({
+    invoice_voucher_id: row.invoice_voucher_id,
+    party_account_id: allocation.account_id,
+    amount: round2(row.amount),
+  })))
 }
 
 function systemAccountKeyFromId(companyId: string, accountId: string): SystemAccountKey | null {
@@ -588,6 +596,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
+      settlements: settlementRows(validAllocations),
     })
     const vouchers = [newVoucher, ...get().vouchers]
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
@@ -608,6 +617,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
+      settlements: settlementRows(validAllocations),
     })
     const vouchers = [newVoucher, ...get().vouchers]
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
@@ -728,6 +738,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id,
       voucher: { ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
+      settlements: settlementRows(validAllocations),
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
@@ -766,6 +777,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       id,
       voucher: { ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
+      settlements: settlementRows(validAllocations),
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)

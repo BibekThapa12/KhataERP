@@ -5,8 +5,9 @@ import { fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
 import { resolveSystemAccountId, round2 } from '@/lib/engine'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
-import { categoryPath } from '@/lib/categoryHierarchy'
+import { categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
 import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
+import { suggestSettlementAllocations } from '@/lib/managementReports'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -77,7 +78,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryPath(itemCategories, category.id) }))} />
+            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} />
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -135,12 +136,12 @@ interface ReceiptPaymentFormProps {
 }
 
 export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaymentFormProps) {
-  const { company, accounts, accountCategories, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
+  const { company, accounts, accountCategories, parties, vouchers, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
   const isReceipt = type === 'Receipt'
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
-  const [allocations, setAllocations] = useState<{ account_id: string; amount: string }[]>([{ account_id: '', amount: '' }])
+  const [allocations, setAllocations] = useState<{ account_id: string; amount: string; invoice_allocations: { invoice_voucher_id: string; amount: string }[] }[]>([{ account_id: '', amount: '', invoice_allocations: [] }])
   const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
   const banks = bankAccounts(accounts, accountCategories, !!voucher)
   const [moneyAccountId, setMoneyAccountId] = useState('')
@@ -153,14 +154,14 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       setDateBs(voucher.date_bs)
       const settlementId = legacySettlementAccountId(voucher) || cashAccountId
       setMoneyAccountId(settlementId)
-      const restored = (voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => ({ account_id: line.account_id, amount: String(isReceipt ? line.credit || 0 : line.debit || 0) })).filter(line => Number(line.amount) > 0)
-      setAllocations(restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || '') }])
+      const restored = (voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => ({ account_id: line.account_id, amount: String(isReceipt ? line.credit || 0 : line.debit || 0), invoice_allocations: (voucher.settlements || []).filter(row => row.party_account_id === line.account_id).map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: String(row.amount) })) })).filter(line => Number(line.amount) > 0)
+      setAllocations(restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }])
       setNarration(voucher.narration || '')
       setError('')
     } else if (open) {
       setMoneyAccountId(cashAccountId)
     } else if (!open) {
-      setDateBs(todayBs()); setAllocations([{ account_id: '', amount: '' }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
+      setDateBs(todayBs()); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
     }
   }, [open, voucher, cashAccountId, isReceipt])
 
@@ -168,12 +169,21 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
   const allocationAccounts = accounts.filter(account => !moneyIds.has(account.id) && (!account.is_archived || (!!voucher && selectedIds.has(account.id))))
   const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
-  const updateAllocation = (index: number, field: 'account_id' | 'amount', value: string) => setAllocations(current => current.map((allocation, row) => row === index ? { ...allocation, [field]: value } : allocation))
+  const partyAccountIds = new Set(parties.filter(party => party.type === (isReceipt ? 'customer' : 'supplier')).map(party => party.account_id))
+  const invoiceById = new Map(vouchers.map(entry => [entry.id, entry]))
+  const updateAllocation = (index: number, field: 'account_id' | 'amount', value: string) => setAllocations(current => current.map((allocation, row) => {
+    if (row !== index) return allocation
+    const next = { ...allocation, [field]: value }
+    next.invoice_allocations = partyAccountIds.has(next.account_id) ? suggestSettlementAllocations(isReceipt ? 'receivable' : 'payable', next.account_id, Number(next.amount), parties, accounts, vouchers, dateBs, voucher?.id).map(item => ({ ...item, amount: String(item.amount) })) : []
+    return next
+  }))
+  const updateInvoiceAllocation = (allocationIndex: number, invoiceId: string, value: string) => setAllocations(current => current.map((allocation, index) => index === allocationIndex ? { ...allocation, invoice_allocations: allocation.invoice_allocations.map(row => row.invoice_voucher_id === invoiceId ? { ...row, amount: value } : row) } : allocation))
 
   const handleSave = async () => {
-    const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount) }))
+    const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount), invoice_allocations: allocation.invoice_allocations.map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: Number(row.amount) })).filter(row => row.amount > 0) }))
     if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
+    if (validAllocations.some(allocation => round2(allocation.invoice_allocations.reduce((sum, row) => sum + row.amount, 0)) > allocation.amount)) { setError('Invoice allocations cannot exceed the ledger amount.'); return }
     setSaving(true)
     try {
       if (isReceipt) {
@@ -191,7 +201,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -202,7 +212,17 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
             <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
             <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
           </div>
-          <div className="space-y-2"><div className="hidden grid-cols-[minmax(0,1fr)_10rem_2.25rem] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>Ledger</span><span className="text-right">Amount</span><span /></div>{allocations.map((allocation, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]"><SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger…" options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} /><Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" /><Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>)}<div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '' }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div></div>
+          <div className="space-y-2"><div className="hidden grid-cols-[minmax(0,1fr)_10rem_2.25rem] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>Ledger</span><span className="text-right">Amount</span><span /></div>{allocations.map((allocation, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]"><SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} /><Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" /><Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>)}<div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '', invoice_allocations: [] }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div></div>
+          {allocations.some(allocation => allocation.invoice_allocations.length > 0) && (
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <p className="text-xs font-semibold uppercase text-muted-foreground">Invoice allocations (oldest due first)</p>
+              {allocations.map((allocation, allocationIndex) => allocation.invoice_allocations.map(row => {
+                const invoice = invoiceById.get(row.invoice_voucher_id)
+                return <div key={`${allocationIndex}-${row.invoice_voucher_id}`} className="grid grid-cols-[minmax(0,1fr)_7rem] items-center gap-2 text-sm"><span className="truncate">{invoice?.invoice_no || invoice?.seq || 'Invoice'} <span className="text-muted-foreground">Due {invoice?.due_date_bs || invoice?.date_bs}</span></span><Input type="number" min="0" step="any" value={row.amount} onChange={event => updateInvoiceAllocation(allocationIndex, row.invoice_voucher_id, event.target.value)} className="h-8 text-right" /></div>
+              }))}
+              {allocations.map((allocation, index) => partyAccountIds.has(allocation.account_id) && <p key={`unapplied-${index}`} className="text-xs text-muted-foreground">{accounts.find(account => account.id === allocation.account_id)?.name}: unapplied {fmtMoney(Math.max(0, Number(allocation.amount) - allocation.invoice_allocations.reduce((sum, row) => sum + (Number(row.amount) || 0), 0)))}</p>)}
+            </div>
+          )}
           <div className="space-y-1.5">
             <Label>Narration (optional)</Label>
             <Input value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note…" />

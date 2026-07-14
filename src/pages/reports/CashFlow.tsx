@@ -1,16 +1,17 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, Printer, WalletCards } from 'lucide-react'
+import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, WalletCards } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeCashFlow, fiscalYearStartBs, type CashFlowSection } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
+import { downloadCsv } from '@/lib/csv'
 import { todayBs } from '@/lib/nepaliDate'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
+import { ReportActions } from '@/components/reports/ReportActions'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { Badge } from '@/components/ui/misc'
-import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Voucher } from '@/types'
@@ -25,7 +26,7 @@ function CashFlowSectionTable({ section, expanded, onToggle, onVoucherClick }: {
 
   return (
     <Card className="report-table-card overflow-hidden">
-      <button type="button" aria-expanded={expanded} onClick={onToggle} className="report-controls flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/30">
+      <button type="button" aria-expanded={expanded} onClick={onToggle} className="report-section-header flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/30">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-muted-foreground">
           {expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
         </span>
@@ -33,7 +34,8 @@ function CashFlowSectionTable({ section, expanded, onToggle, onVoucherClick }: {
         <span className="ml-auto hidden text-xs text-muted-foreground sm:block">In {fmtMoney(section.inflow)} | Out {fmtMoney(section.outflow)}</span>
         <span className={`num min-w-28 text-right font-semibold ${section.net >= 0 ? 'text-forest' : 'text-terracotta'}`}>{fmtMoney(section.net)}</span>
       </button>
-      {expanded && (
+      <div className={expanded ? '' : 'hidden print:block'}>
+        {
         section.rows.length ? (
           <div className="overflow-x-auto border-t">
             <table className="w-full min-w-[850px] text-sm">
@@ -52,7 +54,8 @@ function CashFlowSectionTable({ section, expanded, onToggle, onVoucherClick }: {
             </table>
           </div>
         ) : <div className="border-t px-4 py-8 text-center text-sm text-muted-foreground">No cash movement in this section.</div>
-      )}
+        }
+      </div>
     </Card>
   )
 }
@@ -74,15 +77,16 @@ export function CashFlowPage() {
     else next.add(activity)
     return next
   })
+  const exportCsv = () => downloadCsv('cash-flow.csv', ['Activity', 'Date', 'Voucher', 'Type', 'Particulars', 'Cash / Bank', 'Inflow', 'Outflow'], report.sections.flatMap(section => section.rows.map(row => [section.label, row.voucher.date_bs, row.voucher.invoice_no || row.voucher.seq, row.voucher.type, row.account_name, row.cash_accounts, row.amount > 0 ? row.amount : '', row.amount < 0 ? -row.amount : ''])))
 
   return (
     <div className="report-page">
-      <PageHeader title="Cash Flow" description="Cash and bank movement by operating, investing and financing activities" action={<Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button>} />
+      <PageHeader title="Cash Flow" description="Cash and bank movement by operating, investing and financing activities" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} orientation="landscape" />} />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Cash Flow | {fmtDate(from)} to {fmtDate(to)}</p></div>
         <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
 
-        <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="report-summary grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard label="Opening Cash + Bank" value={report.opening_balance} sub={cashAccountNames} Icon={WalletCards} />
           <StatCard label="Total Inflow" value={report.total_inflow} color="positive" Icon={ArrowDownToLine} />
           <StatCard label="Total Outflow" value={report.total_outflow} color="negative" Icon={ArrowUpFromLine} />

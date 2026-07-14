@@ -6,13 +6,18 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards
+  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
+type NavIcon = React.ComponentType<{ className?: string }>
+type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
+type NavGroupItem = { kind: 'group'; id: string; label: string; Icon: NavIcon; matchPath?: string; children: NavLinkItem[] }
+type NavItem = NavLinkItem | NavGroupItem
+
 const NAV_SECTIONS: {
   label: string
-  items: { to: string; label: string; Icon: React.ComponentType<{ className?: string }>; end?: boolean }[]
+  items: NavItem[]
 }[] = [
   {
     label: 'Overview',
@@ -43,16 +48,90 @@ const NAV_SECTIONS: {
     label: 'Reports',
     items: [
       { to: '/reports/daybook', label: 'Daybook', Icon: CalendarDays },
-      { to: '/reports/ledger', label: 'Ledger Report', Icon: Library },
-      { to: '/reports/cash-flow', label: 'Cash Flow', Icon: WalletCards },
-      { to: '/trial-balance', label: 'Trial Balance', Icon: Scale },
-      { to: '/profit-loss', label: 'Profit & Loss', Icon: BarChart2 },
-      { to: '/balance-sheet', label: 'Balance Sheet', Icon: FileText },
-      { to: '/vat-report', label: 'VAT Report', Icon: Percent },
+      { to: '/reports/ledger', label: 'Ledger / Group Reports', Icon: Library },
+      { to: '/reports/registers', label: 'Transaction Registers', Icon: Files },
+      { to: '/reports/cash-bank-book', label: 'Cash & Bank', Icon: Landmark },
       { to: '/stock-report', label: 'Stock Summary', Icon: Boxes },
+      {
+        kind: 'group', id: 'financial', label: 'Financial Reports', Icon: BarChart2,
+        children: [
+          { to: '/balance-sheet', label: 'Balance Sheet', Icon: FileText },
+          { to: '/profit-loss', label: 'Profit & Loss', Icon: BarChart2 },
+          { to: '/reports/cash-flow', label: 'Cash Flow', Icon: WalletCards },
+          { to: '/trial-balance', label: 'Trial Balance', Icon: Scale },
+        ],
+      },
+      {
+        kind: 'group', id: 'outstandings', label: 'Outstandings', Icon: Clock3, matchPath: '/reports/receivables-payables',
+        children: [
+          { to: '/reports/receivables-payables?kind=receivable&view=aging', label: 'Debtors Ageing', Icon: Clock3 },
+          { to: '/reports/receivables-payables?kind=payable&view=aging', label: 'Creditors Ageing', Icon: Clock3 },
+        ],
+      },
+      { to: '/vat-report', label: 'VAT Report', Icon: Percent },
     ],
   },
 ]
+
+function navLinkIsActive(item: NavLinkItem, pathname: string, search: string) {
+  const [targetPath, targetQuery = ''] = item.to.split('?')
+  const pathMatches = item.end || targetPath === '/'
+    ? pathname === targetPath
+    : pathname === targetPath || pathname.startsWith(`${targetPath}/`)
+  if (!pathMatches) return false
+  const expected = new URLSearchParams(targetQuery)
+  if (!expected.size) return true
+  const actual = new URLSearchParams(search)
+  return [...expected].every(([key, value]) => actual.get(key) === value)
+}
+
+function itemIsActive(item: NavItem, pathname: string, search: string) {
+  return item.kind === 'group'
+    ? item.children.some(child => navLinkIsActive(child, pathname, search)) || item.matchPath === pathname
+    : navLinkIsActive(item, pathname, search)
+}
+
+function activeReportGroupId(pathname: string, search: string) {
+  const reports = NAV_SECTIONS.find(section => section.label === 'Reports')
+  const group = reports?.items.find(item => item.kind === 'group' && itemIsActive(item, pathname, search))
+  return group?.kind === 'group' ? group.id : null
+}
+
+function SidebarLink({ item, active, onNavigate, child = false }: { item: NavLinkItem; active: boolean; onNavigate: () => void; child?: boolean }) {
+  const Icon = item.Icon
+  return <NavLink
+    to={item.to}
+    end={item.end}
+    onClick={onNavigate}
+    className={cn(
+      'flex min-w-0 items-center gap-2.5 rounded-md px-2.5 py-2 text-sm transition-colors',
+      child && 'relative py-1.5 pl-4 before:absolute before:-left-3 before:top-1/2 before:h-px before:w-3 before:bg-blue-200/20',
+      active ? 'bg-white font-semibold text-[#1B2A4A]' : 'text-blue-100/80 hover:bg-white/10 hover:text-white',
+    )}
+  >
+    {!child && <Icon className="h-4 w-4 flex-shrink-0" />}
+    <span className="min-w-0 truncate">{item.label}</span>
+  </NavLink>
+}
+
+function ReportNavGroup({ item, open, active, onToggle, onNavigate, pathname, search }: { item: NavGroupItem; open: boolean; active: boolean; onToggle: () => void; onNavigate: () => void; pathname: string; search: string }) {
+  const Icon = item.Icon
+  const contentId = `report-nav-${item.id}`
+  return <div>
+    <button type="button" aria-expanded={open} aria-controls={contentId} onClick={onToggle} className={cn('flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-white/10 hover:text-white', active ? 'font-semibold text-white' : 'text-blue-100/80')}>
+      <Icon className="h-4 w-4 flex-shrink-0" />
+      <span className="min-w-0 truncate">{item.label}</span>
+      <ChevronDown className={cn('ml-auto h-3.5 w-3.5 flex-shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none', !open && '-rotate-90')} />
+    </button>
+    <div className={cn('grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
+      <div className="min-h-0 overflow-hidden">
+        <div id={contentId} aria-hidden={!open} inert={!open ? true : undefined} className="ml-4 space-y-0.5 border-l border-blue-200/20 pl-3 py-0.5">
+          {item.children.map(child => <SidebarLink key={child.to} item={child} child active={navLinkIsActive(child, pathname, search)} onNavigate={onNavigate} />)}
+        </div>
+      </div>
+    </div>
+  </div>
+}
 
 export function AppShell() {
   const company = useAppStore(s => s.company)
@@ -61,8 +140,9 @@ export function AppShell() {
   const vatEnabled = company?.vat_enabled ?? true
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [openReportGroup, setOpenReportGroup] = useState<string | null>(() => activeReportGroupId(location.pathname, location.search))
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    const active = NAV_SECTIONS.find(section => section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
     return new Set(active && active.label !== 'Overview' ? [active.label] : [])
   })
 
@@ -71,7 +151,7 @@ export function AppShell() {
   }, [])
 
   useEffect(() => {
-    const active = NAV_SECTIONS.find(section => section.items.some(item => location.pathname === item.to || (item.to !== '/' && location.pathname.startsWith(`${item.to}/`))))
+    const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
     if (!active) return
     const activeLabel = active.label === 'Overview' ? null : active.label
     setOpenSections(current => {
@@ -79,7 +159,11 @@ export function AppShell() {
       if (!activeLabel && current.size === 0) return current
       return new Set(activeLabel ? [activeLabel] : [])
     })
-  }, [location.pathname])
+  }, [location.pathname, location.search])
+
+  useEffect(() => {
+    setOpenReportGroup(activeReportGroupId(location.pathname, location.search))
+  }, [location.pathname, location.search])
 
   const toggleSection = (label: string) => setOpenSections(current => {
     return current.has(label) ? new Set() : new Set([label])
@@ -108,10 +192,10 @@ export function AppShell() {
 
   return (
     <div className="flex h-dvh overflow-hidden bg-background">
-      <button type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-md border bg-background shadow-sm md:hidden">
+      <button type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="app-mobile-nav fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-md border bg-background shadow-sm md:hidden">
         <Menu className="h-5 w-5" />
       </button>
-      {mobileOpen && <button type="button" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="fixed inset-0 z-40 bg-black/45 md:hidden" />}
+      {mobileOpen && <button type="button" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="app-mobile-nav fixed inset-0 z-40 bg-black/45 md:hidden" />}
       {/* Sidebar */}
       <aside className={cn('fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-y-auto bg-[#1B2A4A] transition-transform md:static md:w-56 md:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
         {/* Brand */}
@@ -133,7 +217,7 @@ export function AppShell() {
           {NAV_SECTIONS.map(section => {
             const collapsible = section.label !== 'Overview'
             const expanded = !collapsible || openSections.has(section.label)
-            const visibleItems = section.items.filter(item => vatEnabled || item.to !== '/vat-report')
+            const visibleItems = section.items.filter(item => item.kind === 'group' || vatEnabled || item.to !== '/vat-report')
             return <div key={section.label}>
               {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium uppercase tracking-wider text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white">
                 <span>{section.label}</span><ChevronDown className={cn('ml-auto h-3.5 w-3.5 transition-transform duration-300 ease-out motion-reduce:transition-none', !expanded && '-rotate-90')} />
@@ -141,25 +225,9 @@ export function AppShell() {
               <div className={cn('grid', collapsible && 'transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
                 <div className="min-h-0 overflow-hidden">
                   <div id={`nav-section-${section.label.toLowerCase()}`} aria-hidden={collapsible && !expanded} inert={collapsible && !expanded ? true : undefined} className="space-y-0.5">
-                    {visibleItems.map(({ to, label, Icon, end }) => (
-                      <NavLink
-                        key={to}
-                        to={to}
-                        end={end}
-                        onClick={() => setMobileOpen(false)}
-                        className={({ isActive }) =>
-                          cn(
-                            'flex items-center gap-2.5 px-2.5 py-2 rounded-md text-sm transition-colors',
-                            isActive
-                              ? 'bg-white text-[#1B2A4A] font-semibold'
-                              : 'text-blue-100/80 hover:bg-white/10 hover:text-white'
-                          )
-                        }
-                      >
-                        <Icon className="h-4 w-4 flex-shrink-0" />
-                        <span>{label}</span>
-                      </NavLink>
-                    ))}
+                    {visibleItems.map(item => item.kind === 'group'
+                      ? <ReportNavGroup key={item.id} item={item} open={openReportGroup === item.id} active={itemIsActive(item, location.pathname, location.search)} onToggle={() => setOpenReportGroup(current => current === item.id ? null : item.id)} onNavigate={() => setMobileOpen(false)} pathname={location.pathname} search={location.search} />
+                      : <SidebarLink key={item.to} item={item} active={navLinkIsActive(item, location.pathname, location.search)} onNavigate={() => setMobileOpen(false)} />)}
                   </div>
                 </div>
               </div>

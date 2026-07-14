@@ -48,6 +48,36 @@ export function categoryPath<C extends CategoryLike>(categories: C[], id?: strin
   return names.join(' › ')
 }
 
+export function categoryOptionLabel<C extends CategoryLike>(categories: C[], id?: string | null) {
+  if (!id) return ''
+  const byId = new Map(categories.map(category => [category.id, category]))
+  const target = byId.get(id)
+  if (!target) return ''
+  const normalize = (value: string) => value.trim().toLocaleLowerCase()
+  const duplicates = categories.filter(category => normalize(category.name) === normalize(target.name))
+  if (duplicates.length === 1) return target.name
+
+  const ancestors = (category: C) => {
+    const names: string[] = []
+    const seen = new Set<string>([category.id])
+    let parent = category.parent_category_id ? byId.get(category.parent_category_id) : undefined
+    while (parent && !seen.has(parent.id)) {
+      names.push(parent.name)
+      seen.add(parent.id)
+      parent = parent.parent_category_id ? byId.get(parent.parent_category_id) : undefined
+    }
+    return names
+  }
+  const targetAncestors = ancestors(target)
+  for (let length = 1; length <= targetAncestors.length; length += 1) {
+    const context = targetAncestors.slice(0, length)
+    const signature = context.map(normalize).join('>')
+    const unique = duplicates.every(category => category.id === target.id || ancestors(category).slice(0, length).map(normalize).join('>') !== signature)
+    if (unique) return `${target.name} (${context.reverse().join(' › ')})`
+  }
+  return `${target.name} (${target.id.slice(0, 8)})`
+}
+
 export function subtreeHeight<C extends CategoryLike>(categories: C[], id: string): number {
   const children = categories.filter(category => category.parent_category_id === id)
   return children.length ? 1 + Math.max(...children.map(child => subtreeHeight(categories, child.id))) : 1

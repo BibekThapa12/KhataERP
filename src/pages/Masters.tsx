@@ -16,7 +16,7 @@ import { Badge } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { normalizeSearch } from '@/lib/search'
-import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
+import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { partyTerminology } from '@/lib/partyTerminology'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
@@ -64,7 +64,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
         <div className="space-y-3 py-2">
           <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
           {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId('root') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
-          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[{ value: 'root', label: 'Top level' }, ...parentOptions.map(parent => ({ value: parent.id, label: categoryPath(allCategories, parent.id) }))]} /></div>
+          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[{ value: 'root', label: 'Top level' }, ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Category'}</Button></DialogFooter>
@@ -133,7 +133,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
           {party ? (
             <><div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div><div className="space-y-1.5"><Label>Default Credit Days</Label><Input type="number" min="0" step="1" value={defaultCreditDays} onChange={event => setDefaultCreditDays(event.target.value)} /><p className="text-xs text-muted-foreground">Used automatically on new credit invoices.</p></div></>
           ) : (
-            <div className="space-y-1.5"><Label>Category</Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled={!!account?.is_system} placeholder="Select category" options={activeCategories.map(category => ({ value: category.id, label: `${categoryPath(accountCategories, category.id)} (${category.account_type})` }))} /></div>
+            <div className="space-y-1.5"><Label>Category</Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled={!!account?.is_system} placeholder="Select category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>
           )}
           <div className="space-y-1.5"><Label>Opening Balance</Label><Input type="number" step="any" value={openingBalance} onChange={event => setOpeningBalance(event.target.value)} /><p className="text-xs text-muted-foreground">Changes affect all reports. Current voucher movements are not modified.</p></div>
           {(account?.is_system || isUsed) && <p className="text-xs text-amber-700">This ledger is protected from account-type changes because it is {account?.is_system ? 'a system ledger' : 'used in vouchers'}.</p>}
@@ -183,7 +183,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
     <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></div>
-        <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryPath(itemCategories, category.id) }))} /></div>
+        <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
         <div className="space-y-1.5"><Label>Main Unit</Label><Input value={form.unit} onChange={event => setForm({ ...form, unit: event.target.value })} /></div>
         <div className="space-y-1.5"><Label>Sell Rate</Label><Input type="number" value={form.sell_rate} onChange={event => setForm({ ...form, sell_rate: event.target.value })} /></div>
         <div className="space-y-1.5"><Label>Alternative Unit</Label><Input value={form.alternate_unit} onChange={event => setForm({ ...form, alternate_unit: event.target.value })} placeholder="Optional" /></div>

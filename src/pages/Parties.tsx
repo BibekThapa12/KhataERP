@@ -1,8 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Eye, Printer, Share2 } from 'lucide-react'
+import { Plus, Download, Eye, Printer, Share2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent } from '@/lib/supabase'
+import { downloadCsv } from '@/lib/csv'
+import { getPartyBalanceSummary, type PartyBalanceRow, type PartyBalanceTotals } from '@/lib/partyBalances'
+import { todayBs } from '@/lib/nepaliDate'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -144,26 +147,25 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Phone</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden lg:table-cell">PAN/VAT</th>
             <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden lg:table-cell">Credit Days</th>
-            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Balance</th>
+            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Debit</th>
+            <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Credit</th>
             <th className="px-4 py-2.5 w-12"></th>
           </tr>
         </thead>
         <tbody>
           {list.map(p => {
             const bal = p.account?.balance ?? 0
-            const isPositive = bal > 0
+            const debitBalance = partyType === 'customer' ? bal : -bal
+            const debit = debitBalance > 0 ? debitBalance : 0
+            const credit = debitBalance < 0 ? Math.abs(debitBalance) : 0
             return (
               <tr key={p.id} className="border-t border-border hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3 font-semibold">{p.name}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{p.phone || '—'}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.pan_vat || '—'}</td>
                 <td className="px-4 py-3 text-right num text-muted-foreground hidden lg:table-cell">{p.default_credit_days ?? 0}</td>
-                <td className="px-4 py-3 text-right">
-                  <span className={`num font-semibold ${isPositive ? (partyType === 'customer' ? 'credit-amt' : 'debit-amt') : 'text-muted-foreground'}`}>
-                    {fmtMoney(Math.abs(bal))}
-                  </span>
-                  {isPositive && <span className="text-xs text-muted-foreground ml-1">{partyType === 'customer' ? 'owes you' : 'you owe'}</span>}
-                </td>
+                <td className="px-4 py-3 text-right num font-semibold debit-amt">{debit ? fmtMoney(debit) : '—'}</td>
+                <td className="px-4 py-3 text-right num font-semibold credit-amt">{credit ? fmtMoney(credit) : '—'}</td>
                 <td className="px-4 py-3">
                   <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setSelected(p)}>
                     <Eye className="h-3.5 w-3.5" />
@@ -188,11 +190,34 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
 
 export function PartiesPage() {
   const [searchParams] = useSearchParams()
-  const parties = useAppStore(state => state.parties)
+  const { company, parties, accounts } = useAppStore()
   const selectedPartyId = searchParams.get('party')
   const selectedParty = parties.find(party => party.id === selectedPartyId)
   const [tab, setTab] = useState<'customer' | 'supplier'>(selectedParty?.type || 'customer')
   const [showForm, setShowForm] = useState(false)
+  const balanceSummary = getPartyBalanceSummary(parties, accounts)
+  const activeRows = tab === 'customer' ? balanceSummary.debtors : balanceSummary.creditors
+  const activeTotals = tab === 'customer' ? balanceSummary.debtorTotals : balanceSummary.creditorTotals
+  const activeTitle = tab === 'customer' ? 'Sundry Debtors (Customers)' : 'Sundry Creditors (Suppliers)'
+  const reportSlug = tab === 'customer' ? 'sundry-debtors' : 'sundry-creditors'
+
+  const exportBalances = () => {
+    downloadCsv(`${reportSlug}-balances.csv`, ['Party', 'Phone', 'PAN / VAT', 'Debit', 'Credit'], activeRows.map(row => [row.party.name, row.party.phone, row.party.pan_vat, row.debit || '', row.credit || '']))
+    logAppEvent('export_party_balance_summary', company?.id, { party_type: tab, party_count: activeRows.length })
+  }
+
+  const printBalances = () => {
+    const win = window.open('', '_blank', 'width=1000,height=900')
+    if (!win) return
+    const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]!))
+    const section = (title: string, rows: PartyBalanceRow[], totals: PartyBalanceTotals) => `<h2>${esc(title)}</h2><table><thead><tr><th>Party</th><th>Phone</th><th class="right">Debit</th><th class="right">Credit</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.party.name)}</td><td>${esc(row.party.phone || '-')}</td><td class="right">${row.debit ? esc(fmtMoney(row.debit)) : '-'}</td><td class="right">${row.credit ? esc(fmtMoney(row.credit)) : '-'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No parties</td></tr>'}</tbody><tfoot><tr><th colspan="2">Total</th><th class="right">${esc(fmtMoney(totals.debit))}</th><th class="right">${esc(fmtMoney(totals.credit))}</th></tr></tfoot></table>`
+    const balanceMeaning = tab === 'customer' ? 'Debit: receivable from customers. Credit: customer advance or amount payable.' : 'Debit: supplier advance or amount recoverable. Credit: payable to suppliers.'
+    win.document.write(`<!doctype html><html><head><title>${esc(activeTitle)} Balance Summary</title><style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111827}h1{margin:0;font-size:21px}h2{margin:20px 0 7px;font-size:15px}.meta{margin:5px 0;color:#4b5563}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d1d5db;padding:6px}th{background:#f3f4f6;text-align:left}.right{text-align:right}.empty{text-align:center;color:#6b7280}tfoot th{background:#f9fafb}</style></head><body><h1>${esc(company?.name || 'KhataERP')}</h1><p class="meta">${esc(activeTitle)} Balance Summary as of ${esc(fmtDate(todayBs()))}</p><p class="meta">${esc(balanceMeaning)}</p>${section(activeTitle, activeRows, activeTotals)}</body></html>`)
+    win.document.close()
+    win.focus()
+    logAppEvent('print_party_balance_summary', company?.id, { party_type: tab, party_count: activeRows.length })
+    win.print()
+  }
 
   useEffect(() => {
     if (selectedParty) setTab(selectedParty.type)
@@ -201,7 +226,7 @@ export function PartiesPage() {
   return (
     <div>
       <PageHeader title="Parties" description="Sundry Debtors (Customers) and Sundry Creditors (Suppliers)"
-        action={<Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button>} />
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button></div>} />
       <PageContent>
         <Tabs value={tab} onValueChange={value => setTab(value as 'customer' | 'supplier')}>
           <TabsList className="mb-4">

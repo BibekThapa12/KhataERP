@@ -5,7 +5,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide } from '@/lib/engine'
 import { buildAccountReportTree, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
-import { fmtMoney } from '@/lib/utils'
+import { fmtDate, fmtMoney } from '@/lib/utils'
+import { downloadCsv } from '@/lib/csv'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity } from '@/lib/units'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -17,9 +18,10 @@ import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { ReportActions } from '@/components/reports/ReportActions'
 import { Badge } from '@/components/ui/misc'
 import { normalizeSearch } from '@/lib/search'
-import { categoryDescendantIds, categoryPath } from '@/lib/categoryHierarchy'
+import { categoryDescendantIds, categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
 import type { Account, InventoryValuationMethod } from '@/types'
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
@@ -75,14 +77,22 @@ function HierarchicalAmountTable({ accounts, categories, total, emptyLabel, tota
 }
 
 export function TrialBalancePage() {
-  const { accounts, accountCategories } = useAppStore()
+  const { company, accounts, accountCategories } = useAppStore()
   const tb = useMemo(() => computeTrialBalance(accounts), [accounts])
+  const exportCsv = () => downloadCsv('trial-balance.csv', ['Ledger', 'Category', 'Debit', 'Credit'], accounts.filter(account => Math.abs(account.balance || 0) >= 0.005).map(account => {
+    const balance = account.balance || 0
+    const side = normalSide(account.type)
+    const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0
+    const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0
+    return [account.name, categoryPath(accountCategories, account.category_id), debit || '', credit || '']
+  }))
 
   return (
-    <div>
-      <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" />
-      <PageContent>
-        <Card>
+    <div className="report-page">
+      <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+      <PageContent className="report-content">
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | As of {fmtDate(todayBs())}</p></div>
+        <Card className="report-table-card">
           <HierarchicalTrialTable accounts={accounts} categories={accountCategories} totalDebit={tb.total_debit} totalCredit={tb.total_credit} />
           {tb.balanced
             ? <p className="px-4 py-3 text-sm text-forest font-semibold">✓ Balanced</p>
@@ -96,16 +106,23 @@ export function TrialBalancePage() {
 
 // ─── Profit & Loss ────────────────────────────────────────────────────────────
 export function ProfitLossPage() {
-  const { accounts, accountCategories, closingStockValue } = useAppStore()
+  const { company, accounts, accountCategories, closingStockValue } = useAppStore()
   const csv = closingStockValue()
   const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
+  const exportCsv = () => downloadCsv('profit-and-loss.csv', ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
+    ...pnl.income.map(account => ['Income', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
+    ...pnl.expense.map(account => ['Expense', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
+    ...(csv ? [['Expense', 'Less: Closing Stock', '', -csv]] : []),
+    ['', 'Total Income', '', pnl.total_income], ['', 'Total Expense', '', pnl.total_expense], ['', pnl.net_profit >= 0 ? 'Net Profit' : 'Net Loss', '', Math.abs(pnl.net_profit)],
+  ])
 
   return (
-    <div>
+    <div className="report-page">
       <PageHeader title="Profit & Loss"
-        description="Income vs expenses, adjusted for closing stock so profit reflects only goods actually sold" />
-      <PageContent className="space-y-4">
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        description="Income vs expenses, adjusted for closing stock so profit reflects only goods actually sold" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+      <PageContent className="report-content space-y-4">
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Profit & Loss | As of {fmtDate(todayBs())}</p></div>
+        <div className="report-summary grid grid-cols-1 md:grid-cols-3 gap-4">
           <StatCard label="Total Income" value={pnl.total_income} color="positive" />
           <StatCard label="Total Expense" value={pnl.total_expense} color="negative"
             sub={csv > 0 ? `After closing stock deduction of ${fmtMoney(csv)}` : undefined} />
@@ -113,14 +130,14 @@ export function ProfitLossPage() {
             color={pnl.net_profit >= 0 ? 'positive' : 'negative'} />
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card>
+        <div className="report-print-columns grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="report-table-card">
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Income</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
               <HierarchicalAmountTable accounts={pnl.income} categories={accountCategories} total={pnl.total_income} emptyLabel="No income accounts" />
             </CardContent>
           </Card>
-          <Card>
+          <Card className="report-table-card">
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Expense</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
               <HierarchicalAmountTable accounts={pnl.expense} categories={accountCategories} total={pnl.total_expense} totalLabel="Total (adjusted)" emptyLabel="No expense accounts" adjustments={csv > 0 ? [{ label: 'Less: Closing Stock', amount: -csv, className: 'text-forest' }] : []} />
@@ -134,24 +151,33 @@ export function ProfitLossPage() {
 
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 export function BalanceSheetPage() {
-  const { accounts, accountCategories, closingStockValue } = useAppStore()
+  const { company, accounts, accountCategories, closingStockValue } = useAppStore()
   const csv = closingStockValue()
   const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
   const bs = useMemo(() => computeBalanceSheet(accounts, pnl.net_profit, csv), [accounts, pnl.net_profit, csv])
   const realAssets = bs.assets.filter(account => !!account.company_id)
+  const exportCsv = () => downloadCsv('balance-sheet.csv', ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
+    ...realAssets.map(account => ['Assets', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
+    ...(csv ? [['Assets', 'Stock-in-Hand (Closing)', '', csv]] : []),
+    ...bs.liabilities.map(account => ['Liabilities', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
+    ...bs.equity.map(account => ['Equity', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
+    ['Equity', `Net ${pnl.net_profit >= 0 ? 'Profit' : 'Loss'} (current)`, '', pnl.net_profit],
+    ['', 'Total Assets', '', bs.total_assets], ['', 'Total Liabilities & Equity', '', bs.total_liabilities + bs.total_equity],
+  ])
 
   return (
-    <div>
-      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" />
-      <PageContent className="space-y-4">
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card>
+    <div className="report-page">
+      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+      <PageContent className="report-content space-y-4">
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(todayBs())}</p></div>
+        <div className="report-print-columns grid grid-cols-1 lg:grid-cols-2 gap-4">
+          <Card className="report-table-card">
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Assets</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
               <HierarchicalAmountTable accounts={realAssets} categories={accountCategories} total={bs.total_assets} emptyLabel="No assets" adjustments={csv !== 0 ? [{ label: 'Stock-in-Hand (Closing)', amount: csv }] : []} />
             </CardContent>
           </Card>
-          <Card>
+          <Card className="report-table-card">
             <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Liabilities & Equity</CardTitle></CardHeader>
             <CardContent className="p-0 pb-1">
               <HierarchicalAmountTable accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} total={bs.total_liabilities + bs.total_equity} emptyLabel="No liabilities or equity" adjustments={[{ label: `Net ${pnl.net_profit >= 0 ? 'Profit' : 'Loss'} (current)`, amount: pnl.net_profit, className: 'text-muted-foreground' }]} />
@@ -278,25 +304,29 @@ export function StockReportPage() {
     try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError((error as Error).message) }
   }
   const headings = showDetails ? ['Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
+  const exportCsv = () => downloadCsv('stock-summary.csv', headings, rows.map(row => showDetails
+    ? [row.item.name, row.category, row.item.unit, row.movement.opening_qty, row.movement.inward_qty, row.movement.outward_qty, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]
+    : [row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
 
-  return <div>
-    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} />
-    <PageContent className="space-y-5">
-      <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
+  return <div className="report-page">
+    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} orientation="landscape" />} />
+    <PageContent className="report-content space-y-5">
+      <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Stock Summary | As of {fmtDate(todayBs())} | {methodLabel}</p></div>
+      <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total Items" value={String(rows.length)} Icon={Boxes} />
         <StatCard label={`Stock Value (${methodLabel})`} value={totalValue} Icon={TrendingUp} color="positive" />
         <StatCard label="Low Stock Items" value={String(lowStockCount)} Icon={AlertTriangle} color="warning" />
         <StatCard label="Categories" value={String(categoryCount)} Icon={Layers3} />
       </div>
-      <div className="flex flex-col gap-2 lg:flex-row lg:items-center">
+      <div className="report-controls flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
-        <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryPath(itemCategories, category.id) }))]} />
+        <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))]} />
         <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, { value: 'low', label: 'Low Stock' }, { value: 'out', label: 'Out of Stock' }]} />
         <SearchableSelect className="w-full lg:w-52" value={method} onValueChange={changeMethod} options={[{ value: 'weighted_average', label: 'Weighted Average' }, { value: 'fifo', label: 'FIFO' }, { value: 'lifo', label: 'LIFO' }]} />
         <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
       </div>
       {methodError && <p className="text-sm text-destructive">{methodError}</p>}
-      <Card className="overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`w-full border-collapse text-sm ${showDetails ? 'min-w-[1120px]' : 'min-w-[820px]'}`}>
+      <Card className="report-table-card overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`w-full border-collapse text-sm ${showDetails ? 'min-w-[1120px]' : 'min-w-[820px]'}`}>
         <thead><tr className="bg-muted/50">{headings.map((heading, index) => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${index >= 3 && heading !== 'Status' ? 'text-right' : 'text-left'}`}>{heading}</th>)}</tr></thead>
         <tbody>{rows.map(row => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
         <tfoot><tr className="border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr></tfoot>

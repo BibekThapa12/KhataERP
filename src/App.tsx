@@ -25,6 +25,9 @@ const StockReportPage = lazy(() => import('@/pages/reports/StockReport').then(m 
 const DaybookPage = lazy(() => import('@/pages/reports/Daybook').then(m => ({ default: m.DaybookPage })))
 const LedgerReportPage = lazy(() => import('@/pages/reports/LedgerReport').then(m => ({ default: m.LedgerReportPage })))
 const CashFlowPage = lazy(() => import('@/pages/reports/CashFlow').then(m => ({ default: m.CashFlowPage })))
+const ReceivablesPayablesPage = lazy(() => import('@/pages/reports/ReceivablesPayables').then(m => ({ default: m.ReceivablesPayablesPage })))
+const RegistersPage = lazy(() => import('@/pages/reports/Registers').then(m => ({ default: m.RegistersPage })))
+const CashBankBookPage = lazy(() => import('@/pages/reports/CashBankBook').then(m => ({ default: m.CashBankBookPage })))
 const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default: m.SettingsPage })))
 const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
 
@@ -112,6 +115,7 @@ export default function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_lines' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_lines' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_items' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_settlements' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'parties' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, scheduleRefresh)
@@ -187,6 +191,9 @@ export default function App() {
             <Route path="reports/daybook" element={<DaybookPage />} />
             <Route path="reports/ledger" element={<LedgerReportPage />} />
             <Route path="reports/cash-flow" element={<CashFlowPage />} />
+            <Route path="reports/receivables-payables" element={<ReceivablesPayablesPage />} />
+            <Route path="reports/registers" element={<RegistersPage />} />
+            <Route path="reports/cash-bank-book" element={<CashBankBookPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="developer" element={<DeveloperDashboard />} />
           </Route>

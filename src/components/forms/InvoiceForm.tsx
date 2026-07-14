@@ -175,27 +175,27 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
           </DialogHeader>
 
           <div className="space-y-4 py-2">
-            {/* Date + Party */}
+            {/* Date + payment mode */}
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Date</Label>
                 <NepaliDateInput value={dateBs} onChange={setDateBs} />
               </div>
-              <div className="space-y-1.5">
-                <div className="flex items-center gap-2 mb-1.5">
-                  <input type="checkbox" id="isCash" checked={isCash} onChange={e => toggleCash(e.target.checked)} className="rounded" />
-                  <Label htmlFor="isCash" className="font-normal cursor-pointer">
-                    {isSales ? 'Cash sale' : 'Cash purchase'}
-                  </Label>
+              <div className="flex items-end pb-2">
+                <div className="flex items-center gap-2">
+                  <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} className="h-4 w-4 shrink-0 rounded accent-primary" />
+                  <Label htmlFor={`${type.toLowerCase()}-cash-mode`} className="cursor-pointer font-normal">{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
                 </div>
-                {!isCash && (
-                  <div className="flex gap-1.5">
-                    <SearchableSelect className="flex-1" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}…`} searchPlaceholder={`Search ${partyTerms.plural}…`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
-                    <Button type="button" variant="outline" size="sm" onClick={() => setShowPartyForm(true)}>+ New</Button>
-                  </div>
-                )}
               </div>
             </div>
+
+            {!isCash && <div className="min-w-0 space-y-1.5">
+              <Label>{partyTerms.singular}</Label>
+              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+                <SearchableSelect className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
+                <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
+              </div>
+            </div>}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">

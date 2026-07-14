@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
-import { filterSearchableOptions } from '@/lib/search'
+import { filterSearchableOptions, groupSearchableOptions } from '@/lib/search'
 
 export interface SearchableSelectOption {
   value: string
@@ -33,8 +33,10 @@ export function SearchableSelect({
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const suppressNextFocus = useRef(false)
+  const scrollFrame = useRef<number | null>(null)
+  const scrollTarget = useRef(0)
   const uniqueOptions = useMemo(() => [...new Map(options.map(option => [option.value, option])).values()], [options])
-  const filtered = useMemo(() => filterSearchableOptions(uniqueOptions, query), [uniqueOptions, query])
+  const filtered = useMemo(() => groupSearchableOptions(filterSearchableOptions(uniqueOptions, query)), [uniqueOptions, query])
   const enabled = filtered.filter(option => !option.disabled)
   const selected = uniqueOptions.find(option => option.value === value)
 
@@ -43,6 +45,29 @@ export function SearchableSelect({
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
     return () => window.clearTimeout(timer)
   }, [open])
+
+  useEffect(() => () => {
+    if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current)
+  }, [])
+
+  const scrollList = (element: HTMLDivElement, delta: number) => {
+    const maximum = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (scrollFrame.current === null) scrollTarget.current = element.scrollTop
+    scrollTarget.current = Math.max(0, Math.min(maximum, scrollTarget.current + delta))
+    if (scrollFrame.current !== null) return
+
+    const step = () => {
+      const distance = scrollTarget.current - element.scrollTop
+      if (Math.abs(distance) < 0.5) {
+        element.scrollTop = scrollTarget.current
+        scrollFrame.current = null
+        return
+      }
+      element.scrollTop += distance * 0.24
+      scrollFrame.current = window.requestAnimationFrame(step)
+    }
+    scrollFrame.current = window.requestAnimationFrame(step)
+  }
 
   const select = (option: SearchableSelectOption) => {
     if (option.disabled) return
@@ -79,7 +104,15 @@ export function SearchableSelect({
             if (event.key === 'Escape') { suppressNextFocus.current = true; setOpen(false) }
           }} placeholder={searchPlaceholder} className="h-8 w-full rounded-sm bg-transparent pl-8 pr-2 text-sm outline-none placeholder:text-muted-foreground" />
         </div>
-        <div role="listbox" className="max-h-72 overflow-y-auto p-1">
+        <div
+          role="listbox"
+          onWheelCapture={event => {
+            event.preventDefault()
+            event.stopPropagation()
+            scrollList(event.currentTarget, event.deltaY)
+          }}
+          className="max-h-72 overscroll-contain overflow-y-auto p-1"
+        >
           {!filtered.length && <p className="px-3 py-6 text-center text-sm text-muted-foreground">{emptyText}</p>}
           {filtered.map((option, index) => {
             const previousGroup = index > 0 ? filtered[index - 1].group : undefined

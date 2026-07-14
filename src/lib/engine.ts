@@ -359,7 +359,11 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
-export interface TransactionAllocation { account_id: string; amount: number }
+export interface TransactionAllocation {
+  account_id: string
+  amount: number
+  invoice_allocations?: { invoice_voucher_id: string; amount: number }[]
+}
 
 export function buildReceiptData(allocations: TransactionAllocation[], deposit_to_account_id: string) {
   const total = round2(allocations.reduce((sum, allocation) => sum + allocation.amount, 0))

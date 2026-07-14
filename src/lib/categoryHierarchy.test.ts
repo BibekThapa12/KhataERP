@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryPath, subtreeHeight } from '@/lib/categoryHierarchy'
+import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, subtreeHeight } from '@/lib/categoryHierarchy'
 
 const categories = [
   { id: 'assets', name: 'Assets', parent_category_id: null },
@@ -24,5 +24,18 @@ describe('category hierarchy', () => {
     expect(categoryDepth(categories, 'debtors')).toBe(3)
     expect(categoryDescendantIds(categories, 'assets')).toEqual(new Set(['current', 'debtors']))
     expect(subtreeHeight(categories, 'assets')).toBe(3)
+  })
+
+  it('uses concise selector labels and adds only the context needed for duplicates', () => {
+    const options = [
+      ...categories,
+      { id: 'liabilities', name: 'Liabilities', parent_category_id: null },
+      { id: 'liability-current', name: 'Current Liabilities', parent_category_id: 'liabilities' },
+      { id: 'asset-bank', name: 'Bank', parent_category_id: 'current' },
+      { id: 'liability-bank', name: 'Bank', parent_category_id: 'liability-current' },
+    ]
+    expect(categoryOptionLabel(options, 'debtors')).toBe('Sundry Debtors')
+    expect(categoryOptionLabel(options, 'asset-bank')).toBe('Bank (Current Assets)')
+    expect(categoryOptionLabel(options, 'liability-bank')).toBe('Bank (Current Liabilities)')
   })
 })

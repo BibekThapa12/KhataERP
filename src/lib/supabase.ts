@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement } from '@/types'
 import { adToBs, DEFAULT_FISCAL_YEAR_START_AD, makeBsKey, normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
@@ -434,6 +434,22 @@ export async function fetchMasterChangeLogs(company_id: string): Promise<MasterC
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
+  const { data: settlementData, error: settlementError } = await supabase
+    .from('voucher_settlements')
+    .select('*')
+    .eq('company_id', company_id)
+  const settlements = settlementError && /does not exist|schema cache/i.test(settlementError.message)
+    ? []
+    : settlementError
+      ? (() => { throw settlementError })()
+      : (settlementData || []) as VoucherSettlement[]
+  const byVoucher = new Map<string, VoucherSettlement[]>()
+  for (const settlement of settlements) {
+    const rows = byVoucher.get(settlement.settlement_voucher_id) || []
+    rows.push(settlement)
+    byVoucher.set(settlement.settlement_voucher_id, rows)
+  }
+  const attachSettlements = (voucher: Voucher) => ({ ...voucher, settlements: byVoucher.get(voucher.id) || [] })
   const query = supabase
     .from('vouchers')
     .select(`
@@ -450,7 +466,7 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
 
   if (!error) {
     return (data || [])
-      .map(v => normalizeVoucherDates(v) as Voucher)
+      .map(v => attachSettlements(normalizeVoucherDates(v) as Voucher))
       .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
   }
 
@@ -467,7 +483,7 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
     .order('seq', { ascending: false })
   if (legacyError) throw legacyError
   return (legacyData || [])
-    .map(v => normalizeVoucherDates(v) as Voucher)
+    .map(v => attachSettlements(normalizeVoucherDates(v) as Voucher))
     .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
 }
 
@@ -516,21 +532,59 @@ export async function getNextVoucherNo(
 }
 
 interface InsertVoucherPayload {
-  voucher: Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'party'>
+  voucher: Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
   invoice_items?: InvoiceItem[]
+  settlements?: VoucherSettlementInput[]
 }
 
 interface UpdateVoucherPayload {
   id: string
-  voucher: Partial<Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'party'>>
+  voucher: Partial<Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
   invoice_items?: InvoiceItem[]
+  settlements?: VoucherSettlementInput[]
 }
 
-export async function insertVoucher({ voucher, lines, stock_lines, invoice_items }: InsertVoucherPayload): Promise<Voucher> {
+export type VoucherSettlementInput = Pick<VoucherSettlement, 'invoice_voucher_id' | 'party_account_id' | 'amount'>
+
+function invoiceItemInsertRow(item: InvoiceItem, voucherId: string) {
+  return {
+    voucher_id: voucherId,
+    item_id: item.item_id,
+    qty: item.qty,
+    rate: item.rate,
+    source_invoice_item_id: item.source_invoice_item_id,
+    item_name: item.item_name,
+    unit: item.unit,
+    entry_unit: item.entry_unit,
+    conversion_factor: item.conversion_factor,
+    base_qty: item.base_qty,
+    discount_amount: item.discount_amount,
+    taxable_amount: item.taxable_amount,
+    vat_amount: item.vat_amount,
+    cost_rate: item.cost_rate,
+  }
+}
+
+export async function replaceVoucherSettlements(companyId: string, settlementVoucherId: string, rows: VoucherSettlementInput[]): Promise<VoucherSettlement[]> {
+  const { error: deleteError } = await supabase.from('voucher_settlements').delete().eq('settlement_voucher_id', settlementVoucherId)
+  if (deleteError) throw deleteError
+  if (!rows.length) return []
+  const { data, error } = await supabase.from('voucher_settlements').insert(rows.map(row => ({
+    company_id: companyId,
+    settlement_voucher_id: settlementVoucherId,
+    invoice_voucher_id: row.invoice_voucher_id,
+    party_account_id: row.party_account_id,
+    amount: row.amount,
+  }))).select()
+  if (error) throw error
+  return (data || []) as VoucherSettlement[]
+}
+
+export async function insertVoucher({ voucher, lines, stock_lines, invoice_items, settlements }: InsertVoucherPayload): Promise<Voucher> {
   const { data: v, error: ve } = await supabase
     .from('vouchers')
     .insert(voucher)
@@ -563,17 +617,22 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
   if (invoice_items?.length) {
     const { data, error: ie } = await supabase
       .from('invoice_items')
-      .insert(invoice_items.map(({ id: _id, voucher_id: _voucherId, ...item }) => ({ ...item, voucher_id: v.id })))
+      .insert(invoice_items.map(item => invoiceItemInsertRow(item, v.id)))
       .select()
     if (ie) throw ie
     newInvoiceItems = data || []
   }
+
+  const newSettlements = settlements?.length
+    ? await replaceVoucherSettlements(v.company_id, v.id, settlements)
+    : []
 
   return {
     ...normalizeVoucherDates(v),
     lines: newLines,
     stock_lines: newStockLines,
     invoice_items: newInvoiceItems,
+    settlements: newSettlements,
   } as Voucher
   } catch (error) {
     // Child rows cascade from the voucher. Best-effort cleanup prevents a
@@ -584,7 +643,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
   }
 }
 
-export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items }: UpdateVoucherPayload): Promise<Voucher> {
+export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements }: UpdateVoucherPayload): Promise<Voucher> {
   const { data: v, error: ve } = await supabase
     .from('vouchers')
     .update(voucher)
@@ -598,6 +657,8 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
     const { error } = await supabase.from(table).delete().eq('voucher_id', id)
     if (error) throw error
   }
+  const { error: settlementDeleteError } = await supabase.from('voucher_settlements').delete().eq('settlement_voucher_id', id)
+  if (settlementDeleteError) throw settlementDeleteError
 
   let newLines: VoucherLine[] = []
   if (lines.length) {
@@ -623,17 +684,22 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
   if (invoice_items?.length) {
     const { data, error: ie } = await supabase
       .from('invoice_items')
-      .insert(invoice_items.map(({ id: _id, voucher_id: _voucherId, ...item }) => ({ ...item, voucher_id: id })))
+      .insert(invoice_items.map(item => invoiceItemInsertRow(item, id)))
       .select()
     if (ie) throw ie
     newInvoiceItems = data || []
   }
+
+  const newSettlements = settlements?.length
+    ? await replaceVoucherSettlements(v.company_id, id, settlements)
+    : []
 
   return {
     ...normalizeVoucherDates(v),
     lines: newLines,
     stock_lines: newStockLines,
     invoice_items: newInvoiceItems,
+    settlements: newSettlements,
   } as Voucher
 }
 

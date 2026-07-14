@@ -120,7 +120,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       if (line.qty > remaining + 0.0001) return setError(`${line.item_name} has only ${remaining} ${line.unit} remaining to return.`)
     }
     if (settlementMode !== 'party' && !settlementAccountId) return setError('Select a settlement account.')
-    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId, restock_items: restock, return_reason: reason.trim(), date_bs: dateBs }
+    const returnItems: ReturnItemInput[] = selectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
+    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId, restock_items: restock, return_reason: reason.trim(), date_bs: dateBs }
     setSaving(true)
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params)

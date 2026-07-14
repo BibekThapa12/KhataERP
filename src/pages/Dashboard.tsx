@@ -2,7 +2,7 @@ import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   ArrowDownCircle, ArrowUpCircle, BookOpen, Building2, Landmark,
-  ReceiptText, ShoppingBag, ShoppingCart, TrendingDown, TrendingUp, Users, Wallet,
+  CalendarDays, ReceiptText, ShoppingBag, ShoppingCart, TrendingDown, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
@@ -33,6 +33,7 @@ const quickActions = [
   { label: 'Receipt', path: '/receipts?new=1', Icon: ArrowDownCircle, className: 'border-blue-100 bg-blue-50/70 text-blue-700' },
   { label: 'Payment', path: '/payments?new=1', Icon: ArrowUpCircle, className: 'border-violet-100 bg-violet-50/70 text-violet-700' },
   { label: 'Journal Entry', path: '/journal?new=1', Icon: BookOpen, className: 'border-slate-200 bg-slate-50 text-slate-700' },
+  { label: 'Daybook', path: '/reports/daybook', Icon: CalendarDays, className: 'border-cyan-100 bg-cyan-50/70 text-cyan-700' },
 ]
 
 function DashboardMetric({ label, value, Icon, tone = 'navy', sub }: {
@@ -142,8 +143,8 @@ export function Dashboard() {
 
   return <div>
     <PageHeader title="Dashboard" description="Overview of your business" action={
-      <button type="button" role="switch" aria-checked={chartMode} onClick={() => setChartMode(value => !value)} className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50">
-        <span>Chart Mode</span><span className={`relative h-5 w-9 rounded-full transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-[18px]' : 'translate-x-0.5'}`} /></span>
+      <button type="button" role="switch" aria-checked={chartMode} aria-label="Toggle chart mode" onClick={() => setChartMode(value => !value)} className="flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto sm:justify-start">
+        <span>Chart Mode</span><span aria-hidden className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`block h-4 w-4 shrink-0 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-4' : 'translate-x-0'}`} /></span>
       </button>
     } />
     <PageContent className="space-y-4">
@@ -151,7 +152,7 @@ export function Dashboard() {
 
       <Card className="shadow-none"><CardContent className="p-3 sm:p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
 
-      <div className="grid grid-cols-2 gap-2 md:grid-cols-5 md:gap-3">
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 md:gap-3 xl:grid-cols-6">
         {quickActions.map(({ label, path, Icon, className }) => <button key={label} type="button" onClick={() => navigate(path)} className={`flex min-h-12 items-center justify-center gap-2 rounded-lg border px-3 py-3 text-sm font-semibold transition-transform hover:-translate-y-0.5 hover:shadow-sm ${className}`}><Icon className="h-4 w-4" />{label}</button>)}
       </div>
 
