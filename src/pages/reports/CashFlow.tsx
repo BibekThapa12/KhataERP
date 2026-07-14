@@ -81,7 +81,7 @@ export function CashFlowPage() {
 
   return (
     <div className="report-page">
-      <PageHeader title="Cash Flow" description="Cash and bank movement by operating, investing and financing activities" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} orientation="landscape" />} />
+      <PageHeader title="Cash Flow" description="Cash and bank movement by operating, investing and financing activities" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Cash Flow | {fmtDate(from)} to {fmtDate(to)}</p></div>
         <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>

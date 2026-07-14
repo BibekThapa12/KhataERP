@@ -42,6 +42,7 @@
   .report-th { @apply px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground; }
   .report-td { @apply px-4 py-3 align-top; }
   .overflow-x-auto { -webkit-overflow-scrolling: touch; }
+  .ageing-print-detail { display: none; }
 }
 
 @media (max-width: 767px) {
@@ -52,7 +53,7 @@
 }
 
 @media print {
-  @page { size: A4 landscape; margin: 10mm; }
+  @page { margin: 10mm; }
   body { background: white; color: black; }
   body > #root > div > aside,
   .app-mobile-nav,
@@ -83,4 +84,6 @@
   .report-section-header svg { display: none !important; }
   .report-section-header + div { display: block !important; }
   .report-page button { color: inherit !important; text-decoration: none !important; }
+  .ageing-screen-table { display: none !important; }
+  .ageing-print-detail { display: block !important; }
 }

@@ -281,6 +281,21 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawAccounts.push(...missingDefaults.map(a => ({ ...a, balance: 0 })))
       }
 
+      const taxCategoryRenames = [
+        { type: 'Asset' as const, name: 'Duties & Taxes (Assets)' },
+        { type: 'Liability' as const, name: 'Duties & Taxes (Liabilities)' },
+      ]
+      for (const rename of taxCategoryRenames) {
+        const category = accountCategories.find(entry => entry.name === 'Duties & Taxes' && entry.account_type === rename.type && entry.is_system)
+        if (!category) continue
+        await updateAccountCategory(category.id, { name: rename.name })
+        category.name = rename.name
+        for (const account of rawAccounts.filter(entry => entry.type === rename.type && (entry.category_id === category.id || entry.group === 'Duties & Taxes'))) {
+          await updateAccount(account.id, { group: rename.name })
+          account.group = rename.name
+        }
+      }
+
       const categorySpecs = [
         ...rawAccounts.map(account => ({ name: account.group, account_type: account.type, is_system: account.is_system })),
         { name: 'Sundry Debtors', account_type: 'Asset' as const, is_system: true },

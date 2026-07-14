@@ -9,11 +9,22 @@ import {
   Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { InvoiceForm } from '@/components/forms/InvoiceForm'
+import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
 type NavGroupItem = { kind: 'group'; id: string; label: string; Icon: NavIcon; matchPath?: string; children: NavLinkItem[] }
 type NavItem = NavLinkItem | NavGroupItem
+type VoucherShortcutType = 'Payment' | 'Receipt' | 'Journal' | 'Sales' | 'Purchase'
+
+const VOUCHER_SHORTCUTS = [
+  { key: 'F5', label: 'Payment', type: 'Payment' },
+  { key: 'F6', label: 'Receipt', type: 'Receipt' },
+  { key: 'F7', label: 'Journal', type: 'Journal' },
+  { key: 'F8', label: 'Sales', type: 'Sales' },
+  { key: 'F9', label: 'Purchase', type: 'Purchase' },
+] as const satisfies ReadonlyArray<{ key: string; label: string; type: VoucherShortcutType }>
 
 const NAV_SECTIONS: {
   label: string
@@ -140,6 +151,7 @@ export function AppShell() {
   const vatEnabled = company?.vat_enabled ?? true
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
+  const [shortcutVoucher, setShortcutVoucher] = useState<VoucherShortcutType | null>(null)
   const [openReportGroup, setOpenReportGroup] = useState<string | null>(() => activeReportGroupId(location.pathname, location.search))
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
     const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
@@ -164,6 +176,21 @@ export function AppShell() {
   useEffect(() => {
     setOpenReportGroup(activeReportGroupId(location.pathname, location.search))
   }, [location.pathname, location.search])
+
+  useEffect(() => {
+    const openVoucherFromKey = (event: KeyboardEvent) => {
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      const shortcut = VOUCHER_SHORTCUTS.find(entry => entry.key === event.key.toUpperCase())
+      if (!shortcut) return
+      event.preventDefault()
+      if (event.repeat) return
+      if (document.querySelector('[role="dialog"][data-state="open"]')) return
+      setMobileOpen(false)
+      setShortcutVoucher(shortcut.type)
+    }
+    window.addEventListener('keydown', openVoucherFromKey)
+    return () => window.removeEventListener('keydown', openVoucherFromKey)
+  }, [])
 
   const toggleSection = (label: string) => setOpenSections(current => {
     return current.has(label) ? new Set() : new Set([label])
@@ -282,9 +309,23 @@ export function AppShell() {
       </aside>
 
       {/* Main */}
-      <main className="flex-1 min-w-0 overflow-y-auto">
-        <Outlet />
+      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+        <div className="flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Voucher shortcuts">
+          <div className="flex items-center gap-1.5 overflow-x-auto">
+            <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick vouchers</span>
+            {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`New ${shortcut.label} Voucher (${shortcut.key})`}>
+              <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
+              <span>{shortcut.label}</span>
+            </button>)}
+          </div>
+        </div>
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          <Outlet />
+        </div>
       </main>
+      {(shortcutVoucher === 'Sales' || shortcutVoucher === 'Purchase') && <InvoiceForm type={shortcutVoucher} open voucher={null} onClose={() => setShortcutVoucher(null)} />}
+      {(shortcutVoucher === 'Receipt' || shortcutVoucher === 'Payment') && <ReceiptPaymentForm type={shortcutVoucher} open voucher={null} onClose={() => setShortcutVoucher(null)} />}
+      {shortcutVoucher === 'Journal' && <JournalForm open voucher={null} onClose={() => setShortcutVoucher(null)} />}
     </div>
   )
 }

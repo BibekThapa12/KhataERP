@@ -2,7 +2,7 @@ import type { Account, AccountCategory, Party, Voucher } from '@/types'
 import { bankAccounts } from '@/lib/banks'
 import { categoryDescendantIds } from '@/lib/categoryHierarchy'
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
-import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
+import { addDaysToBs, bsToAd, makeBsKey } from '@/lib/nepaliDate'
 import { getLedgerRows, type LedgerRow } from '@/lib/reports'
 
 const keyOf = (voucher: Voucher) => voucher.date_bs_key || makeBsKey(voucher.date_bs)
@@ -60,6 +60,9 @@ export function getGroupReport(categoryId: string, categories: AccountCategory[]
 
 export type OutstandingKind = 'receivable' | 'payable'
 export type AgingBucket = 'Not Due' | '1-30' | '31-60' | '61-90' | '90+'
+export const agingBuckets: AgingBucket[] = ['Not Due', '1-30', '31-60', '61-90', '90+']
+export type DueDateSource = 'due-date' | 'invoice-date' | 'invalid'
+export type OutstandingStatus = 'Not Due' | 'Due Today' | 'Overdue'
 
 export interface OutstandingDocument {
   voucher: Voucher
@@ -71,6 +74,24 @@ export interface OutstandingDocument {
   due_date_bs: string
   age_days: number
   bucket: AgingBucket
+  due_date_source: DueDateSource
+  status: OutstandingStatus
+  return_vouchers: Voucher[]
+}
+
+export interface UnappliedSettlementRow {
+  voucher: Voucher
+  party: Party
+  amount: number
+}
+
+export interface OutstandingAdjustmentRow {
+  id: string
+  party: Party
+  kind: 'opening' | 'journal' | 'other'
+  label: string
+  amount: number
+  voucher?: Voucher
 }
 
 export interface PartyOutstandingSummary {
@@ -80,14 +101,43 @@ export interface PartyOutstandingSummary {
   unallocated_adjustment: number
   ledger_balance: number
   document_count: number
+  buckets: Record<AgingBucket, number>
+  documents: OutstandingDocument[]
+  unapplied_rows: UnappliedSettlementRow[]
+  adjustment_rows: OutstandingAdjustmentRow[]
 }
 
-function daysBetweenBs(from: string, to: string) {
-  const parse = (value: string) => {
+function parseBsTime(value?: string) {
+  if (!value || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null
+  try {
     const [year, month, day] = bsToAd(value).split('-').map(Number)
-    return Date.UTC(year, month - 1, day)
+    const time = Date.UTC(year, month - 1, day)
+    return Number.isFinite(time) ? time : null
+  } catch {
+    return null
   }
-  return Math.floor((parse(to) - parse(from)) / 86400000)
+}
+
+function resolveDocumentAge(voucher: Voucher, asOf: string) {
+  const asOfTime = parseBsTime(asOf)
+  const invoiceTime = parseBsTime(voucher.date_bs)
+  let effectiveDueDate = voucher.due_date_bs
+  if (invoiceTime !== null && Number.isInteger(voucher.credit_days) && (voucher.credit_days ?? -1) >= 0) {
+    try {
+      effectiveDueDate = addDaysToBs(voucher.date_bs, voucher.credit_days!)
+    } catch {
+      effectiveDueDate = voucher.due_date_bs
+    }
+  }
+  const dueTime = parseBsTime(effectiveDueDate)
+  const dueDateSource: DueDateSource = dueTime !== null ? 'due-date' : invoiceTime !== null ? 'invoice-date' : 'invalid'
+  const effectiveTime = dueTime ?? invoiceTime
+  const age = effectiveTime !== null && asOfTime !== null ? Math.floor((asOfTime - effectiveTime) / 86400000) : 0
+  return {
+    dueDateBs: dueTime !== null ? effectiveDueDate! : voucher.date_bs,
+    dueDateSource,
+    age,
+  }
 }
 
 function agingBucket(age: number): AgingBucket {
@@ -97,6 +147,14 @@ function agingBucket(age: number): AgingBucket {
   if (age <= 90) return '61-90'
   return '90+'
 }
+
+function outstandingStatus(age: number): OutstandingStatus {
+  if (age < 0) return 'Not Due'
+  if (age === 0) return 'Due Today'
+  return 'Overdue'
+}
+
+const emptyBuckets = () => Object.fromEntries(agingBuckets.map(bucket => [bucket, 0])) as Record<AgingBucket, number>
 
 function partyMovementAmount(voucher: Voucher, partyId: string, kind: OutstandingKind) {
   return round2((voucher.lines || []).filter(line => line.account_id === partyId).reduce((sum, line) => sum + (kind === 'receivable' ? line.credit : line.debit), 0))
@@ -119,20 +177,35 @@ export function getOutstandingReport(kind: OutstandingKind, parties: Party[], ac
   const relevantParties = parties.filter(party => party.type === partyType)
   const partyMap = new Map(relevantParties.map(party => [party.account_id, party]))
   const returnsByInvoice = new Map<string, number>()
+  const returnVouchersByInvoice = new Map<string, Voucher[]>()
   for (const voucher of active.filter(entry => entry.type === returnType && entry.settlement_mode === 'party' && entry.original_voucher_id)) {
     returnsByInvoice.set(voucher.original_voucher_id!, round2((returnsByInvoice.get(voucher.original_voucher_id!) || 0) + voucher.total))
+    returnVouchersByInvoice.set(voucher.original_voucher_id!, [...(returnVouchersByInvoice.get(voucher.original_voucher_id!) || []), voucher])
   }
 
   const documents: OutstandingDocument[] = active.filter(voucher => voucher.type === invoiceType && !voucher.is_cash && voucher.party_account_id && partyMap.has(voucher.party_account_id)).map(voucher => {
     const returns = Math.min(voucher.total, returnsByInvoice.get(voucher.id) || 0)
-    const due = voucher.due_date_bs || voucher.date_bs
-    const age = daysBetweenBs(due, asOf)
-    return { voucher, party: partyMap.get(voucher.party_account_id!)!, original_amount: voucher.total, returns, settled: 0, outstanding: round2(voucher.total - returns), due_date_bs: due, age_days: age, bucket: agingBucket(age) }
+    const resolvedDate = resolveDocumentAge(voucher, asOf)
+    return {
+      voucher,
+      party: partyMap.get(voucher.party_account_id!)!,
+      original_amount: voucher.total,
+      returns,
+      settled: 0,
+      outstanding: round2(voucher.total - returns),
+      due_date_bs: resolvedDate.dueDateBs,
+      age_days: resolvedDate.age,
+      bucket: agingBucket(resolvedDate.age),
+      due_date_source: resolvedDate.dueDateSource,
+      status: resolvedDate.dueDateSource === 'invalid' ? 'Not Due' : outstandingStatus(resolvedDate.age),
+      return_vouchers: returnVouchersByInvoice.get(voucher.id) || [],
+    }
   })
   const docsById = new Map(documents.map(document => [document.voucher.id, document]))
   const unapplied = new Map<string, number>()
+  const unappliedRows: UnappliedSettlementRow[] = []
 
-  const allocate = (partyId: string, amount: number, preferred?: { invoiceId: string; amount: number }[]) => {
+  const allocate = (partyId: string, amount: number, settlementVoucher: Voucher, preferred?: { invoiceId: string; amount: number }[]) => {
     let remaining = round2(amount)
     if (preferred?.length) {
       for (const allocation of preferred) {
@@ -153,7 +226,11 @@ export function getOutstandingReport(kind: OutstandingKind, parties: Party[], ac
         remaining = round2(remaining - applied)
       }
     }
-    if (remaining > 0) unapplied.set(partyId, round2((unapplied.get(partyId) || 0) + remaining))
+    if (remaining > 0) {
+      unapplied.set(partyId, round2((unapplied.get(partyId) || 0) + remaining))
+      const party = partyMap.get(partyId)
+      if (party) unappliedRows.push({ voucher: settlementVoucher, party, amount: remaining })
+    }
   }
 
   for (const voucher of active.filter(entry => entry.type === settlementType).sort(sortChronologically)) {
@@ -161,19 +238,61 @@ export function getOutstandingReport(kind: OutstandingKind, parties: Party[], ac
       const amount = partyMovementAmount(voucher, party.account_id, kind)
       if (!amount) continue
       const stored = (voucher.settlements || []).filter(row => row.party_account_id === party.account_id)
-      allocate(party.account_id, amount, stored.length ? stored.map(row => ({ invoiceId: row.invoice_voucher_id, amount: row.amount })) : undefined)
+      allocate(party.account_id, amount, voucher, stored.length ? stored.map(row => ({ invoiceId: row.invoice_voucher_id, amount: row.amount })) : undefined)
     }
   }
 
   const summaries: PartyOutstandingSummary[] = relevantParties.map(party => {
-    const outstanding = round2(documents.filter(document => document.party.id === party.id).reduce((sum, document) => sum + document.outstanding, 0))
+    const partyDocuments = documents.filter(document => document.party.id === party.id && document.outstanding > 0)
+    const outstanding = round2(partyDocuments.reduce((sum, document) => sum + document.outstanding, 0))
     const unappliedAmount = unapplied.get(party.account_id) || 0
     const account = accounts.find(entry => entry.id === party.account_id)
     const ledgerBalance = account ? accountBalanceAsOf(account, vouchers, asOf) : 0
-    return { party, outstanding, unapplied: unappliedAmount, unallocated_adjustment: round2(ledgerBalance - (outstanding - unappliedAmount)), ledger_balance: ledgerBalance, document_count: documents.filter(document => document.party.id === party.id && document.outstanding > 0).length }
+    const unallocatedAdjustment = round2(ledgerBalance - (outstanding - unappliedAmount))
+    const adjustmentRows: OutstandingAdjustmentRow[] = []
+    if (account?.opening_balance) adjustmentRows.push({ id: `opening-${party.id}`, party, kind: 'opening', label: 'Opening balance', amount: round2(account.opening_balance) })
+    for (const voucher of active.filter(entry => entry.type === 'Journal')) {
+      const side = account ? normalSide(account.type) : kind === 'receivable' ? 'debit' : 'credit'
+      const amount = round2((voucher.lines || []).filter(line => line.account_id === party.account_id).reduce((sum, line) => sum + (side === 'debit' ? line.debit - line.credit : line.credit - line.debit), 0))
+      if (amount) adjustmentRows.push({ id: `journal-${voucher.id}-${party.id}`, party, kind: 'journal', label: voucher.narration || 'Journal adjustment', amount, voucher })
+    }
+    const explainedAdjustment = round2(adjustmentRows.reduce((sum, row) => sum + row.amount, 0))
+    const residual = round2(unallocatedAdjustment - explainedAdjustment)
+    if (residual) adjustmentRows.push({ id: `other-${party.id}`, party, kind: 'other', label: 'Other unallocated party movement', amount: residual })
+    const partyBuckets = emptyBuckets()
+    for (const document of partyDocuments) partyBuckets[document.bucket] = round2(partyBuckets[document.bucket] + document.outstanding)
+    return {
+      party,
+      outstanding,
+      unapplied: unappliedAmount,
+      unallocated_adjustment: unallocatedAdjustment,
+      ledger_balance: ledgerBalance,
+      document_count: partyDocuments.length,
+      buckets: partyBuckets,
+      documents: partyDocuments,
+      unapplied_rows: unappliedRows.filter(row => row.party.id === party.id),
+      adjustment_rows: adjustmentRows,
+    }
   }).filter(row => row.outstanding || row.unapplied || row.unallocated_adjustment || row.ledger_balance)
-  const buckets = Object.fromEntries((['Not Due','1-30','31-60','61-90','90+'] as AgingBucket[]).map(bucket => [bucket, round2(documents.filter(document => document.bucket === bucket).reduce((sum, document) => sum + document.outstanding, 0))])) as Record<AgingBucket, number>
-  return { kind, documents: documents.filter(document => document.outstanding > 0), summaries, buckets, total_outstanding: round2(documents.reduce((sum, document) => sum + document.outstanding, 0)), total_unapplied: round2([...unapplied.values()].reduce((sum, amount) => sum + amount, 0)) }
+  const buckets = Object.fromEntries(agingBuckets.map(bucket => [bucket, round2(documents.filter(document => document.bucket === bucket).reduce((sum, document) => sum + document.outstanding, 0))])) as Record<AgingBucket, number>
+  const totalOutstanding = round2(documents.reduce((sum, document) => sum + document.outstanding, 0))
+  const totalUnapplied = round2([...unapplied.values()].reduce((sum, amount) => sum + amount, 0))
+  const totalAdjustments = round2(summaries.reduce((sum, row) => sum + row.unallocated_adjustment, 0))
+  const netLedgerBalance = round2(summaries.reduce((sum, row) => sum + row.ledger_balance, 0))
+  const totalOverdue = round2(agingBuckets.slice(1).reduce((sum, bucket) => sum + buckets[bucket], 0))
+  return {
+    kind,
+    documents: documents.filter(document => document.outstanding > 0),
+    summaries,
+    unapplied_rows: unappliedRows,
+    adjustment_rows: summaries.flatMap(row => row.adjustment_rows),
+    buckets,
+    total_outstanding: totalOutstanding,
+    total_unapplied: totalUnapplied,
+    total_adjustments: totalAdjustments,
+    net_ledger_balance: netLedgerBalance,
+    total_overdue: totalOverdue,
+  }
 }
 
 export function suggestSettlementAllocations(kind: OutstandingKind, partyAccountId: string, amount: number, parties: Party[], accounts: Account[], vouchers: Voucher[], asOf: string, excludeSettlementVoucherId?: string) {

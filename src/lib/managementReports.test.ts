@@ -1,11 +1,17 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, AccountCategory, Party, Voucher } from '@/types'
 import { categoryAccountIds, getCashBankBook, getGroupReport, getOutstandingReport, getRegister, getTransactionRegister } from '@/lib/managementReports'
+import { adToBs, bsToAd } from '@/lib/nepaliDate'
 
 const companyId = 'company'
 const account = (id: string, name: string, type: Account['type'], category_id: string, opening_balance = 0): Account => ({ id, company_id: companyId, name, type, group: category_id, category_id, opening_balance, balance: opening_balance, is_party: id.startsWith('party'), is_system: false })
 const category = (id: string, name: string, account_type: Account['type'], parent_category_id?: string): AccountCategory => ({ id, company_id: companyId, name, account_type, parent_category_id, is_system: false, is_archived: false })
-const voucher = (id: string, type: Voucher['type'], date_bs: string, total: number, lines: Voucher['lines'], extra: Partial<Voucher> = {}): Voucher => ({ id, company_id: companyId, type, date: '2026-07-01', date_ad: '2026-07-01', date_bs, date_bs_key: Number(date_bs.replaceAll('-', '')), total, lines, is_cash: false, cancelled: false, seq: Number(id.replace(/\D/g, '')) || 1, ...extra })
+const voucher = (id: string, type: Voucher['type'], date_bs: string, total: number, lines: Voucher['lines'], extra: Partial<Voucher> = {}): Voucher => ({ id, company_id: companyId, type, date: '2026-07-01', date_ad: '2026-07-01', date_bs, date_bs_key: Number(date_bs.replace(/-/g, '')), total, lines, is_cash: false, cancelled: false, seq: Number(id.replace(/\D/g, '')) || 1, ...extra })
+const daysBefore = (bsDate: string, days: number) => {
+  const [year, month, day] = bsToAd(bsDate).split('-').map(Number)
+  const date = new Date(Date.UTC(year, month - 1, day - days))
+  return adToBs(date.toISOString().slice(0, 10))
+}
 
 describe('management reports', () => {
   const categories = [category('assets','Assets','Asset'), category('current','Current Assets','Asset','assets'), category('bank-group','Bank','Asset','current')]
@@ -65,6 +71,95 @@ describe('management reports', () => {
     expect(register.rows[1].voucher.date_bs).toBe('2083-04-02')
     expect(register.returns).toBe(25)
     expect(register.net).toBe(75)
+  })
+
+  it('ages supplier bills and reconciles payments on the credit side', () => {
+    const supplierAccount = account('party-s','Supplier','Liability','current')
+    const supplier: Party = { id:'s1', company_id:companyId, name:'Supplier Co', type:'supplier', account_id:'party-s' }
+    const bill = voucher('p1','Purchase','2083-04-01',300,[{account_id:'party-s',debit:0,credit:300}],{party_account_id:'party-s',due_date_bs:'2083-04-10'})
+    const payment = voucher('pay1','Payment','2083-04-15',100,[{account_id:'party-s',debit:100,credit:0},{account_id:'cash',debit:0,credit:100}])
+    const report = getOutstandingReport('payable',[supplier],[...accounts,supplierAccount],[bill,payment],'2083-04-20')
+    expect(report.total_outstanding).toBe(200)
+    expect(report.net_ledger_balance).toBe(200)
+    expect(report.summaries[0].ledger_balance).toBe(200)
+  })
+
+  it('uses exact ageing boundaries and keeps future documents not due', () => {
+    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
+    const asOf = '2083-08-15'
+    const ages = [-1,0,30,31,60,61,90,91]
+    const invoices = ages.map((age, index) => voucher(`age${index + 1}`,'Sales',daysBefore(asOf, Math.max(age, 0)),10,[{account_id:'party-c',debit:10,credit:0}],{
+      party_account_id:'party-c',
+      due_date_bs: age < 0 ? adToBs(new Date(new Date(bsToAd(asOf)).getTime() + 86400000).toISOString().slice(0,10)) : daysBefore(asOf, age),
+    }))
+    const report = getOutstandingReport('receivable',[party],accounts,invoices,asOf)
+    expect(report.buckets).toEqual({ 'Not Due':20, '1-30':10, '31-60':20, '61-90':20, '90+':10 })
+    expect(report.documents.find(row => row.age_days === 0)?.status).toBe('Due Today')
+  })
+
+  it('moves a zero-credit invoice out of Not Due when the as-of date advances', () => {
+    const party: Party = { id:'p1', company_id:companyId, name:'Rama Kirana', type:'customer', account_id:'party-c' }
+    const invoice = voucher('zero1','Sales','2083-03-30',35000,[{account_id:'party-c',debit:35000,credit:0}],{
+      party_account_id:'party-c', credit_days:0, due_date_bs:'2083-04-30',
+    })
+    const dueToday = getOutstandingReport('receivable',[party],accounts,[invoice],'2083-03-30')
+    const nextDay = getOutstandingReport('receivable',[party],accounts,[invoice],'2083-03-31')
+    expect(dueToday.documents[0]).toMatchObject({ due_date_bs:'2083-03-30', age_days:0, bucket:'Not Due', status:'Due Today' })
+    expect(nextDay.documents[0]).toMatchObject({ due_date_bs:'2083-03-30', age_days:1, bucket:'1-30', status:'Overdue' })
+  })
+
+  it('separates opening balances and journals from aged documents', () => {
+    const partyAccount = account('party-opening','Opening Customer','Asset','current',25)
+    const party: Party = { id:'po', company_id:companyId, name:'Opening Customer', type:'customer', account_id:'party-opening' }
+    const invoice = voucher('oi1','Sales','2083-04-01',100,[{account_id:'party-opening',debit:100,credit:0}],{party_account_id:'party-opening'})
+    const journal = voucher('oj1','Journal','2083-04-02',15,[{account_id:'party-opening',debit:15,credit:0},{account_id:'cash',debit:0,credit:15}],{narration:'Balance correction'})
+    const report = getOutstandingReport('receivable',[party],[...accounts,partyAccount],[invoice,journal],'2083-04-20')
+    expect(report.total_adjustments).toBe(40)
+    expect(report.net_ledger_balance).toBe(140)
+    expect(report.summaries[0].adjustment_rows.map(row => [row.kind,row.amount])).toEqual([['opening',25],['journal',15]])
+  })
+
+  it('combines a partial return and payment without ageing either as an invoice', () => {
+    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
+    const invoice = voucher('mix1','Sales','2083-04-01',200,[{account_id:'party-c',debit:200,credit:0}],{party_account_id:'party-c',due_date_bs:'2083-04-05'})
+    const returned = voucher('mixr1','Sales Return','2083-04-04',50,[{account_id:'party-c',debit:0,credit:50}],{party_account_id:'party-c',original_voucher_id:'mix1',settlement_mode:'party'})
+    const receipt = voucher('mixpay1','Receipt','2083-04-06',60,[{account_id:'cash',debit:60,credit:0},{account_id:'party-c',debit:0,credit:60}])
+    const report = getOutstandingReport('receivable',[party],accounts,[invoice,returned,receipt],'2083-04-20')
+    expect(report.documents[0]).toMatchObject({ original_amount:200, returns:50, settled:60, outstanding:90 })
+    expect(report.documents[0].return_vouchers.map(row => row.id)).toEqual(['mixr1'])
+  })
+
+  it('falls back from invalid due dates and does not crash on fully invalid dates', () => {
+    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
+    const fallback = voucher('bad1','Sales','2083-04-01',50,[{account_id:'party-c',debit:50,credit:0}],{party_account_id:'party-c',due_date_bs:'not-a-date'})
+    const invalid = voucher('bad2','Sales','invalid',25,[{account_id:'party-c',debit:25,credit:0}],{party_account_id:'party-c',due_date_bs:'invalid',date_bs_key:1})
+    const report = getOutstandingReport('receivable',[party],accounts,[fallback,invalid],'2083-04-20')
+    expect(report.documents.find(row => row.voucher.id === 'bad1')?.due_date_source).toBe('invoice-date')
+    expect(report.documents.find(row => row.voucher.id === 'bad2')).toMatchObject({ due_date_source:'invalid', bucket:'Not Due', status:'Not Due' })
+  })
+
+  it('reconciles gross, unapplied, and adjustments to the net ledger balance', () => {
+    const partyAccount = account('party-recon','Recon Customer','Asset','current',20)
+    const party: Party = { id:'pr', company_id:companyId, name:'Recon Customer', type:'customer', account_id:'party-recon' }
+    const invoice = voucher('ri1','Sales','2083-04-01',100,[{account_id:'party-recon',debit:100,credit:0}],{party_account_id:'party-recon'})
+    const receipt = voucher('rr1','Receipt','2083-04-02',130,[{account_id:'cash',debit:130,credit:0},{account_id:'party-recon',debit:0,credit:130}])
+    const report = getOutstandingReport('receivable',[party],[...accounts,partyAccount],[invoice,receipt],'2083-04-20')
+    expect(report.total_outstanding).toBe(0)
+    expect(report.total_unapplied).toBe(30)
+    expect(report.total_adjustments).toBe(20)
+    expect(report.net_ledger_balance).toBe(-10)
+    expect(report.total_outstanding - report.total_unapplied + report.total_adjustments).toBe(report.net_ledger_balance)
+    expect(report.unapplied_rows[0]).toMatchObject({ amount:30 })
+  })
+
+  it('excludes invoices, settlements, returns, and journals after the as-of date', () => {
+    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
+    const invoice = voucher('as1','Sales','2083-04-01',100,[{account_id:'party-c',debit:100,credit:0}],{party_account_id:'party-c'})
+    const laterInvoice = voucher('as2','Sales','2083-04-21',200,[{account_id:'party-c',debit:200,credit:0}],{party_account_id:'party-c'})
+    const laterReceipt = voucher('asr1','Receipt','2083-04-22',100,[{account_id:'cash',debit:100,credit:0},{account_id:'party-c',debit:0,credit:100}])
+    const report = getOutstandingReport('receivable',[party],accounts,[invoice,laterInvoice,laterReceipt],'2083-04-20')
+    expect(report.documents.map(row => row.voucher.id)).toEqual(['as1'])
+    expect(report.total_outstanding).toBe(100)
   })
 
   it('builds receipt, payment, and journal registers from voucher lines', () => {

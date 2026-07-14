@@ -14,6 +14,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { LedgerBalanceHint } from './LedgerBalanceHint'
 import type { Voucher } from '@/types'
 
 interface ReturnFormProps {
@@ -131,6 +132,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   }
 
   const party = original?.party_account_id ? getPartyByAccountId(original.party_account_id) : null
+  const activeSettlementAccountId = settlementMode === 'party' ? original?.party_account_id : settlementAccountId
+  const activeSettlementAccount = accounts.find(account => account.id === activeSettlementAccountId)
   const documentName = vatEnabled ? (isSalesReturn ? 'Credit Note' : 'Debit Note') : type
 
   return (
@@ -148,7 +151,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(line.rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</td></tr>})}</tbody></table></div>}
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}</div>
+            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}<LedgerBalanceHint account={activeSettlementAccount} party={settlementMode === 'party' ? party : null} /></div>
             {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><SearchableSelect value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')} options={[{ value: 'restock', label: 'Return to sellable stock' }, { value: 'damaged', label: 'Damaged - do not restock' }]} /></div>}
           </div>
 

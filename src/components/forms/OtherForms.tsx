@@ -15,6 +15,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { LedgerBalanceHint } from './LedgerBalanceHint'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
@@ -171,6 +172,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
   const partyAccountIds = new Set(parties.filter(party => party.type === (isReceipt ? 'customer' : 'supplier')).map(party => party.account_id))
   const invoiceById = new Map(vouchers.map(entry => [entry.id, entry]))
+  const selectedMoneyAccount = accounts.find(account => account.id === moneyAccountId)
   const updateAllocation = (index: number, field: 'account_id' | 'amount', value: string) => setAllocations(current => current.map((allocation, row) => {
     if (row !== index) return allocation
     const next = { ...allocation, [field]: value }
@@ -211,8 +213,24 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
             <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
+            <LedgerBalanceHint account={selectedMoneyAccount} />
           </div>
-          <div className="space-y-2"><div className="hidden grid-cols-[minmax(0,1fr)_10rem_2.25rem] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>Ledger</span><span className="text-right">Amount</span><span /></div>{allocations.map((allocation, index) => <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]"><SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} /><Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" /><Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>)}<div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '', invoice_allocations: [] }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div></div>
+          <div className="space-y-2">
+            <div className="hidden grid-cols-[minmax(0,1fr)_10rem_2.25rem] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>Ledger</span><span className="text-right">Amount</span><span /></div>
+            {allocations.map((allocation, index) => {
+              const selectedAccount = accounts.find(account => account.id === allocation.account_id)
+              const selectedParty = parties.find(party => party.account_id === allocation.account_id)
+              return <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
+                <div className="min-w-0 space-y-1.5">
+                  <SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
+                  <LedgerBalanceHint account={selectedAccount} party={selectedParty} />
+                </div>
+                <Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" />
+                <Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button>
+              </div>
+            })}
+            <div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '', invoice_allocations: [] }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div>
+          </div>
           {allocations.some(allocation => allocation.invoice_allocations.length > 0) && (
             <div className="space-y-2 rounded-md border border-border p-3">
               <p className="text-xs font-semibold uppercase text-muted-foreground">Invoice allocations (oldest due first)</p>
@@ -245,8 +263,12 @@ interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Vouch
 interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
-  const { accounts, accountCategories, saveJournal, updateJournal } = useAppStore()
-  const nonPartyAccounts = accounts.filter(a => !a.is_party && !a.is_archived)
+  const { accounts, accountCategories, parties, saveJournal, updateJournal } = useAppStore()
+  const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
+  const journalAccounts = accounts.filter(account => {
+    const party = partyByAccount.get(account.id)
+    return !account.is_archived && !party?.is_archived
+  })
   const isEditing = !!voucher
 
   const [dateBs, setDateBs] = useState(todayBs())
@@ -323,13 +345,22 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           </div>
           {jLines.map((line, idx) => (
             <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
-              <SearchableSelect className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={nonPartyAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(a => ({ value: a.id, label: a.name, searchText: `${categoryPath(accountCategories, a.category_id)} ${a.group} ${a.type}` }))} />
-              <Input type="number" min="0" step="any" value={line.debit || ''} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right" />
-              <Input type="number" min="0" step="any" value={line.credit || ''} onChange={e => updateLine(idx, 'credit', e.target.value)} placeholder="0.00" className="text-right" />
-              <Button variant="ghost" size="icon" className="h-9 w-9 text-muted-foreground hover:text-destructive"
+              <SearchableSelect className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
+                const party = partyByAccount.get(account.id)
+                return {
+                  value: account.id,
+                  label: account.name,
+                  group: party ? (party.type === 'customer' ? 'Customers' : 'Suppliers') : account.type,
+                  searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type} ${party?.phone || ''} ${party?.pan_vat || ''} ${party?.address || ''}`,
+                }
+              })} />
+              <Input type="number" min="0" step="any" value={line.debit || ''} disabled={line.credit > 0} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right disabled:bg-muted" />
+              <Input type="number" min="0" step="any" value={line.credit || ''} disabled={line.debit > 0} onChange={e => updateLine(idx, 'credit', e.target.value)} placeholder="0.00" className="text-right disabled:bg-muted" />
+              <Button variant="ghost" size="icon" tabIndex={-1} className="h-9 w-9 text-muted-foreground hover:text-destructive"
                 onClick={() => setJLines(jLines.filter((_, i) => i !== idx))}>
                 <Trash2 className="h-3.5 w-3.5" />
               </Button>
+              <LedgerBalanceHint className="col-span-2 sm:col-span-4" account={accounts.find(account => account.id === line.account_id)} party={partyByAccount.get(line.account_id)} />
             </div>
           ))}
           <Button type="button" variant="outline" size="sm" onClick={() => setJLines([...jLines, { account_id: '', debit: 0, credit: 0 }])}>

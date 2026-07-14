@@ -3,6 +3,7 @@ import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { addDaysToBs, todayBs } from '@/lib/nepaliDate'
+import { resolveSystemAccountId } from '@/lib/engine'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { Button } from '@/components/ui/button'
@@ -14,6 +15,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
+import { LedgerBalanceHint } from './LedgerBalanceHint'
 import type { Voucher } from '@/types'
 
 interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
@@ -29,7 +31,7 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { company, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
+  const { company, accounts, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(todayBs())
@@ -49,6 +51,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyTerms = partyTerminology(partyType)
   const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
+  const selectedParty = parties.find(party => party.account_id === partyAccountId)
+  const selectedPartyAccount = accounts.find(account => account.id === partyAccountId)
+  const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
+  const cashAccount = accounts.find(account => account.id === cashAccountId)
   const isEditing = !!voucher
   const dueDateBs = (() => {
     try { return addDaysToBs(dateBs, isCash ? 0 : creditDays) } catch { return '' }
@@ -195,7 +201,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                 <SearchableSelect className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
                 <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
               </div>
+              <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
             </div>}
+
+            {isCash && <LedgerBalanceHint account={cashAccount} />}
 
             <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">

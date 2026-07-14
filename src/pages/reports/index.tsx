@@ -89,7 +89,7 @@ export function TrialBalancePage() {
 
   return (
     <div className="report-page">
-      <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+      <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | As of {fmtDate(todayBs())}</p></div>
         <Card className="report-table-card">
@@ -119,7 +119,7 @@ export function ProfitLossPage() {
   return (
     <div className="report-page">
       <PageHeader title="Profit & Loss"
-        description="Income vs expenses, adjusted for closing stock so profit reflects only goods actually sold" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+        description="Income vs expenses, adjusted for closing stock so profit reflects only goods actually sold" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Profit & Loss | As of {fmtDate(todayBs())}</p></div>
         <div className="report-summary grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -167,7 +167,7 @@ export function BalanceSheetPage() {
 
   return (
     <div className="report-page">
-      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} />} />
+      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(todayBs())}</p></div>
         <div className="report-print-columns grid grid-cols-1 lg:grid-cols-2 gap-4">
@@ -309,7 +309,7 @@ export function StockReportPage() {
     : [row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
 
   return <div className="report-page">
-    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} defaultFormat={company?.print_format} orientation="landscape" />} />
+    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
     <PageContent className="report-content space-y-5">
       <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Stock Summary | As of {fmtDate(todayBs())} | {methodLabel}</p></div>
       <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
