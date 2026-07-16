@@ -1,5 +1,5 @@
 import type { Account, AccountCategory, Party, Voucher } from '@/types'
-import { bankAccounts } from '@/lib/banks'
+import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { categoryDescendantIds } from '@/lib/categoryHierarchy'
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
 import { addDaysToBs, bsToAd, makeBsKey } from '@/lib/nepaliDate'
@@ -393,7 +393,10 @@ export function getCashBankBook(companyId: string, selectedAccountId: string | n
   const selected = selectedAccountId ? moneyAccounts.filter(account => account.id === selectedAccountId) : moneyAccounts
   const selectedIds = new Set(selected.map(account => account.id))
   const fromKey = makeBsKey(from), toKey = makeBsKey(to)
-  const opening = round2(selected.reduce((sum, account) => sum + getLedgerRows(account.id, accounts, vouchers, from, to, false).opening_balance, 0))
+  const opening = round2(selected.reduce((sum, account) => {
+    const balance = getLedgerRows(account.id, accounts, vouchers, from, to, false).opening_balance
+    return sum + (account.id === cashId ? balance : signedBankBalance(account, balance))
+  }, 0))
   let running = opening
   const rows = [...vouchers].sort(sortChronologically).flatMap(voucher => {
     const key = keyOf(voucher)

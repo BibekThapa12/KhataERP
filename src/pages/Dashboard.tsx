@@ -6,7 +6,7 @@ import {
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
-import { bankAccounts } from '@/lib/banks'
+import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { computeCashFlow, fiscalYearStartBs, getDaybookRows } from '@/lib/reports'
 import {
   accountBalance, buildDashboardSeries, dashboardVouchersInRange, dashboardVouchersThrough,
@@ -110,8 +110,8 @@ export function Dashboard() {
   const systemId = (key: SystemAccountKey) => company ? resolveSystemAccountId(rawAccounts, company.id, key) : ''
   const cash = accountBalance(asOfMap.get(systemId('cash')))
   const banks = bankAccounts(asOfAccounts, accountCategories, true)
-  const totalBanks = round2(banks.reduce((sum, account) => sum + accountBalance(account), 0))
-  const bankDetails = banks.map(account => ({ id: account.id, label: account.name, value: accountBalance(account), archived: !!account.is_archived })).sort((a, b) => a.label.localeCompare(b.label))
+  const totalBanks = round2(banks.reduce((sum, account) => sum + signedBankBalance(account), 0))
+  const bankDetails = banks.map(account => ({ id: account.id, label: account.name, value: signedBankBalance(account), archived: !!account.is_archived })).sort((a, b) => a.label.localeCompare(b.label))
   const debtors = round2(parties.filter(party => party.type === 'customer').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
   const creditors = round2(parties.filter(party => party.type === 'supplier').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
 

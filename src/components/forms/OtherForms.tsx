@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
@@ -13,9 +13,12 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { UnitCombobox } from '@/components/inputs/UnitCombobox'
+import { validateItemUnits } from '@/lib/itemUnits'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
+import { VoucherNumberField } from './VoucherNumberField'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
@@ -31,7 +34,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const addItem = useAppStore(s => s.addItem)
   const itemCategories = useAppStore(s => s.itemCategories)
   const [name, setName] = useState('')
-  const [unit, setUnit] = useState('pcs')
+  const [unit, setUnit] = useState('Pcs')
   const [alternateUnit, setAlternateUnit] = useState('')
   const [alternateConversion, setAlternateConversion] = useState(0)
   const [openingUnitMode, setOpeningUnitMode] = useState<UnitMode>('main')
@@ -48,14 +51,15 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Enter an item name.'); return }
-    const mainUnit = unit.trim() || 'pcs'
+    const mainUnit = unit.trim()
     const altUnit = alternateUnit.trim()
-    if (altUnit && altUnit.toLowerCase() === mainUnit.toLowerCase()) { setError('Main and alternative units must be different.'); return }
+    const unitError = validateItemUnits(mainUnit, altUnit)
+    if (unitError) { setError(unitError); return }
     if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
     const factor = openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     setSaving(true)
@@ -84,7 +88,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Main Unit</Label>
-              <Input value={unit} onChange={e => setUnit(e.target.value)} placeholder="pcs, kg, box…" />
+              <UnitCombobox value={unit} onValueChange={setUnit} exclude={[alternateUnit]} />
             </div>
             <div className="space-y-1.5">
               <Label>Default Sell Rate / Main Unit (Rs)</Label>
@@ -92,8 +96,8 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><Input value={alternateUnit} onChange={e => setAlternateUnit(e.target.value)} placeholder="box, carton…" /></div>
-            <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder="Enter manually" /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
+            <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><UnitCombobox value={alternateUnit} onValueChange={value => { setAlternateUnit(value); if (!value) { setAlternateConversion(0); setOpeningUnitMode('main') } }} optional exclude={[unit]} /></div>
+            <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder={alternateUnit ? 'Enter manually' : 'Select alternative unit first'} disabled={!alternateUnit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
           </div>
           {alternateUnit.trim() && alternateConversion > 1 && <p className="text-xs text-muted-foreground">1 {unit.trim() || 'main unit'} = {alternateConversion} {alternateUnit.trim()}</p>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -149,6 +153,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
     if (open && voucher) {
@@ -195,7 +200,16 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
         else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
       }
-      onClose()
+      if (voucher) {
+        onClose()
+      } else {
+        setDateBs(todayBs())
+        setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }])
+        setMoneyAccountId(cashAccountId)
+        setNarration('')
+        setError('')
+        window.requestAnimationFrame(() => moneyAccountTriggerRef.current?.focus())
+      }
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally { setSaving(false) }
@@ -203,16 +217,16 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Date</Label>
-            <NepaliDateInput value={dateBs} onChange={setDateBs} />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
+            <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
-            <SearchableSelect value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank Current Assets`, group: 'Bank Accounts', disabled: !!account.is_archived }))]} />
+            <SearchableSelect triggerRef={moneyAccountTriggerRef} autoFocus value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank ${account.type === 'Liability' ? 'Overdraft Bank OD Liability' : 'Current Assets'}`, group: account.type === 'Liability' ? 'Bank OD A/c' : 'Bank Accounts', disabled: !!account.is_archived }))]} />
             <LedgerBalanceHint account={selectedMoneyAccount} />
           </div>
           <div className="space-y-2">
@@ -279,6 +293,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   useEffect(() => {
     if (open && voucher) {
@@ -320,7 +335,15 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs }
       if (voucher) await updateJournal(voucher.id, params)
       else await saveJournal(params)
-      onClose()
+      if (voucher) {
+        onClose()
+      } else {
+        setDateBs(todayBs())
+        setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
+        setNarration('')
+        setError('')
+        window.requestAnimationFrame(() => firstAccountTriggerRef.current?.focus())
+      }
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally { setSaving(false) }
@@ -328,15 +351,15 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
 
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground -mt-2">
           Use this for adjustments not covered by other voucher types: depreciation, write-offs, opening balances, etc.
         </p>
         <div className="space-y-4 py-2">
-          <div className="space-y-1.5">
-            <Label>Date</Label>
-            <NepaliDateInput value={dateBs} onChange={setDateBs} className="max-w-[180px]" />
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
+            <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />
           </div>
 
           {/* Lines header */}
@@ -345,7 +368,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           </div>
           {jLines.map((line, idx) => (
             <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
-              <SearchableSelect className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
+              <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
                 const party = partyByAccount.get(account.id)
                 return {
                   value: account.id,

@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, VoucherType } from '@/types'
 import { adToBs, DEFAULT_FISCAL_YEAR_START_AD, makeBsKey, normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
@@ -500,7 +500,7 @@ export async function getNextSeq(company_id: string): Promise<number> {
 
 export async function getNextVoucherNo(
   company_id: string,
-  type: 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment',
+  type: VoucherType,
   prefix: string,
   resetByFiscalYear = false,
   fiscalYearStart?: string,

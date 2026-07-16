@@ -55,11 +55,11 @@ export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balan
     id: systemAccountId(company_id, key), company_id, name, type, group, is_system, is_party: false, opening_balance: 0,
   })
   return [
-    base('cash', 'Cash', 'Asset', 'Current Assets'),
-    base('bank', 'Bank Account', 'Asset', 'Current Assets'),
+    base('cash', 'Cash', 'Asset', 'Cash-in-Hand'),
+    base('bank', 'Bank Account', 'Asset', 'Bank Accounts'),
     base('inventory', 'Stock-in-Hand', 'Asset', 'Current Assets'),
-    base('vat_payable', 'VAT Payable (Output)', 'Liability', 'Duties & Taxes (Liabilities)'),
-    base('vat_receivable', 'VAT Receivable (Input)', 'Asset', 'Duties & Taxes (Assets)'),
+    base('vat_payable', 'VAT Payable (Output)', 'Liability', 'Duties & Taxes'),
+    base('vat_receivable', 'VAT Receivable (Input)', 'Liability', 'Duties & Taxes'),
     base('sales', 'Sales Account', 'Income', 'Sales Accounts'),
     base('purchase', 'Purchase Account', 'Expense', 'Purchase Accounts'),
     base('sales_return', 'Sales Return Account', 'Income', 'Sales Accounts'),

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore, type ReturnSaveParams } from '@/store/useAppStore'
 import { buildReturnVoucherData, inventoryIssueCost, round2, type ReturnItemInput } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
@@ -15,6 +15,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
+import { VoucherNumberField } from './VoucherNumberField'
 import type { Voucher } from '@/types'
 
 interface ReturnFormProps {
@@ -46,6 +47,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const originalVoucherTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const originals = useMemo(() => vouchers
     .filter(entry => entry.type === originalType && !entry.cancelled && (entry.invoice_items?.length || 0) > 0)
@@ -127,7 +129,19 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params)
       else await saveReturnVoucher(params)
-      onClose()
+      if (voucher) {
+        onClose()
+      } else {
+        setOriginalId('')
+        setDateBs(todayBs())
+        setLines([])
+        setSettlementMode('party')
+        setSettlementAccountId('')
+        setRestock(true)
+        setReason('')
+        setError('')
+        window.requestAnimationFrame(() => originalVoucherTriggerRef.current?.focus())
+      }
     } catch (e: unknown) { setError((e as Error).message) } finally { setSaving(false) }
   }
 
@@ -138,12 +152,13 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-4xl max-h-[92vh] overflow-y-auto">
+      <DialogContent className="voucher-dialog max-w-4xl max-h-[92vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
-          <div className="grid gap-3 md:grid-cols-2">
+          <div className="grid gap-3 md:grid-cols-3">
             <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
-            <div className="space-y-1.5"><Label>Original {originalType === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</Label><SearchableSelect value={originalId} onValueChange={selectOriginal} disabled={!!voucher} placeholder={`Select original ${originalType.toLowerCase()}`} options={originals.map(entry => { const party = entry.party_account_id ? getPartyByAccountId(entry.party_account_id)?.name : 'Cash'; return { value: entry.id, label: `${entry.invoice_no || entry.seq} | ${fmtDate(entry.date_bs)} | ${party} | ${fmtMoney(entry.total)}`, searchText: `${entry.type} ${entry.date_bs} ${party} ${entry.total}` } })} /></div>
+            <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
+            <div className="space-y-1.5"><Label>Original {originalType === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</Label><SearchableSelect triggerRef={originalVoucherTriggerRef} autoFocus={!voucher} value={originalId} onValueChange={selectOriginal} disabled={!!voucher} placeholder={`Select original ${originalType.toLowerCase()}`} options={originals.map(entry => { const party = entry.party_account_id ? getPartyByAccountId(entry.party_account_id)?.name : 'Cash'; return { value: entry.id, label: `${entry.invoice_no || entry.seq} | ${fmtDate(entry.date_bs)} | ${party} | ${fmtMoney(entry.total)}`, searchText: `${entry.type} ${entry.date_bs} ${party} ${entry.total}` } })} /></div>
           </div>
 
           {original && <div className="rounded-md border bg-muted/20 p-3 text-sm"><span className="font-medium">Original document:</span> {original.invoice_no || original.seq} | {party?.name || 'Cash'} | VAT {original.vat_rate || 0}% | Total {fmtMoney(original.total)}</div>}
@@ -151,7 +166,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(line.rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</td></tr>})}</tbody></table></div>}
 
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}<LedgerBalanceHint account={activeSettlementAccount} party={settlementMode === 'party' ? party : null} /></div>
+            <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect autoFocus={!!voucher} value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}<LedgerBalanceHint account={activeSettlementAccount} party={settlementMode === 'party' ? party : null} /></div>
             {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><SearchableSelect value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')} options={[{ value: 'restock', label: 'Return to sellable stock' }, { value: 'damaged', label: 'Damaged - do not restock' }]} /></div>}
           </div>
 

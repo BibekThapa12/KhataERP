@@ -1,4 +1,4 @@
-import NepaliDate from 'nepali-date-converter'
+import NepaliDate, { dateConfigMap } from 'nepali-date-converter'
 
 export interface NepaliDateParts {
   year: number
@@ -8,6 +8,20 @@ export interface NepaliDateParts {
 
 const pad2 = (n: number) => String(n).padStart(2, '0')
 
+export const BS_MONTH_NAMES = [
+  'Baisakh', 'Jestha', 'Asar', 'Shrawan', 'Bhadra', 'Aswin',
+  'Kartik', 'Mangsir', 'Poush', 'Magh', 'Falgun', 'Chaitra',
+] as const
+
+export const BS_WEEKDAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'] as const
+
+export function getBsMonthLength(year: number, month: number): number {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) return 0
+  const config = dateConfigMap[String(year)]
+  if (!config) return 0
+  return config[BS_MONTH_NAMES[month - 1]] || 0
+}
+
 export function parseBsDate(bsDate: string): NepaliDateParts | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(bsDate.trim())
   if (!match) return null
@@ -15,7 +29,8 @@ export function parseBsDate(bsDate: string): NepaliDateParts | null {
   const year = Number(y)
   const month = Number(m)
   const day = Number(d)
-  if (!year || month < 1 || month > 12 || day < 1 || day > 32) return null
+  const monthLength = getBsMonthLength(year, month)
+  if (!year || !monthLength || day < 1 || day > monthLength) return null
   return { year, month, day }
 }
 
@@ -43,6 +58,24 @@ export function makeBsKey(bsDate: string): number {
   return parts.year * 10000 + parts.month * 100 + parts.day
 }
 
+export function compareBsDates(left: string, right: string): number {
+  return makeBsKey(left) - makeBsKey(right)
+}
+
+export function getBsWeekday(bsDate: string): number {
+  const parts = parseBsDate(bsDate)
+  if (!parts) return 0
+  return new NepaliDate(parts.year, parts.month - 1, parts.day).getDay()
+}
+
+export function shiftBsMonth(year: number, month: number, offset: number): Pick<NepaliDateParts, 'year' | 'month'> {
+  const absoluteMonth = year * 12 + (month - 1) + offset
+  return {
+    year: Math.floor(absoluteMonth / 12),
+    month: ((absoluteMonth % 12) + 12) % 12 + 1,
+  }
+}
+
 export function adToBs(adDate: string): string {
   const [year, month, day] = adDate.split('-').map(Number)
   const bs = NepaliDate.fromAD(new Date(year, month - 1, day)).getBS()
@@ -57,7 +90,7 @@ export function bsToAd(bsDate: string): string {
 }
 
 export function addDaysToBs(bsDate: string, days: number): string {
-  const safeDays = Math.max(0, Math.trunc(Number(days) || 0))
+  const safeDays = Math.trunc(Number(days) || 0)
   const [year, month, day] = bsToAd(bsDate).split('-').map(Number)
   const date = new Date(Date.UTC(year, month - 1, day))
   date.setUTCDate(date.getUTCDate() + safeDays)
@@ -68,7 +101,8 @@ export const DEFAULT_FISCAL_YEAR_START_BS = '2083-04-01'
 export const DEFAULT_FISCAL_YEAR_START_AD = bsToAd(DEFAULT_FISCAL_YEAR_START_BS)
 
 export function todayBs(): string {
-  return adToBs(new Date().toISOString().slice(0, 10))
+  const today = new Date()
+  return adToBs(`${today.getFullYear()}-${pad2(today.getMonth() + 1)}-${pad2(today.getDate())}`)
 }
 
 export function firstOfCurrentBsMonth(): string {

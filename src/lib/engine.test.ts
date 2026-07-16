@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaymentData, buildPurchaseVoucherData, buildReceiptData,
-  buildSalesVoucherData, computeStockLedger, computeStockSummary, recomputeStock, validateBalanced,
+  buildSalesVoucherData, computeStockLedger, computeStockSummary, defaultChartOfAccounts, recomputeAllBalances, recomputeStock, validateBalanced,
 } from './engine'
-import type { Item, Voucher } from '@/types'
+import type { Account, Item, Voucher } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
 
 const accounts = { cash: 'c:cash', sales: 'c:sales', purchase: 'c:purchase', vat_payable: 'c:vatp', vat_receivable: 'c:vatr' }
@@ -20,6 +20,21 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(purchase.lines).valid).toBe(true)
     expect(validateBalanced(buildReceiptData([{ account_id: 'customer', amount: 500 }], 'cash').lines).valid).toBe(true)
     expect(validateBalanced(buildPaymentData([{ account_id: 'supplier', amount: 300 }], 'cash').lines).valid).toBe(true)
+  })
+
+  it('keeps input and output VAT as signed liability balances', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const inputVat = chart.find(account => account.id === 'c:vat_receivable')!
+    const outputVat = chart.find(account => account.id === 'c:vat_payable')!
+    expect(inputVat).toMatchObject({ type: 'Liability', group: 'Duties & Taxes' })
+    expect(outputVat).toMatchObject({ type: 'Liability', group: 'Duties & Taxes' })
+    const voucher = { id: 'vat', company_id: 'c', type: 'Journal', date_bs: '2083-01-01', date_bs_key: 20830101, seq: 1, total: 0, cancelled: false, lines: [
+      { account_id: inputVat.id, debit: 130, credit: 0 },
+      { account_id: outputVat.id, debit: 0, credit: 200 },
+    ] } as Voucher
+    const balances = recomputeAllBalances(chart, [voucher])
+    expect(balances.find(account => account.id === inputVat.id)?.balance).toBe(-130)
+    expect(balances.find(account => account.id === outputVat.id)?.balance).toBe(200)
   })
 
   it('posts multiple ledger allocations against one settlement account', () => {

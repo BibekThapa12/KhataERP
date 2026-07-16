@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Archive, Pencil, Plus, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { cn, fmtDate, fmtMoney } from '@/lib/utils'
@@ -17,6 +17,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import type { Item, ItemCategory } from '@/types'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
@@ -30,25 +31,26 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
 
   const handleSave = async () => {
     setError('')
     setSaving(true)
     try {
       await saveStockAdjustment({ item_id: itemId, qty_delta: Number(qtyDelta), rate: Number(rate) || 0, narration: narration.trim(), date_bs: dateBs })
-      setItemId(''); setQtyDelta(''); setRate(''); setNarration('')
-      onClose()
+      setDateBs(todayBs()); setItemId(''); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError((error as Error).message)
     } finally { setSaving(false) }
   }
 
   return <Dialog open={open} onOpenChange={value => !value && onClose()}>
-    <DialogContent className="max-w-md">
+    <DialogContent className="voucher-dialog max-w-md">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
-        <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
-        <div className="space-y-1.5"><Label>Item</Label><SearchableSelect value={itemId} onValueChange={setItemId} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} /></div>
+        <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={setItemId} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
         <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Rate</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div>
         <div className="space-y-1.5"><Label>Reason</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Damage, found stock, correction..." /></div>
         {error && <p className="text-sm text-destructive">{error}</p>}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
+import { VoucherNumberField } from './VoucherNumberField'
 import type { Voucher } from '@/types'
 
 interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
@@ -47,6 +48,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [showPartyForm, setShowPartyForm] = useState(false)
   const [showItemForm, setShowItemForm] = useState(false)
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
+  const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const pendingLineFocus = useRef<number | null>(null)
 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyTerms = partyTerminology(partyType)
@@ -131,6 +135,19 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setLines(next)
   }
 
+  const addLine = () => {
+    pendingLineFocus.current = lines.length
+    setLines(current => [...current, { item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
+  }
+
+  useEffect(() => {
+    if (pendingLineFocus.current === null) return
+    const index = pendingLineFocus.current
+    pendingLineFocus.current = null
+    const frame = window.requestAnimationFrame(() => itemTriggerRefs.current[index]?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [lines.length])
+
   const handleSave = async () => {
     setError('')
     const validLines = lines.filter(l => l.item_id && l.qty > 0 && l.rate > 0)
@@ -164,7 +181,22 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         if (voucher) await updatePurchaseVoucher(voucher.id, params)
         else await savePurchaseVoucher(params)
       }
-      onClose()
+      if (voucher) {
+        onClose()
+      } else {
+        setDateBs(todayBs())
+        setIsCash(false)
+        setPartyAccountId('')
+        setCreditDays(0)
+        setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
+        setVatRate(vatEnabled ? 13 : 0)
+        setDiscount(0)
+        setNarration('')
+        setError('')
+        itemTriggerRefs.current = []
+        pendingLineFocus.current = null
+        window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
+      }
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally {
@@ -175,19 +207,20 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   return (
     <>
       <Dialog open={open} onOpenChange={o => !o && onClose()}>
-        <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
           <DialogHeader>
             <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4 py-2">
+          <div className="space-y-3 py-1">
             {/* Date + payment mode */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
+            <div className="flex flex-wrap items-start gap-3">
+              <div className="w-full space-y-1.5 sm:w-40">
                 <Label>Date</Label>
                 <NepaliDateInput value={dateBs} onChange={setDateBs} />
               </div>
-              <div className="flex items-end pb-2">
+              <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
+              <div className="flex h-8 items-center sm:mt-[1.2rem]">
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} className="h-4 w-4 shrink-0 rounded accent-primary" />
                   <Label htmlFor={`${type.toLowerCase()}-cash-mode`} className="cursor-pointer font-normal">{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
@@ -195,34 +228,31 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               </div>
             </div>
 
-            {!isCash && <div className="min-w-0 space-y-1.5">
-              <Label>{partyTerms.singular}</Label>
-              <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
-                <SearchableSelect className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
-                <Button type="button" variant="outline" size="sm" className="shrink-0" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
-              </div>
-              <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
-            </div>}
-
             {isCash && <LedgerBalanceHint account={cashAccount} />}
 
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
+            <div className={`grid gap-3 ${isCash ? 'sm:grid-cols-[11rem_12rem]' : 'lg:grid-cols-[minmax(18rem,1fr)_11rem_12rem]'}`}>
+              {!isCash && <div className="min-w-0 space-y-1.5">
+                <Label>{partyTerms.singular}</Label>
+                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
+                  <SearchableSelect triggerRef={partyTriggerRef} autoFocus className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
+                  <Button type="button" variant="outline" size="sm" tabIndex={-1} className="shrink-0 bg-white hover:bg-white" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
+                </div>
+                <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
+              </div>}
+              <div className="min-w-0 space-y-1.5">
                 <Label>Credit Days</Label>
-                <Input type="number" min="0" step="1" value={isCash ? 0 : creditDays} disabled={isCash} onChange={e => setCreditDays(Number(e.target.value))} />
-                <p className="text-xs text-muted-foreground">This invoice only; the party default is unchanged.</p>
+                <Input type="number" min="0" step="1" value={isCash ? 0 : creditDays} disabled={isCash} onChange={e => setCreditDays(Number(e.target.value))} className="w-32" />
               </div>
-              <div className="space-y-1.5">
+              <div className="min-w-0 space-y-1.5">
                 <Label>Due Date</Label>
-                <Input value={dueDateBs} readOnly className="bg-muted/40" />
-                <p className="text-xs text-muted-foreground">Invoice date + credit days (B.S.)</p>
+                <Input value={dueDateBs} readOnly tabIndex={-1} className="w-44 !bg-[#f6f6f6]" />
               </div>
             </div>
 
             {/* Line items */}
             <div>
-              <div className="mb-1.5 hidden grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] gap-2 md:grid">
-                {['Item', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
+              <div className="mb-1.5 hidden grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] gap-1.5 lg:grid">
+                {['Item', 'Av. Stock', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
                   <p key={h} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{h}</p>
                 ))}
               </div>
@@ -231,76 +261,78 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   const amt = round2Local(line.qty * line.rate)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   return (
-                    <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 md:grid-cols-[2fr_0.7fr_0.8fr_1fr_1fr_auto] md:items-start md:border-0 md:p-0">
-                      <div className="col-span-2 flex gap-1 md:col-span-1">
-                        <SearchableSelect value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: `${i.name} ${isSales ? `(${formatStockQuantity(getStockEntry(i.id).qty, i)})` : `(${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`}`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''}` }))} />
-                        <Button type="button" variant="outline" size="icon" className="h-9 w-9 flex-shrink-0" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
+                    <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
+                      <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
+                        <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''}` }))} />
+                        <Button type="button" variant="outline" size="icon" tabIndex={-1} className="h-8 w-8 flex-shrink-0 bg-white hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <div className="space-y-1"><Label className="text-xs md:hidden">Qty</Label>
-                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" />
+                      <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={stock && items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : undefined}>{stock && items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : '—'}</div></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Qty</Label>
+                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" className="invoice-entry-value h-8 px-2" />
                         {isSales && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
                           <p className="text-xs text-destructive mt-0.5">Only {items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : stock.qty} in stock</p>
                         )}
                       </div>
-                      <div className="space-y-1"><Label className="text-xs md:hidden">Unit</Label>{(() => {
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Unit</Label>{(() => {
                         const item = items.find(entry => entry.id === line.item_id)
                         const snapshotMatchesCurrent = line.unit_mode === 'main'
                           ? !line.entry_unit || line.entry_unit === item?.unit
                           : line.entry_unit === item?.alternate_unit
                         return item?.alternate_unit && snapshotMatchesCurrent
-                          ? <SearchableSelect value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
-                          : <div className="h-9 flex items-center text-sm text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
+                          ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
+                          : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs md:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" /></div>
-                      <div className="space-y-1"><Label className="text-xs md:hidden">Amount</Label><div className="flex h-9 items-center num font-semibold text-sm">{fmtMoney(amt)}</div></div>
-                      <Button type="button" variant="ghost" size="icon" className="h-9 w-9 self-end text-muted-foreground hover:text-destructive md:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><div className="invoice-entry-value flex h-8 min-w-0 items-center whitespace-nowrap num font-semibold">{fmtMoney(amt)}</div></div>
+                      <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
                     </div>
                   )
                 })}
               </div>
-              <Button type="button" variant="outline" size="sm" className="mt-2" onClick={() => setLines([...lines, { item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])}>
+              <Button type="button" variant="outline" size="sm" className="mt-2 bg-white hover:bg-white" onClick={addLine}>
                 <Plus className="h-3.5 w-3.5 mr-1" /> Add line
               </Button>
             </div>
 
-            {/* VAT + Discount */}
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-              <div className="space-y-1.5">
-                <Label>Discount (Rs, flat)</Label>
-                <Input type="number" min="0" step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" />
-              </div>
-              {vatEnabled && (
-                <div className="space-y-1.5">
-                  <Label>VAT Rate</Label>
-                  <SearchableSelect value={String(vatRate)} onValueChange={v => setVatRate(Number(v))} options={[{ value: '13', label: '13% (Standard)' }, { value: '0', label: '0% (Exempt)' }]} />
+            <div className="grid gap-3 lg:grid-cols-[21.75rem_minmax(18rem,1fr)]">
+              <div className="min-w-0 space-y-3">
+                <div className="flex flex-wrap gap-3">
+                  <div className="w-full space-y-1.5 sm:w-40">
+                    <Label>Discount (Rs, flat)</Label>
+                    <Input type="number" min="0" step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" />
+                  </div>
+                  {vatEnabled && (
+                    <div className="w-full space-y-1.5 sm:w-44">
+                      <Label>VAT Rate</Label>
+                      <SearchableSelect tabIndex={-1} value={String(vatRate)} onValueChange={v => setVatRate(Number(v))} options={[{ value: '13', label: '13% (Standard)' }, { value: '0', label: '0% (Exempt)' }]} />
+                    </div>
+                  )}
                 </div>
-              )}
-            </div>
-
-            {/* Totals */}
-            <div className="bg-muted/40 rounded-lg p-4 text-sm space-y-1.5">
-              <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(subtotal)}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(discount)}</span></div>
-              {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num">{fmtMoney(vatAmount)}</span></div>}
-              <div className="flex justify-between font-serif font-bold text-base border-t border-border pt-2 mt-2">
-                <span>Total</span><span className="num">{fmtMoney(total)}</span>
+                <div className="space-y-1.5">
+                  <Label>Narration (optional)</Label>
+                  <Textarea value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note about this transaction…" rows={2} />
+                </div>
               </div>
-            </div>
 
-            <div className="space-y-1.5">
-              <Label>Narration (optional)</Label>
-              <Textarea value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note about this transaction…" rows={2} />
+              <div className="h-full space-y-2 rounded-lg bg-[#f6f6f6] p-3 text-[14px]">
+                <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num font-medium">{fmtMoney(subtotal)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num font-medium">- {fmtMoney(discount)}</span></div>
+                {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num font-medium">{fmtMoney(vatAmount)}</span></div>}
+                <div className="mt-2 flex justify-between border-t border-border pt-2 font-serif text-[16px] font-bold">
+                  <span>Total</span><span className="num">{fmtMoney(total)}</span>
+                </div>
+              </div>
             </div>
 
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
 
           <DialogFooter>
-            <Button variant="outline" onClick={onClose}>Cancel</Button>
+            <Button variant="outline" tabIndex={-1} onClick={onClose}>Cancel</Button>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} ${type === 'Sales' ? 'Invoice' : 'Bill'}`}
             </Button>

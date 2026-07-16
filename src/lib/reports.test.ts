@@ -92,7 +92,7 @@ describe('detailed profit and loss', () => {
 describe('cash flow report', () => {
   const companyId = 'company'
   const categories: AccountCategory[] = [
-    { id: 'bank-category', company_id: companyId, name: 'Bank', account_type: 'Asset', is_system: true, is_archived: false },
+    { id: 'bank-category', company_id: companyId, name: 'Bank Accounts', account_type: 'Asset', is_system: true, is_archived: false },
     { id: 'fixed-category', company_id: companyId, name: 'Fixed Assets', account_type: 'Asset', is_system: false, is_archived: false },
   ]
   const accounts: Account[] = [
@@ -128,5 +128,12 @@ describe('cash flow report', () => {
     ])
     expect(report.sections.flatMap(section => section.rows).map(row => row.voucher.id)).not.toContain('v5')
     expect(report.sections.flatMap(section => section.rows).map(row => row.voucher.id)).not.toContain('v6')
+  })
+
+  it('treats a Bank OD opening balance as negative cash', () => {
+    const overdraftCategory = { id: 'bank-od', company_id: companyId, name: 'Bank OD A/c', account_type: 'Liability', is_system: true, is_archived: false } as AccountCategory
+    const overdraft = { ...account('od', 'Overdraft', 'Liability', 'Bank OD A/c', 0, overdraftCategory.id), opening_balance: 75 }
+    const report = computeCashFlow(companyId, [...accounts, overdraft], [...categories, overdraftCategory], [], '2083-04-01', '2083-04-30')
+    expect(report).toMatchObject({ opening_balance: 225, net_change: 0, closing_balance: 225 })
   })
 })

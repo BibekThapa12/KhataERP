@@ -23,7 +23,7 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, onInteractOutside, onPointerDownOutside, onFocusOutside, ...props }, ref) => {
+>(({ className, children, onInteractOutside, onPointerDownOutside, onFocusOutside, onOpenAutoFocus, ...props }, ref) => {
   const shouldIgnoreSelectOutsideEvent = (event: Event) => {
     const target = event.target instanceof HTMLElement ? event.target : null
     const path = event.composedPath()
@@ -51,6 +51,14 @@ const DialogContent = React.forwardRef<
       onFocusOutside={(event) => {
         onFocusOutside?.(event)
         if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()
+      }}
+      onOpenAutoFocus={(event) => {
+        onOpenAutoFocus?.(event)
+        if (event.defaultPrevented) return
+        const target = event.currentTarget.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
+        if (!target) return
+        event.preventDefault()
+        window.setTimeout(() => target.focus(), 0)
       }}
       {...props}
     >

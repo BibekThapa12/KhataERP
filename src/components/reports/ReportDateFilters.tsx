@@ -42,11 +42,11 @@ export function ReportDateFilters({ company, range, from, to, onRangeChange, onF
       </div>
       <div className="min-w-[8.5rem] flex-1 space-y-1.5 sm:flex-none">
         <Label>From</Label>
-        <NepaliDateInput value={from} onChange={value => { onFromChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
+        <NepaliDateInput value={from} max={to} onChange={value => { onFromChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
       </div>
       <div className="min-w-[8.5rem] flex-1 space-y-1.5 sm:flex-none">
         <Label>To</Label>
-        <NepaliDateInput value={to} onChange={value => { onToChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
+        <NepaliDateInput value={to} min={from} onChange={value => { onToChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
       </div>
     </div>
   )

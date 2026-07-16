@@ -18,6 +18,9 @@ import { categoryDepth, categoryDescendantIds, subtreeHeight } from '@/lib/categ
 import { partyTerminology, partyTypeForCategory } from '@/lib/partyTerminology'
 import { bankAccounts } from '@/lib/banks'
 import { toBaseQty, toBaseRate } from '@/lib/units'
+import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
+import { voucherPrefix } from '@/lib/voucherNumbers'
+import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from '@/lib/systemAccountGroups'
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 
@@ -128,15 +131,6 @@ function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: 
       cost_rate: line.cost_rate ?? (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : toBaseRate(line.rate, line.conversion_factor || 1)),
     }
   })
-}
-
-function companyPrefix(company: Company, type: 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment') {
-  if (type === 'Sales') return company.sales_prefix || 'INV-'
-  if (type === 'Purchase') return company.purchase_prefix || 'PB-'
-  if (type === 'Receipt') return company.receipt_prefix || 'RCPT-'
-  if (type === 'Sales Return') return company.sales_return_prefix || 'SR-'
-  if (type === 'Purchase Return') return company.purchase_return_prefix || 'PR-'
-  return company.payment_prefix || 'PAY-'
 }
 
 function systemAccountsFor(company: Company, accounts: Account[]) {
@@ -281,55 +275,81 @@ export const useAppStore = create<AppState>((set, get) => ({
         rawAccounts.push(...missingDefaults.map(a => ({ ...a, balance: 0 })))
       }
 
-      const taxCategoryRenames = [
-        { type: 'Asset' as const, name: 'Duties & Taxes (Assets)' },
-        { type: 'Liability' as const, name: 'Duties & Taxes (Liabilities)' },
-      ]
-      for (const rename of taxCategoryRenames) {
-        const category = accountCategories.find(entry => entry.name === 'Duties & Taxes' && entry.account_type === rename.type && entry.is_system)
-        if (!category) continue
-        await updateAccountCategory(category.id, { name: rename.name })
-        category.name = rename.name
-        for (const account of rawAccounts.filter(entry => entry.type === rename.type && (entry.category_id === category.id || entry.group === 'Duties & Taxes'))) {
-          await updateAccount(account.id, { group: rename.name })
-          account.group = rename.name
+      const groupByKey = new Map<string, AccountCategory>()
+      for (const spec of SYSTEM_ACCOUNT_GROUPS) {
+        const parent = spec.parent_key ? groupByKey.get(spec.parent_key) : undefined
+        let category = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
+        if (!category) {
+          category = await insertAccountCategory({ company_id: company.id, name: spec.name, account_type: spec.account_type, parent_category_id: parent?.id || null, is_system: true, is_archived: false })
+          accountCategories.push(category)
+        } else {
+          const updates: Partial<AccountCategory> = {}
+          if (category.parent_category_id !== (parent?.id || null)) updates.parent_category_id = parent?.id || null
+          if (!category.is_system) updates.is_system = true
+          if (category.is_archived) updates.is_archived = false
+          if (Object.keys(updates).length) {
+            await updateAccountCategory(category.id, updates)
+            Object.assign(category, updates)
+          }
+        }
+        groupByKey.set(spec.key, category)
+      }
+
+      const legacyBank = accountCategories.find(category => category.name === 'Bank' && category.account_type === 'Asset')
+      const bankCategory = groupByKey.get('bank-accounts')!
+      if (legacyBank && legacyBank.id !== bankCategory.id) {
+        for (const account of rawAccounts.filter(entry => entry.category_id === legacyBank.id)) {
+          await updateAccount(account.id, { category_id: bankCategory.id, group: bankCategory.name })
+          account.category_id = bankCategory.id
+          account.group = bankCategory.name
         }
       }
 
-      const categorySpecs = [
-        ...rawAccounts.map(account => ({ name: account.group, account_type: account.type, is_system: account.is_system })),
-        { name: 'Sundry Debtors', account_type: 'Asset' as const, is_system: true },
-        { name: 'Sundry Creditors', account_type: 'Liability' as const, is_system: true },
-      ]
-      for (const spec of categorySpecs) {
-        if (accountCategories.some(category => category.name === spec.name && category.account_type === spec.account_type)) continue
-        const category = await insertAccountCategory({ company_id: company.id, ...spec, is_archived: false })
-        accountCategories.push(category)
+      const legacyIncome = accountCategories.find(category => category.name === 'Income' && category.account_type === 'Income')
+      const incomesCategory = groupByKey.get('incomes')!
+      if (legacyIncome && legacyIncome.id !== incomesCategory.id) {
+        for (const account of rawAccounts.filter(entry => entry.category_id === legacyIncome.id)) {
+          await updateAccount(account.id, { category_id: incomesCategory.id, group: incomesCategory.name })
+          account.category_id = incomesCategory.id
+          account.group = incomesCategory.name
+        }
       }
-      let assetsCategory = accountCategories.find(category => category.name === 'Assets' && category.account_type === 'Asset')
-      if (!assetsCategory) {
-        assetsCategory = await insertAccountCategory({ company_id: company.id, name: 'Assets', account_type: 'Asset', is_system: false, is_archived: false })
-        accountCategories.push(assetsCategory)
+
+      const legacyTax = accountCategories.find(category => category.name === 'Duties & Taxes (Liabilities)' && category.account_type === 'Liability')
+      const taxCategory = groupByKey.get('duties-taxes')!
+      if (legacyTax && legacyTax.id !== taxCategory.id) {
+        for (const account of rawAccounts.filter(entry => entry.category_id === legacyTax.id)) {
+          await updateAccount(account.id, { category_id: taxCategory.id, group: taxCategory.name })
+          account.category_id = taxCategory.id
+          account.group = taxCategory.name
+        }
       }
-      let currentAssetsCategory = accountCategories.find(category => category.name === 'Current Assets' && category.account_type === 'Asset')
-      if (!currentAssetsCategory) {
-        currentAssetsCategory = await insertAccountCategory({ company_id: company.id, name: 'Current Assets', account_type: 'Asset', parent_category_id: assetsCategory.id, is_system: false, is_archived: false })
-        accountCategories.push(currentAssetsCategory)
-      } else if (currentAssetsCategory.parent_category_id !== assetsCategory.id) {
-        await updateAccountCategory(currentAssetsCategory.id, { parent_category_id: assetsCategory.id })
-        currentAssetsCategory.parent_category_id = assetsCategory.id
+
+      for (const account of rawAccounts) {
+        const key = systemAccountKeyFromId(company.id, account.id)
+        if (!key) continue
+        const destination = groupByKey.get(SYSTEM_ACCOUNT_DESTINATIONS[key])
+        if (!destination) continue
+        const nextType = key === 'vat_receivable' ? 'Liability' as const : account.type
+        const repairs: Partial<Account> = {}
+        if (account.category_id !== destination.id) repairs.category_id = destination.id
+        if (account.group !== destination.name) repairs.group = destination.name
+        if (account.type !== nextType) {
+          repairs.type = nextType
+          if (key === 'vat_receivable') repairs.opening_balance = -(account.opening_balance || 0)
+        }
+        if (!Object.keys(repairs).length) continue
+        await updateAccount(account.id, repairs)
+        Object.assign(account, repairs)
       }
-      let bankCategory = accountCategories.find(category => category.name === 'Bank' && category.account_type === 'Asset')
-      if (!bankCategory) {
-        bankCategory = await insertAccountCategory({ company_id: company.id, name: 'Bank', account_type: 'Asset', parent_category_id: currentAssetsCategory.id, is_system: true, is_archived: false })
-        accountCategories.push(bankCategory)
-      }
-      const defaultBankId = resolveSystemAccountId(rawAccounts, company.id, 'bank')
-      const defaultBank = rawAccounts.find(account => account.id === defaultBankId)
-      if (defaultBank && defaultBank.category_id !== bankCategory.id) {
-        await updateAccount(defaultBank.id, { category_id: bankCategory.id, group: 'Bank' })
-        defaultBank.category_id = bankCategory.id
-        defaultBank.group = 'Bank'
+
+      for (const account of rawAccounts) {
+        if (account.category_id || !account.group) continue
+        let category = accountCategories.find(item => item.name === account.group && item.account_type === account.type)
+        if (!category) {
+          category = await insertAccountCategory({ company_id: company.id, name: account.group, account_type: account.type, is_system: false, is_archived: false })
+          accountCategories.push(category)
+        }
       }
       for (const account of rawAccounts) {
         if (account.category_id) continue
@@ -422,8 +442,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   addItem: async (data) => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const unit = canonicalItemUnit(data.unit) || data.unit.trim()
+    const alternateUnit = data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null
+    const unitError = validateItemUnits(unit, alternateUnit)
+    if (unitError) throw new Error(unitError)
+    if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data })
+    const newItem = await insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null })
     const items = [...get().items, newItem]
     const stock = recomputeStock(items, get().vouchers, valuationMethod(company))
     set({ items, stock })
@@ -459,7 +484,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     const existing = get().accountCategories.find(category => category.id === id)
     if (!company || !existing) throw new Error('Category not found')
-    if (existing.is_system && updates.account_type && updates.account_type !== existing.account_type) throw new Error('System category type cannot be changed')
+    if (existing.is_system) throw new Error('System account groups cannot be changed')
     const descendants = categoryDescendantIds(get().accountCategories, id)
     if (updates.is_archived && get().rawAccounts.some(account => (account.category_id === id || descendants.has(account.category_id || '')) && !account.is_archived)) throw new Error('Move or archive active ledgers in this category tree first')
     if (updates.is_archived && get().accountCategories.some(category => descendants.has(category.id) && !category.is_archived)) throw new Error('Archive child categories first')
@@ -546,10 +571,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     const existing = get().items.find(item => item.id === id)
     if (!company || !existing) throw new Error('Item not found')
-    await updateItem(id, updates)
-    const items = get().items.map(item => item.id === id ? { ...item, ...updates } : item)
+    const normalizedUpdates = { ...updates }
+    const unitFieldsChanged = updates.unit !== undefined || updates.alternate_unit !== undefined || updates.alternate_conversion !== undefined
+    if (typeof updates.unit === 'string') normalizedUpdates.unit = canonicalItemUnit(updates.unit) || updates.unit.trim()
+    if (typeof updates.alternate_unit === 'string') normalizedUpdates.alternate_unit = canonicalItemUnit(updates.alternate_unit) || updates.alternate_unit.trim()
+    const effectiveUnit = normalizedUpdates.unit || existing.unit
+    const effectiveAlternate = normalizedUpdates.alternate_unit === undefined ? existing.alternate_unit : normalizedUpdates.alternate_unit
+    const effectiveConversion = normalizedUpdates.alternate_conversion === undefined ? existing.alternate_conversion : normalizedUpdates.alternate_conversion
+    if (unitFieldsChanged) {
+      const unitError = validateItemUnits(effectiveUnit, effectiveAlternate, [existing.unit, existing.alternate_unit || ''])
+      if (unitError) throw new Error(unitError)
+      if (effectiveAlternate && Number(effectiveConversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
+      if (!effectiveAlternate) normalizedUpdates.alternate_conversion = null
+    }
+    await updateItem(id, normalizedUpdates)
+    const items = get().items.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
     set({ items, stock: recomputeStock(items, get().vouchers, valuationMethod(company)) })
-    logMasterChange(company.id, 'item', id, updates.is_archived !== undefined ? 'archive_status' : 'update', existing, updates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(console.warn)
   },
 
   // ─── Sales ──────────────────────────────────────────────────────────────────
@@ -560,7 +598,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Sales', companyPrefix(company, 'Sales'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
+    const invoice_no = await getNextVoucherNo(company.id, 'Sales', voucherPrefix(company, 'Sales'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
@@ -582,7 +620,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Purchase', companyPrefix(company, 'Purchase'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
+    const invoice_no = await getNextVoucherNo(company.id, 'Purchase', voucherPrefix(company, 'Purchase'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
@@ -606,7 +644,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildReceiptData(validAllocations, deposit_to_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Receipt', companyPrefix(company, 'Receipt'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    const invoice_no = await getNextVoucherNo(company.id, 'Receipt', voucherPrefix(company, 'Receipt'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
@@ -627,7 +665,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildPaymentData(validAllocations, paid_from_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Payment', companyPrefix(company, 'Payment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    const invoice_no = await getNextVoucherNo(company.id, 'Payment', voucherPrefix(company, 'Payment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
@@ -646,9 +684,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
     const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
     const seq = await getNextSeq(company.id)
+    const invoice_no = await getNextVoucherNo(company.id, 'Journal', voucherPrefix(company, 'Journal'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', seq, ...dateFields, narration, is_cash: false, total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Journal', seq, invoice_no, ...dateFields, narration, is_cash: false, total, cancelled: false },
       lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -667,7 +706,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildReturnVoucherData({ ...params, original, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, params.type, companyPrefix(company, params.type), company.reset_numbering_fiscal_year, company.fiscal_year_start, params.date_bs)
+    const invoice_no = await getNextVoucherNo(company.id, params.type, voucherPrefix(company, params.type), company.reset_numbering_fiscal_year, company.fiscal_year_start, params.date_bs)
     const dateFields = voucherDateFields(params.date_bs)
     const newVoucher = await insertVoucher({
       voucher: {
@@ -766,9 +805,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!item_id) throw new Error('Select an item')
     if (!qty_delta) throw new Error('Enter a quantity adjustment')
     const seq = await getNextSeq(company.id)
+    const invoice_no = await getNextVoucherNo(company.id, 'Stock Adjustment', voucherPrefix(company, 'Stock Adjustment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, ...dateFields, narration, is_cash: false, total: Math.abs(qty_delta * rate), cancelled: false },
+      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, invoice_no, ...dateFields, narration, is_cash: false, total: Math.abs(qty_delta * rate), cancelled: false },
       lines: [],
       stock_lines: [{ item_id, qty: Math.abs(qty_delta), rate, direction: qty_delta > 0 ? 'in' : 'out' }],
     })

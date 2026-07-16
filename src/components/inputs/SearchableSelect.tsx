@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { Ref } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -22,11 +23,14 @@ interface SearchableSelectProps {
   disabled?: boolean
   className?: string
   id?: string
+  autoFocus?: boolean
+  tabIndex?: number
+  triggerRef?: Ref<HTMLButtonElement>
 }
 
 export function SearchableSelect({
   value, onValueChange, options, placeholder = 'Select…', searchPlaceholder = 'Search…',
-  emptyText = 'No matching options', disabled, className, id,
+  emptyText = 'No matching options', disabled, className, id, autoFocus, tabIndex, triggerRef,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -88,7 +92,7 @@ export function SearchableSelect({
 
   return <Popover.Root open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild>
-      <button id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
+      <button ref={triggerRef} id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} autoFocus={autoFocus} tabIndex={tabIndex} data-dialog-autofocus={autoFocus ? '' : undefined} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
         <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')} title={selected?.label}>{selected?.label || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>

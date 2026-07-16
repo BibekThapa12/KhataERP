@@ -15,10 +15,12 @@ import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { normalizeSearch } from '@/lib/search'
 import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { partyTerminology } from '@/lib/partyTerminology'
+import { validateItemUnits } from '@/lib/itemUnits'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -57,18 +59,20 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
   const ownHeight = category ? subtreeHeight(allCategories, category.id) : 1
   const parentOptions = allCategories.filter(candidate => !candidate.is_archived && candidate.id !== category?.id && !descendants.has(candidate.id) && categoryDepth(allCategories, candidate.id) + ownHeight <= 3 && (kind === 'item' || (candidate as AccountCategory).account_type === type))
   const selectedParent = parentId === 'root' ? undefined : allCategories.find(candidate => candidate.id === parentId)
+  const systemCategory = kind === 'account' && !!(category as AccountCategory | undefined)?.is_system
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
       <DialogContent className="max-w-sm">
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
-          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
+          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus disabled={systemCategory} /></div>
           {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId('root') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
-          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[{ value: 'root', label: 'Top level' }, ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
+          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[{ value: 'root', label: 'Top level' }, ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
+          {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Category'}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving || systemCategory}>{saving ? 'Saving...' : 'Save Category'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -148,7 +152,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
 
 export function ItemDialog({ item, open, onClose }: { item: Item | null; open: boolean; onClose: () => void }) {
   const { itemCategories, vouchers, alterItem } = useAppStore()
-  const [form, setForm] = useState({ name: '', category_id: '', unit: 'pcs', alternate_unit: '', alternate_conversion: '', sell_rate: '0', opening_qty: '0', opening_rate: '0', reorder_level: '', sku: '', barcode: '', vat_applicable: true })
+  const [form, setForm] = useState({ name: '', category_id: '', unit: 'Pcs', alternate_unit: '', alternate_conversion: '', sell_rate: '0', opening_qty: '0', opening_rate: '0', reorder_level: '', sku: '', barcode: '', vat_applicable: true })
   const [openingUnitMode, setOpeningUnitMode] = useState<UnitMode>('main')
   const [confirmUnit, setConfirmUnit] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -166,10 +170,11 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   const unitChanged = form.unit.trim() !== item.unit
   const stockBasisChanged = Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate
   const save = async () => {
-    if (!form.name.trim() || !form.unit.trim()) return setError('Name and unit are required.')
+    if (!form.name.trim()) return setError('Item name is required.')
     const altUnit = form.alternate_unit.trim()
     const altFactor = Number(form.alternate_conversion)
-    if (altUnit && altUnit.toLowerCase() === form.unit.trim().toLowerCase()) return setError('Main and alternative units must be different.')
+    const unitError = validateItemUnits(form.unit, altUnit, [item.unit, item.alternate_unit || ''])
+    if (unitError) return setError(unitError)
     if (altUnit && altFactor <= 1) return setError('Alternative units per main unit must be greater than 1.')
     if (used && (unitChanged || stockBasisChanged) && !confirmUnit) return setError('Confirm the stock-basis change. Historical vouchers will not be rewritten.')
     setSaving(true)
@@ -185,10 +190,10 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></div>
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
-        <div className="space-y-1.5"><Label>Main Unit</Label><Input value={form.unit} onChange={event => setForm({ ...form, unit: event.target.value })} /></div>
+        <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>
         <div className="space-y-1.5"><Label>Sell Rate</Label><Input type="number" value={form.sell_rate} onChange={event => setForm({ ...form, sell_rate: event.target.value })} /></div>
-        <div className="space-y-1.5"><Label>Alternative Unit</Label><Input value={form.alternate_unit} onChange={event => setForm({ ...form, alternate_unit: event.target.value })} placeholder="Optional" /></div>
-        <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" placeholder="Enter manually" value={form.alternate_conversion} onChange={event => setForm({ ...form, alternate_conversion: event.target.value })} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
+        <div className="space-y-1.5"><Label>Alternative Unit</Label><UnitCombobox value={form.alternate_unit} onValueChange={value => { setForm({ ...form, alternate_unit: value, alternate_conversion: value ? form.alternate_conversion : '' }); if (!value) setOpeningUnitMode('main') }} optional exclude={[form.unit]} /></div>
+        <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" placeholder={form.alternate_unit ? 'Enter manually' : 'Select alternative unit first'} value={form.alternate_conversion} onChange={event => setForm({ ...form, alternate_conversion: event.target.value })} disabled={!form.alternate_unit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
         {form.alternate_unit.trim() && Number(form.alternate_conversion) > 1 && <p className="text-xs text-muted-foreground sm:col-span-2">1 {form.unit.trim()} = {form.alternate_conversion} {form.alternate_unit.trim()}</p>}
         <div className="space-y-1.5"><Label>Opening Qty</Label><Input type="number" value={form.opening_qty} onChange={event => setForm({ ...form, opening_qty: event.target.value })} /></div>
         <div className="space-y-1.5"><Label>Opening Rate</Label><Input type="number" value={form.opening_rate} onChange={event => setForm({ ...form, opening_rate: event.target.value })} /></div>

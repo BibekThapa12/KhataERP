@@ -1,7 +1,7 @@
 import type { Account, AccountCategory, AccountType, Company, DetailedProfitLoss, Party, StockEntry, Voucher } from '@/types'
 import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
-import { bankAccounts } from '@/lib/banks'
+import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { legacySettlementAccountId } from '@/lib/banks'
 
@@ -372,7 +372,7 @@ export function computeCashFlow(
   const accountMap = new Map(accounts.map(account => [account.id, account]))
   const fromKey = makeBsKey(fromDate)
   const toKey = makeBsKey(toDate)
-  let openingBalance = round2(cashAccounts.reduce((sum, account) => sum + (account.opening_balance || 0), 0))
+  let openingBalance = round2(cashAccounts.reduce((sum, account) => sum + (account.id === cashId ? (account.opening_balance || 0) : signedBankBalance(account, account.opening_balance || 0)), 0))
   const rows: CashFlowRow[] = []
 
   for (const voucher of [...vouchers].sort(sortVouchers)) {

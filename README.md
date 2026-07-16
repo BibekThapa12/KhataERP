@@ -20,6 +20,7 @@ Apply `supabase-alternative-units-migration.sql` to enable main and alternative 
 Apply `supabase-category-hierarchy-migration.sql` to seed editable account roots and enforce three-level account and item category trees.
 Apply `supabase-sundry-parties-migration.sql` afterwards to migrate party ledgers into Sundry Debtors and Sundry Creditors.
 Apply `supabase-multiple-bank-accounts-migration.sql` to add the Bank category and exact settlement-account tracking.
+Apply `supabase-system-account-groups-migration.sql` afterwards to seed and protect the canonical account-group hierarchy, consolidate VAT, and enable Bank OD accounts.
 Apply `supabase-credit-days-migration.sql` to add party credit defaults and invoice due-date snapshots.
 Apply `supabase-inventory-valuation-migration.sql` to enable company-wide Weighted Average, FIFO, or LIFO stock valuation.
 

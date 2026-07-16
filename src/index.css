@@ -67,6 +67,11 @@
   :where(.compact-workspace, .compact-workspace-surface) input,
   :where(.compact-workspace, .compact-workspace-surface) select,
   :where(.compact-workspace, .compact-workspace-surface) textarea { font-size: 0.75rem; }
+  :where(.compact-workspace, .compact-workspace-surface) .invoice-entry-value {
+    font-size: 0.8125rem;
+    line-height: 1rem;
+    font-weight: 500;
+  }
   :where(.compact-workspace, .compact-workspace-surface) input:not([type='checkbox']):not([type='radio']),
   :where(.compact-workspace, .compact-workspace-surface) select { height: 2rem; padding-top: 0.2rem; padding-bottom: 0.2rem; }
   :where(.compact-workspace, .compact-workspace-surface) textarea { padding: 0.4rem 0.55rem; }
@@ -119,6 +124,20 @@
   :where(.compact-workspace, .compact-workspace-surface) table { font-size: 0.75rem; }
   :where(.compact-workspace, .compact-workspace-surface) .report-th { padding: 0.35rem 0.5rem; font-size: 0.625rem; }
   :where(.compact-workspace, .compact-workspace-surface) .report-td { padding: 0.35rem 0.5rem; font-size: 0.75rem; line-height: 1rem; }
+
+  /* Voucher entry uses a clean white sheet with subtly contrasted controls. */
+  .voucher-dialog { background-color: #fff; }
+  .voucher-dialog :is(input:not([type='checkbox']):not([type='radio']), textarea, button[role='combobox']) {
+    background-color: #fff;
+    border-color: hsl(38 20% 78%);
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.045);
+  }
+  .voucher-dialog :is(input:not([type='checkbox']):not([type='radio']), textarea, button[role='combobox']):focus,
+  .voucher-dialog :is(input:not([type='checkbox']):not([type='radio']), textarea, button[role='combobox']):focus-visible {
+    background-color: #fff;
+    border-color: hsl(var(--ring));
+  }
+  .voucher-dialog input:read-only { background-color: #f6f6f6; }
 }
 
 @media (max-width: 767px) {
