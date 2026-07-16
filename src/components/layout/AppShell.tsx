@@ -63,6 +63,7 @@ const NAV_SECTIONS: {
       { to: '/reports/registers', label: 'Transaction Registers', Icon: Files },
       { to: '/reports/cash-bank-book', label: 'Cash & Bank', Icon: Landmark },
       { to: '/stock-report', label: 'Stock Summary', Icon: Boxes },
+      { to: '/reports/stock-ledger', label: 'Stock Ledger', Icon: FileText },
       {
         kind: 'group', id: 'financial', label: 'Financial Reports', Icon: BarChart2,
         children: [
@@ -309,7 +310,7 @@ export function AppShell() {
       </aside>
 
       {/* Main */}
-      <main className="flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main className="compact-workspace flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Voucher shortcuts">
           <div className="flex items-center gap-1.5 overflow-x-auto">
             <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick vouchers</span>

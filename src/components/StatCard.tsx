@@ -22,13 +22,13 @@ export function StatCard({ label, value, sub, color = 'default', Icon, className
 
   return (
     <Card className={cn('', className)}>
-      <CardContent className="p-5">
+      <CardContent className="p-3">
         <div className="flex items-start justify-between">
-          <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</p>
-          {Icon && <Icon className="h-4 w-4 text-muted-foreground/50" />}
+          <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">{label}</p>
+          {Icon && <Icon className="h-3.5 w-3.5 text-muted-foreground/50" />}
         </div>
-        <p className={cn('font-serif text-2xl font-bold mt-2 num', colorClass)}>{valueStr}</p>
-        {sub && <p className="text-xs text-muted-foreground mt-1">{sub}</p>}
+        <p className={cn('mt-1 font-serif text-[18px] font-bold leading-tight num', colorClass)}>{valueStr}</p>
+        {sub && <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">{sub}</p>}
       </CardContent>
     </Card>
   )

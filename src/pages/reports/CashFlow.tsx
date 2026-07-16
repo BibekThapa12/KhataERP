@@ -11,6 +11,7 @@ import { ReportDateFilters, type ReportRange } from '@/components/reports/Report
 import { ReportActions } from '@/components/reports/ReportActions'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
+import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
@@ -71,6 +72,7 @@ export function CashFlowPage() {
 
   const report = useMemo(() => computeCashFlow(company?.id || '', rawAccounts, accountCategories, vouchers, from, to), [company?.id, rawAccounts, accountCategories, vouchers, from, to])
   const cashAccountNames = report.cash_accounts.map(account => account.name).join(', ') || 'Cash and Bank'
+  const allExpanded = report.sections.length > 0 && report.sections.every(section => expanded.has(section.activity))
   const toggleSection = (activity: string) => setExpanded(current => {
     const next = new Set(current)
     if (next.has(activity)) next.delete(activity)
@@ -93,6 +95,7 @@ export function CashFlowPage() {
           <StatCard label="Closing Cash + Bank" value={report.closing_balance} color={report.closing_balance >= 0 ? 'default' : 'negative'} sub={`Net change ${fmtMoney(report.net_change)}`} Icon={WalletCards} />
         </div>
 
+        <ExpandCollapseControls expanded={allExpanded} onToggle={() => setExpanded(allExpanded ? new Set() : new Set(report.sections.map(section => section.activity)))} />
         {report.sections.map(section => <CashFlowSectionTable key={section.activity} section={section} expanded={expanded.has(section.activity)} onToggle={() => toggleSection(section.activity)} onVoucherClick={setSelectedVoucher} />)}
 
         <Card className="report-table-card"><CardContent className="p-4"><div className="flex flex-wrap items-center justify-between gap-2 text-sm"><span className="font-medium">Opening balance + net cash movement</span><span className="num font-semibold">{fmtMoney(report.opening_balance)} + {fmtMoney(report.net_change)} = {fmtMoney(report.closing_balance)}</span></div></CardContent></Card>

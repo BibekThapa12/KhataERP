@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaymentData, buildPurchaseVoucherData, buildReceiptData,
-  buildSalesVoucherData, computeStockSummary, recomputeStock, validateBalanced,
+  buildSalesVoucherData, computeStockLedger, computeStockSummary, recomputeStock, validateBalanced,
 } from './engine'
 import type { Item, Voucher } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
@@ -67,6 +67,23 @@ describe('accounting engine integrity', () => {
     const withSalesReturn = [...purchasesAndSale, voucher('return', 3, 'Sales Return', 'in', 2, 0, 'sale')]
     expect(recomputeStock([item], withSalesReturn, 'fifo')[0]).toMatchObject({ qty: 17, value: 270 })
     expect(recomputeStock([item], withSalesReturn, 'lifo')[0]).toMatchObject({ qty: 17, value: 240 })
+  })
+
+  it('builds a period stock ledger with valuation-cost movements and running balances', () => {
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 10 } as Item
+    const voucher = (id: string, seq: number, date_bs: string, type: Voucher['type'], direction: 'in' | 'out', qty: number, rate: number, extra: Record<string, unknown> = {}) => ({ id, company_id: 'c', type, date: '2026-01-01', date_ad: '2026-01-01', date_bs, date_bs_key: Number(date_bs.replaceAll('-', '')), is_cash: true, total: 0, cancelled: false, seq, stock_lines: [{ item_id: 'tea', direction, qty, rate }], ...extra }) as Voucher
+    const vouchers = [
+      voucher('purchase', 1, '2082-09-16', 'Purchase', 'in', 10, 20),
+      voucher('sale', 2, '2082-09-17', 'Sales', 'out', 5, 999),
+      voucher('cancelled', 3, '2082-09-17', 'Purchase', 'in', 100, 1, { cancelled: true }),
+      voucher('draft', 4, '2082-09-17', 'Purchase', 'in', 100, 1, { status: 'draft' }),
+    ]
+    const fifo = computeStockLedger(item, vouchers, '2082-09-17', '2082-09-17', 'fifo')
+    expect(fifo).toMatchObject({ opening_qty: 20, opening_value: 300, outward_qty: 5, outward_value: 50, closing_qty: 15, closing_value: 250 })
+    expect(fifo.movements).toHaveLength(1)
+    expect(fifo.movements[0]).toMatchObject({ voucher_id: 'sale', outward_rate: 10, outward_value: 50, balance_qty: 15, balance_rate: 16.67, balance_value: 250 })
+    const weighted = computeStockLedger(item, vouchers, '2082-09-17', '2082-09-17', 'weighted_average')
+    expect(weighted).toMatchObject({ outward_value: 75, closing_value: 225 })
   })
 
   it('removes an original purchase layer first for purchase returns', () => {

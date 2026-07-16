@@ -22,6 +22,7 @@ const ProfitLossPage = lazy(() => import('@/pages/reports/ProfitLoss').then(m =>
 const BalanceSheetPage = lazy(() => import('@/pages/reports/BalanceSheet').then(m => ({ default: m.BalanceSheetPage })))
 const VatReportPage = lazy(() => import('@/pages/reports/VatReport').then(m => ({ default: m.VatReportPage })))
 const StockReportPage = lazy(() => import('@/pages/reports/StockReport').then(m => ({ default: m.StockReportPage })))
+const StockLedgerPage = lazy(() => import('@/pages/reports/StockLedger').then(m => ({ default: m.StockLedgerPage })))
 const DaybookPage = lazy(() => import('@/pages/reports/Daybook').then(m => ({ default: m.DaybookPage })))
 const LedgerReportPage = lazy(() => import('@/pages/reports/LedgerReport').then(m => ({ default: m.LedgerReportPage })))
 const CashFlowPage = lazy(() => import('@/pages/reports/CashFlow').then(m => ({ default: m.CashFlowPage })))
@@ -188,6 +189,7 @@ export default function App() {
             <Route path="balance-sheet" element={<BalanceSheetPage />} />
             <Route path="vat-report" element={<VatReportPage />} />
             <Route path="stock-report" element={<StockReportPage />} />
+            <Route path="reports/stock-ledger" element={<StockLedgerPage />} />
             <Route path="reports/daybook" element={<DaybookPage />} />
             <Route path="reports/ledger" element={<LedgerReportPage />} />
             <Route path="reports/cash-flow" element={<CashFlowPage />} />

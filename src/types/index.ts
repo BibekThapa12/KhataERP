@@ -233,6 +233,25 @@ export interface ProfitAndLoss {
   net_profit: number
 }
 
+export interface DetailedProfitLoss {
+  directIncome: Account[]
+  directExpenses: Account[]
+  indirectIncome: Account[]
+  indirectExpenses: Account[]
+  openingStock: StockEntry[]
+  closingStock: StockEntry[]
+  openingStockValue: number
+  closingStockValue: number
+  grossProfit: number
+  netProfit: number
+  totalIncome: number
+  totalExpense: number
+  tradingTotal: number
+  profitLossTotal: number
+  debitTotal: number
+  creditTotal: number
+}
+
 export interface BalanceSheet {
   assets: Account[]
   liabilities: Account[]
@@ -266,4 +285,37 @@ export interface StockEntry {
   qty: number
   avg_cost: number
   value: number
+}
+
+export interface StockLedgerMovement {
+  voucher_id: string
+  date_bs: string
+  date_bs_key: number
+  seq: number
+  voucher_type: VoucherType
+  voucher_no: string
+  narration: string
+  inward_qty: number
+  inward_rate: number
+  inward_value: number
+  outward_qty: number
+  outward_rate: number
+  outward_value: number
+  balance_qty: number
+  balance_rate: number
+  balance_value: number
+}
+
+export interface StockLedgerReport {
+  opening_qty: number
+  opening_rate: number
+  opening_value: number
+  inward_qty: number
+  inward_value: number
+  outward_qty: number
+  outward_value: number
+  closing_qty: number
+  closing_rate: number
+  closing_value: number
+  movements: StockLedgerMovement[]
 }

@@ -1,4 +1,4 @@
-import type { Account, AccountCategory, AccountType, Company, Party, Voucher } from '@/types'
+import type { Account, AccountCategory, AccountType, Company, DetailedProfitLoss, Party, StockEntry, Voucher } from '@/types'
 import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
 import { bankAccounts } from '@/lib/banks'
@@ -94,6 +94,66 @@ export interface AccountReportTreeNode {
   debit: number
   credit: number
   totalCount: number
+}
+
+const DIRECT_INCOME_GROUPS = new Set(['sales accounts', 'direct income', 'direct incomes'])
+const DIRECT_EXPENSE_GROUPS = new Set(['purchase accounts', 'direct expense', 'direct expenses', 'cost of sales', 'cost of goods sold'])
+
+function accountCategoryNames(account: Account, categories: AccountCategory[]) {
+  const byId = new Map(categories.map(category => [category.id, category]))
+  const names = [account.group]
+  const seen = new Set<string>()
+  let current = account.category_id ? byId.get(account.category_id) : undefined
+  while (current && !seen.has(current.id)) {
+    names.push(current.name)
+    seen.add(current.id)
+    current = current.parent_category_id ? byId.get(current.parent_category_id) : undefined
+  }
+  return names.map(name => name.trim().toLocaleLowerCase()).filter(Boolean)
+}
+
+export function computeDetailedProfitLoss(
+  companyId: string,
+  accounts: Account[],
+  categories: AccountCategory[],
+  openingStock: StockEntry[],
+  closingStock: StockEntry[],
+): DetailedProfitLoss {
+  const salesIds = new Set([
+    resolveSystemAccountId(accounts, companyId, 'sales'),
+    resolveSystemAccountId(accounts, companyId, 'sales_return'),
+  ])
+  const purchaseIds = new Set([
+    resolveSystemAccountId(accounts, companyId, 'purchase'),
+    resolveSystemAccountId(accounts, companyId, 'purchase_return'),
+  ])
+  const income = accounts.filter(account => account.type === 'Income' && Math.abs(account.balance || 0) >= 0.005)
+  const expenses = accounts.filter(account => account.type === 'Expense' && Math.abs(account.balance || 0) >= 0.005)
+  const directIncome = income.filter(account => salesIds.has(account.id) || accountCategoryNames(account, categories).some(name => DIRECT_INCOME_GROUPS.has(name)))
+  const directExpenses = expenses.filter(account => purchaseIds.has(account.id) || accountCategoryNames(account, categories).some(name => DIRECT_EXPENSE_GROUPS.has(name)))
+  const directIncomeIds = new Set(directIncome.map(account => account.id))
+  const directExpenseIds = new Set(directExpenses.map(account => account.id))
+  const indirectIncome = income.filter(account => !directIncomeIds.has(account.id))
+  const indirectExpenses = expenses.filter(account => !directExpenseIds.has(account.id))
+  const sumAccounts = (entries: Account[]) => round2(entries.reduce((sum, account) => sum + (account.balance || 0), 0))
+  const openingStockValue = round2(openingStock.reduce((sum, entry) => sum + entry.value, 0))
+  const closingStockValue = round2(closingStock.reduce((sum, entry) => sum + entry.value, 0))
+  const directIncomeTotal = sumAccounts(directIncome)
+  const directExpenseTotal = sumAccounts(directExpenses)
+  const indirectIncomeTotal = sumAccounts(indirectIncome)
+  const indirectExpenseTotal = sumAccounts(indirectExpenses)
+  const grossProfit = round2(directIncomeTotal + closingStockValue - openingStockValue - directExpenseTotal)
+  const netProfit = round2(grossProfit + indirectIncomeTotal - indirectExpenseTotal)
+  const tradingTotal = round2(Math.max(openingStockValue + directExpenseTotal, directIncomeTotal + closingStockValue))
+  const profitLossTotal = round2(Math.max(indirectExpenseTotal + Math.max(-grossProfit, 0), indirectIncomeTotal + Math.max(grossProfit, 0)))
+  const statementTotal = round2(tradingTotal + profitLossTotal)
+  return {
+    directIncome, directExpenses, indirectIncome, indirectExpenses, openingStock, closingStock,
+    openingStockValue, closingStockValue, grossProfit, netProfit,
+    totalIncome: round2(directIncomeTotal + indirectIncomeTotal),
+    totalExpense: round2(directExpenseTotal + indirectExpenseTotal),
+    tradingTotal, profitLossTotal, debitTotal: statementTotal, creditTotal: statementTotal,
+  }
 }
 
 export function buildAccountReportTree(accounts: Account[], categories: AccountCategory[]): AccountReportTreeNode[] {

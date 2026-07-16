@@ -1,10 +1,11 @@
 // ─── Shared report helpers ────────────────────────────────────────────────────
-import { Fragment, useState, useMemo } from 'react'
+import { Fragment, useEffect, useState, useMemo, type ReactNode } from 'react'
 import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide } from '@/lib/engine'
-import { buildAccountReportTree, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
+import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeStock } from '@/lib/engine'
+import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
+import { dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
@@ -19,10 +20,12 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { ReportActions } from '@/components/reports/ReportActions'
+import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
+import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
 import { normalizeSearch } from '@/lib/search'
 import { categoryDescendantIds, categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
-import type { Account, InventoryValuationMethod } from '@/types'
+import type { Account, InventoryValuationMethod, Item, StockEntry } from '@/types'
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
 function LedgerLink({ account }: { account: Account }) {
@@ -33,8 +36,11 @@ function LedgerLink({ account }: { account: Account }) {
 function useExpandedGroups() {
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const toggle = (key: string) => setExpanded(current => { const next = new Set(current); if (next.has(key)) next.delete(key); else next.add(key); return next })
-  return { expanded, toggle }
+  return { expanded, setExpanded, toggle }
 }
+
+const reportTreeKeys = (nodes: AccountReportTreeNode[]): string[] => nodes.flatMap(node => [node.key, ...reportTreeKeys(node.children)])
+type ExpansionCommand = { version: number; expand: boolean }
 
 function GroupButton({ groupKey, name, count, type, expanded, toggle }: { groupKey: string; name: string; count: number; type?: string; expanded: boolean; toggle: (key: string) => void }) {
   return <button type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} onClick={() => toggle(groupKey)} className="flex max-w-full items-center gap-2 text-left"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-muted">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</span><span className="truncate">{name}</span><span className="shrink-0 text-xs font-normal text-muted-foreground">{type ? `${type} · ` : ''}{count}</span></button>
@@ -60,20 +66,128 @@ function TrialNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode
 
 function HierarchicalTrialTable({ accounts, categories, totalDebit, totalCredit }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; totalDebit: number; totalCredit: number }) {
   const nodes = useMemo(() => buildAccountReportTree(accounts.filter(account => Math.abs(account.balance || 0) >= 0.005), categories), [accounts, categories])
-  const { expanded, toggle } = useExpandedGroups()
-  return <div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Category / Ledger</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div>
+  const { expanded, setExpanded, toggle } = useExpandedGroups()
+  const expandableKeys = reportTreeKeys(nodes)
+  const allExpanded = expandableKeys.length > 0 && expandableKeys.every(key => expanded.has(key))
+  return <><ExpandCollapseControls className="border-b px-2 py-1" expanded={allExpanded} onToggle={() => setExpanded(allExpanded ? new Set() : new Set(expandableKeys))} /><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Category / Ledger</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div></>
 }
 
 function AmountNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
   const open = expanded.has(node.key)
-  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} expanded={open} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(node.balance)}</td></tr>{open && node.directAccounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}><LedgerLink account={account} /></td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>)}{open && node.children.map(child => <AmountNodeRows key={child.key} node={child} expanded={expanded} toggle={toggle} />)}</Fragment>
+  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} expanded={open} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(node.balance)}</td></tr>{open && node.directAccounts.map(account => {
+    const closingStock = account.id === 'balance-sheet:closing-stock'
+    return <tr key={account.id} className={`border-t ${closingStock ? 'bg-amber-50/70' : 'hover:bg-muted/20'}`}><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}>{closingStock ? <span className="font-medium">Closing Stock <span className="ml-1 text-xs font-normal text-muted-foreground">Calculated</span></span> : <LedgerLink account={account} />}</td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>
+  })}{open && node.children.map(child => <AmountNodeRows key={child.key} node={child} expanded={expanded} toggle={toggle} />)}</Fragment>
 }
 
-function HierarchicalAmountTable({ accounts, categories, total, emptyLabel, totalLabel = 'Total', adjustments = [] }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; total: number; emptyLabel: string; totalLabel?: string; adjustments?: { label: string; amount: number; className?: string }[] }) {
+function BalanceSheetAccountRows({ accounts, categories, emptyLabel, command }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; emptyLabel: string; command: ExpansionCommand }) {
   const nodes = useMemo(() => buildAccountReportTree(accounts, categories), [accounts, categories])
-  const { expanded, toggle } = useExpandedGroups()
-  if (!nodes.length && !adjustments.length) return <p className="p-4 text-sm text-muted-foreground">{emptyLabel}</p>
-  return <table className="w-full text-sm"><tbody>{nodes.map(node => <AmountNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}{adjustments.map(row => <tr key={row.label} className={`border-t ${row.className || ''}`}><td className="report-td italic">{row.label}</td><td className="report-td text-right num">{fmtMoney(row.amount)}</td></tr>)}<tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">{totalLabel}</td><td className="report-td text-right num">{fmtMoney(total)}</td></tr></tbody></table>
+  const { expanded, setExpanded, toggle } = useExpandedGroups()
+  useEffect(() => { if (command.version) setExpanded(command.expand ? new Set(reportTreeKeys(nodes)) : new Set()) }, [command, nodes, setExpanded])
+  if (!nodes.length) return <tr className="border-t"><td colSpan={2} className="px-4 py-6 text-sm text-muted-foreground">{emptyLabel}</td></tr>
+  return <>{nodes.map(node => <AmountNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}</>
+}
+
+function BalanceSheetProfitLossRows({ amount, command }: { amount: number; command: ExpansionCommand }) {
+  const [open, setOpen] = useState(false)
+  useEffect(() => { if (command.version) setOpen(command.expand) }, [command])
+  return <Fragment>
+    <tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30">
+      <td className="report-td"><button type="button" aria-expanded={open} aria-label={`${open ? 'Collapse' : 'Expand'} Profit & Loss A/c`} onClick={() => setOpen(value => !value)} className="flex max-w-full items-center gap-2 text-left"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-muted">{open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</span><span>Profit &amp; Loss A/c</span><span className="text-xs font-normal text-muted-foreground">1</span></button></td>
+      <td className={`report-td whitespace-nowrap text-right font-semibold num ${amount < 0 ? 'text-destructive' : ''}`}>{fmtMoney(amount)}</td>
+    </tr>
+    {open && <tr className="border-t bg-muted/5"><td className="report-td pl-12 italic">Current Period</td><td className={`report-td whitespace-nowrap text-right num ${amount < 0 ? 'text-destructive' : ''}`}>{fmtMoney(amount)}</td></tr>}
+  </Fragment>
+}
+
+function BalanceSheetStatementSide({ title, total, children, className = '' }: { title: string; total: number; children: ReactNode; className?: string }) {
+  return <section className={`flex min-w-0 flex-col ${className}`}>
+    <table className="w-full table-fixed text-sm">
+      <colgroup><col /><col className="w-[9.5rem]" /></colgroup>
+      <thead><tr className="border-b bg-[#f4f0e5]"><th className="report-th text-left uppercase tracking-[0.2em] text-[#675c49]">{title}</th><th className="report-th text-right">Amount</th></tr></thead>
+      <tbody>{children}</tbody>
+    </table>
+    <div aria-hidden="true" className="min-h-20 flex-1 border-t bg-card" />
+    <div className="grid grid-cols-[minmax(0,1fr)_9.5rem] border-t-2 bg-[#1B2A4A] font-semibold text-white">
+      <span className="px-4 py-3">Grand Total</span>
+      <span className="whitespace-nowrap px-4 py-3 text-right num">{fmtMoney(total)}</span>
+    </div>
+  </section>
+}
+
+function ProfitLossNodeRows({ node, depth, expanded, toggle }: { node: AccountReportTreeNode; depth: number; expanded: Set<string>; toggle: (key: string) => void }) {
+  const open = expanded.has(node.key)
+  return <Fragment>
+    <tr className="border-t bg-muted/10 font-semibold hover:bg-muted/25">
+      <td className="report-td" style={{ paddingLeft: `${0.75 + depth * 1.1}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} expanded={open} toggle={toggle} /></td>
+      <td className="report-td whitespace-nowrap text-right num">{fmtMoney(node.balance)}</td>
+    </tr>
+    {open && node.directAccounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.75 + depth * 1.1}rem` }}><LedgerLink account={account} /></td><td className="report-td whitespace-nowrap text-right num">{fmtMoney(account.balance || 0)}</td></tr>)}
+    {open && node.children.map(child => <ProfitLossNodeRows key={child.key} node={child} depth={depth + 1} expanded={expanded} toggle={toggle} />)}
+  </Fragment>
+}
+
+function ProfitLossAccountRows({ accounts, categories, command }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; command: ExpansionCommand }) {
+  const nodes = useMemo(() => {
+    const roots = buildAccountReportTree(accounts, categories)
+    return roots.flatMap(node => /^(income|incomes|expense|expenses)$/i.test(node.name) && !node.directAccounts.length ? node.children : [node])
+  }, [accounts, categories])
+  const { expanded, setExpanded, toggle } = useExpandedGroups()
+  useEffect(() => { if (command.version) setExpanded(command.expand ? new Set(reportTreeKeys(nodes)) : new Set()) }, [command, nodes, setExpanded])
+  return <>{nodes.map(node => <ProfitLossNodeRows key={node.key} node={node} depth={0} expanded={expanded} toggle={toggle} />)}</>
+}
+
+function ProfitLossStockRows({ label, entries, items, command }: { label: string; entries: StockEntry[]; items: Item[]; command: ExpansionCommand }) {
+  const [open, setOpen] = useState(false)
+  const itemMap = useMemo(() => new Map(items.map(item => [item.id, item])), [items])
+  const visible = entries.filter(entry => Math.abs(entry.qty) >= 0.00005 || Math.abs(entry.value) >= 0.005)
+  const total = entries.reduce((sum, entry) => sum + entry.value, 0)
+  useEffect(() => { if (command.version) setOpen(command.expand && visible.length > 0) }, [command, visible.length])
+  return <Fragment>
+    <tr className="border-t bg-amber-50/70 font-semibold hover:bg-amber-50">
+      <td className="report-td"><button type="button" disabled={!visible.length} aria-expanded={visible.length ? open : undefined} aria-label={`${open ? 'Collapse' : 'Expand'} ${label}`} onClick={() => setOpen(value => !value)} className="flex max-w-full items-center gap-2 text-left disabled:cursor-default"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-amber-100">{visible.length ? open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" /> : null}</span><span>{label}</span><span className="text-xs font-normal text-muted-foreground">{visible.length} item{visible.length === 1 ? '' : 's'}</span></button></td>
+      <td className="report-td whitespace-nowrap text-right font-semibold num">{fmtMoney(total)}</td>
+    </tr>
+    {open && visible.map(entry => {
+      const item = itemMap.get(entry.id)
+      return <tr key={`${label}-${entry.id}`} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><span className="font-medium">{item?.name || entry.name}</span><span className="mt-0.5 block text-xs text-muted-foreground">{item ? formatStockQuantity(entry.qty, item) : `${entry.qty} ${entry.unit}`} @ {fmtMoney(entry.avg_cost)}</span></td><td className="report-td whitespace-nowrap text-right num">{fmtMoney(entry.value)}</td></tr>
+    })}
+  </Fragment>
+}
+
+function ProfitLossSectionRow({ label }: { label: string }) {
+  return <tr className="border-y bg-[#f4f0e5]"><td colSpan={2} className="px-4 py-2 text-xs font-bold uppercase tracking-wider text-[#675c49]">{label}</td></tr>
+}
+
+function ProfitLossResultRow({ label, amount, tone = 'default' }: { label: string; amount: number; tone?: 'default' | 'profit' | 'loss' }) {
+  const toneClass = tone === 'profit' ? 'text-forest' : tone === 'loss' ? 'text-destructive' : ''
+  return <tr className={`border-t font-semibold ${toneClass}`}><td className="report-td italic">{label}</td><td className="report-td whitespace-nowrap text-right num">{fmtMoney(Math.abs(amount))}</td></tr>
+}
+
+function ProfitLossSubtotalRow({ label, amount }: { label: string; amount: number }) {
+  return <tr className="border-y-2 bg-muted/25 font-semibold"><td className="report-td">{label}</td><td className="report-td whitespace-nowrap text-right num">{fmtMoney(amount)}</td></tr>
+}
+
+function ProfitLossStatementSection({ label, totalLabel, totalAmount, children, showHeader = false, className = '' }: { label: string; totalLabel: string; totalAmount: number; children: ReactNode; showHeader?: boolean; className?: string }) {
+  return <section className={`flex min-w-0 flex-col ${className}`}>
+    <table className="w-full table-fixed text-sm">
+      <colgroup><col /><col className="w-[9.5rem]" /></colgroup>
+      {showHeader && <thead><tr className="border-b"><th className="report-th text-left">Particulars</th><th className="report-th text-right">Amount</th></tr></thead>}
+      <tbody><ProfitLossSectionRow label={label} />{children}</tbody>
+    </table>
+    <div aria-hidden="true" className="min-h-10 flex-1 border-t bg-card" />
+    <table className="w-full table-fixed text-sm">
+      <colgroup><col /><col className="w-[9.5rem]" /></colgroup>
+      <tbody><ProfitLossSubtotalRow label={totalLabel} amount={totalAmount} /></tbody>
+    </table>
+  </section>
+}
+
+function ProfitLossGrandTotal({ amount, className = '' }: { amount: number; className?: string }) {
+  return <div className={`grid grid-cols-[minmax(0,1fr)_9.5rem] border-t-2 bg-[#1B2A4A] font-semibold text-white ${className}`}>
+    <span className="px-4 py-3">Grand Total</span>
+    <span className="whitespace-nowrap px-4 py-3 text-right num">{fmtMoney(amount)}</span>
+  </div>
 }
 
 export function TrialBalancePage() {
@@ -88,7 +202,7 @@ export function TrialBalancePage() {
   }))
 
   return (
-    <div className="report-page">
+    <div className="report-page ">
       <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | As of {fmtDate(todayBs())}</p></div>
@@ -106,44 +220,87 @@ export function TrialBalancePage() {
 
 // ─── Profit & Loss ────────────────────────────────────────────────────────────
 export function ProfitLossPage() {
-  const { company, accounts, accountCategories, closingStockValue } = useAppStore()
-  const csv = closingStockValue()
-  const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
-  const exportCsv = () => downloadCsv('profit-and-loss.csv', ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
-    ...pnl.income.map(account => ['Income', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
-    ...pnl.expense.map(account => ['Expense', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
-    ...(csv ? [['Expense', 'Less: Closing Stock', '', -csv]] : []),
-    ['', 'Total Income', '', pnl.total_income], ['', 'Total Expense', '', pnl.total_expense], ['', pnl.net_profit >= 0 ? 'Net Profit' : 'Net Loss', '', Math.abs(pnl.net_profit)],
-  ])
+  const { company, rawAccounts, accountCategories, items, vouchers } = useAppStore()
+  const fiscalStart = fiscalYearStartBs(company)
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(fiscalStart)
+  const [to, setTo] = useState(todayBs())
+  const [expansionCommand, setExpansionCommand] = useState<ExpansionCommand>({ version: 0, expand: false })
+  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
+  const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
+  const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
+  const periodAccounts = useMemo(() => recomputeAllBalances(rawAccounts.map(account => ({ ...account, opening_balance: 0, balance: 0 })), periodVouchers), [rawAccounts, periodVouchers])
+  const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
+  const openingStock = useMemo(() => recomputeStock(items, beforeFrom, valuationMethod), [items, beforeFrom, valuationMethod])
+  const closingStock = useMemo(() => recomputeStock(items, throughTo, valuationMethod), [items, throughTo, valuationMethod])
+  const statement = useMemo(() => computeDetailedProfitLoss(company?.id || '', periodAccounts, accountCategories, openingStock, closingStock), [company?.id, periodAccounts, accountCategories, openingStock, closingStock])
+  const exportCsv = () => {
+    const accountRows = (section: string, accounts: Account[]) => accounts.map(account => [section, account.name, categoryPath(accountCategories, account.category_id), account.balance || 0])
+    const stockRows = (section: string, entries: StockEntry[]) => entries.filter(entry => Math.abs(entry.qty) >= 0.00005 || Math.abs(entry.value) >= 0.005).map(entry => {
+      const item = items.find(candidate => candidate.id === entry.id)
+      return [section, item?.name || entry.name, item ? `${formatStockQuantity(entry.qty, item)} @ ${fmtMoney(entry.avg_cost)}` : `${entry.qty} ${entry.unit}`, entry.value]
+    })
+    downloadCsv(`profit-and-loss-${from}-to-${to}.csv`, ['Section', 'Ledger / Item', 'Category / Quantity', 'Amount'], [
+      ['Trading - Debit', 'Opening Stock', '', statement.openingStockValue],
+      ...stockRows('Opening Stock Detail', statement.openingStock),
+      ...accountRows('Direct Expense', statement.directExpenses),
+      ...(statement.grossProfit >= 0 ? [['Trading - Debit', 'Gross Profit c/o', '', statement.grossProfit]] : []),
+      ...accountRows('Direct Income', statement.directIncome),
+      ['Trading - Credit', 'Closing Stock', '', statement.closingStockValue],
+      ...stockRows('Closing Stock Detail', statement.closingStock),
+      ...(statement.grossProfit < 0 ? [['Trading - Credit', 'Gross Loss c/o', '', Math.abs(statement.grossProfit)]] : []),
+      ...(statement.grossProfit < 0 ? [['Profit & Loss - Debit', 'Gross Loss b/f', '', Math.abs(statement.grossProfit)]] : []),
+      ...accountRows('Indirect Expense', statement.indirectExpenses),
+      ...(statement.netProfit >= 0 ? [['Profit & Loss - Debit', 'Net Profit', '', statement.netProfit]] : []),
+      ...(statement.grossProfit >= 0 ? [['Profit & Loss - Credit', 'Gross Profit b/f', '', statement.grossProfit]] : []),
+      ...accountRows('Indirect Income', statement.indirectIncome),
+      ...(statement.netProfit < 0 ? [['Profit & Loss - Credit', 'Net Loss', '', Math.abs(statement.netProfit)]] : []),
+      ['', 'Grand Total', '', statement.debitTotal],
+    ])
+  }
 
   return (
-    <div className="report-page">
+    <div className="report-page ">
       <PageHeader title="Profit & Loss"
-        description="Income vs expenses, adjusted for closing stock so profit reflects only goods actually sold" action={<ReportActions onExport={exportCsv} />} />
+        description="Trading and profit statement with period opening and closing inventory" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Profit & Loss | As of {fmtDate(todayBs())}</p></div>
-        <div className="report-summary grid grid-cols-1 md:grid-cols-3 gap-4">
-          <StatCard label="Total Income" value={pnl.total_income} color="positive" />
-          <StatCard label="Total Expense" value={pnl.total_expense} color="negative"
-            sub={csv > 0 ? `After closing stock deduction of ${fmtMoney(csv)}` : undefined} />
-          <StatCard label={pnl.net_profit >= 0 ? 'Net Profit' : 'Net Loss'} value={Math.abs(pnl.net_profit)}
-            color={pnl.net_profit >= 0 ? 'positive' : 'negative'} />
-        </div>
-
-        <div className="report-print-columns grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card className="report-table-card">
-            <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Income</CardTitle></CardHeader>
-            <CardContent className="p-0 pb-1">
-              <HierarchicalAmountTable accounts={pnl.income} categories={accountCategories} total={pnl.total_income} emptyLabel="No income accounts" />
-            </CardContent>
-          </Card>
-          <Card className="report-table-card">
-            <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Expense</CardTitle></CardHeader>
-            <CardContent className="p-0 pb-1">
-              <HierarchicalAmountTable accounts={pnl.expense} categories={accountCategories} total={pnl.total_expense} totalLabel="Total (adjusted)" emptyLabel="No expense accounts" adjustments={csv > 0 ? [{ label: 'Less: Closing Stock', amount: -csv, className: 'text-forest' }] : []} />
-            </CardContent>
-          </Card>
-        </div>
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Profit & Loss | {fmtDate(from)} to {fmtDate(to)}</p></div>
+        <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
+        <Card className="report-table-card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">For {fmtDate(from)} to {fmtDate(to)} · {valuationMethod.replace('_', ' ')}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
+          <div className="report-print-columns">
+            <div className="grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
+              <ProfitLossStatementSection label="Trading Account · Debit" totalLabel="Trading Total" totalAmount={statement.tradingTotal} showHeader>
+                <ProfitLossStockRows label="Opening Stock" entries={statement.openingStock} items={items} command={expansionCommand} />
+                <ProfitLossAccountRows accounts={statement.directExpenses} categories={accountCategories} command={expansionCommand} />
+                {statement.grossProfit >= 0 && <ProfitLossResultRow label="Gross Profit c/o" amount={statement.grossProfit} tone="profit" />}
+              </ProfitLossStatementSection>
+              <ProfitLossStatementSection label="Trading Account · Credit" totalLabel="Trading Total" totalAmount={statement.tradingTotal} showHeader className="border-t lg:border-l lg:border-t-0 print:border-l print:border-t-0">
+                <ProfitLossAccountRows accounts={statement.directIncome} categories={accountCategories} command={expansionCommand} />
+                <ProfitLossStockRows label="Closing Stock" entries={statement.closingStock} items={items} command={expansionCommand} />
+                {statement.grossProfit < 0 && <ProfitLossResultRow label="Gross Loss c/o" amount={statement.grossProfit} tone="loss" />}
+              </ProfitLossStatementSection>
+            </div>
+            <div className="grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
+              <ProfitLossStatementSection label="Profit & Loss Account · Debit" totalLabel="Profit & Loss Total" totalAmount={statement.profitLossTotal}>
+                {statement.grossProfit < 0 && <ProfitLossResultRow label="Gross Loss b/f" amount={statement.grossProfit} tone="loss" />}
+                <ProfitLossAccountRows accounts={statement.indirectExpenses} categories={accountCategories} command={expansionCommand} />
+                {statement.netProfit >= 0 && <ProfitLossResultRow label="Net Profit" amount={statement.netProfit} tone="profit" />}
+              </ProfitLossStatementSection>
+              <ProfitLossStatementSection label="Profit & Loss Account · Credit" totalLabel="Profit & Loss Total" totalAmount={statement.profitLossTotal} className="border-t lg:border-l lg:border-t-0 print:border-l print:border-t-0">
+                {statement.grossProfit >= 0 && <ProfitLossResultRow label="Gross Profit b/f" amount={statement.grossProfit} tone="profit" />}
+                <ProfitLossAccountRows accounts={statement.indirectIncome} categories={accountCategories} command={expansionCommand} />
+                {statement.netProfit < 0 && <ProfitLossResultRow label="Net Loss" amount={statement.netProfit} tone="loss" />}
+              </ProfitLossStatementSection>
+            </div>
+            <div className="grid grid-cols-1 lg:grid-cols-2 print:grid-cols-2">
+              <ProfitLossGrandTotal amount={statement.debitTotal} />
+              <ProfitLossGrandTotal amount={statement.creditTotal} className="lg:border-l print:border-l" />
+            </div>
+          </div>
+        </Card>
       </PageContent>
     </div>
   )
@@ -155,7 +312,13 @@ export function BalanceSheetPage() {
   const csv = closingStockValue()
   const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
   const bs = useMemo(() => computeBalanceSheet(accounts, pnl.net_profit, csv), [accounts, pnl.net_profit, csv])
+  const [expansionCommand, setExpansionCommand] = useState<ExpansionCommand>({ version: 0, expand: false })
   const realAssets = bs.assets.filter(account => !!account.company_id)
+  const currentAssetsCategory = accountCategories.find(category => category.account_type === 'Asset' && category.name.trim().toLowerCase() === 'current assets')
+  const displayAssets: Account[] = [...realAssets, {
+    id: 'balance-sheet:closing-stock', company_id: '', name: 'Closing Stock', type: 'Asset', group: 'Current Assets',
+    is_system: true, is_party: false, opening_balance: 0, balance: csv, category_id: currentAssetsCategory?.id,
+  }]
   const exportCsv = () => downloadCsv('balance-sheet.csv', ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
     ...realAssets.map(account => ['Assets', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
     ...(csv ? [['Assets', 'Stock-in-Hand (Closing)', '', csv]] : []),
@@ -166,24 +329,22 @@ export function BalanceSheetPage() {
   ])
 
   return (
-    <div className="report-page">
+    <div className="report-page ">
       <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
         <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(todayBs())}</p></div>
-        <div className="report-print-columns grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <Card className="report-table-card">
-            <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Assets</CardTitle></CardHeader>
-            <CardContent className="p-0 pb-1">
-              <HierarchicalAmountTable accounts={realAssets} categories={accountCategories} total={bs.total_assets} emptyLabel="No assets" adjustments={csv !== 0 ? [{ label: 'Stock-in-Hand (Closing)', amount: csv }] : []} />
-            </CardContent>
-          </Card>
-          <Card className="report-table-card">
-            <CardHeader className="pb-2"><CardTitle className="text-sm uppercase tracking-wider text-muted-foreground font-semibold">Liabilities & Equity</CardTitle></CardHeader>
-            <CardContent className="p-0 pb-1">
-              <HierarchicalAmountTable accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} total={bs.total_liabilities + bs.total_equity} emptyLabel="No liabilities or equity" adjustments={[{ label: `Net ${pnl.net_profit >= 0 ? 'Profit' : 'Loss'} (current)`, amount: pnl.net_profit, className: 'text-muted-foreground' }]} />
-            </CardContent>
-          </Card>
-        </div>
+        <Card className="report-table-card overflow-hidden">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">As of {fmtDate(todayBs())}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
+          <div className="report-print-columns grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
+            <BalanceSheetStatementSide title="Liabilities & Equity" total={bs.total_liabilities + bs.total_equity}>
+              <BalanceSheetAccountRows accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} emptyLabel="No liability or equity ledgers" command={expansionCommand} />
+              <BalanceSheetProfitLossRows amount={pnl.net_profit} command={expansionCommand} />
+            </BalanceSheetStatementSide>
+            <BalanceSheetStatementSide title="Assets" total={bs.total_assets} className="border-t lg:border-l lg:border-t-0 print:border-l print:border-t-0">
+              <BalanceSheetAccountRows accounts={displayAssets} categories={accountCategories} emptyLabel="No asset ledgers" command={expansionCommand} />
+            </BalanceSheetStatementSide>
+          </div>
+        </Card>
         {bs.balanced
           ? <p className="text-sm text-forest font-semibold">✓ Balanced — {fmtMoney(bs.total_assets)} = {fmtMoney(bs.total_liabilities + bs.total_equity)}</p>
           : <p className="text-sm text-destructive">⚠ Balance sheet is out of balance. Check recent entries.</p>
@@ -319,11 +480,11 @@ export function StockReportPage() {
         <StatCard label="Categories" value={String(categoryCount)} Icon={Layers3} />
       </div>
       <div className="report-controls flex flex-col gap-2 lg:flex-row lg:items-center">
-        <div className="relative min-w-0 flex-1"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
+        <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
         <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))]} />
         <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, { value: 'low', label: 'Low Stock' }, { value: 'out', label: 'Out of Stock' }]} />
         <SearchableSelect className="w-full lg:w-52" value={method} onValueChange={changeMethod} options={[{ value: 'weighted_average', label: 'Weighted Average' }, { value: 'fifo', label: 'FIFO' }, { value: 'lifo', label: 'LIFO' }]} />
-        <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
+        <Button size="sm" className="h-9" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
       </div>
       {methodError && <p className="text-sm text-destructive">{methodError}</p>}
       <Card className="report-table-card overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`w-full border-collapse text-sm ${showDetails ? 'min-w-[1120px]' : 'min-w-[820px]'}`}>
@@ -367,7 +528,7 @@ export function LegacyStockReportPage() {
       <PageHeader title="Stock Summary" description={showDetails ? 'Opening, inward, outward and closing stock at weighted-average cost' : 'Current quantities at weighted-average cost'} />
       <PageContent className="space-y-3">
         <div className="flex flex-wrap justify-end gap-2">
-          <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock…" className="w-full pl-8 sm:w-64" /></div>
+          <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock…" className="w-full pl-8 sm:w-64" /></div>
           <Button size="sm" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>
             {showDetails ? 'Hide Details' : 'Show Details'}
           </Button>

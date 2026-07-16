@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Search } from 'lucide-react'
+import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { downloadCsv } from '@/lib/csv'
@@ -17,6 +17,7 @@ import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { ReportActions } from '@/components/reports/ReportActions'
 import { VoucherDetail } from '@/components/tables/VoucherTable'
+import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -183,13 +184,13 @@ export function ReceivablesPayablesPage() {
             <Button size="sm" variant={view === 'summary' ? 'default' : 'ghost'} onClick={() => updateParams({ view: 'summary' }, false)}>Summary</Button>
             <Button size="sm" variant={view === 'aging' ? 'default' : 'ghost'} onClick={() => updateParams({ view: 'aging' }, false)}>Detailed</Button>
           </div>
-          <div className="min-w-[220px] flex-1 sm:max-w-sm"><Label className="sr-only">Search parties or vouchers</Label><div className="relative"><Search className="absolute left-3 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => updateParams({ search: event.target.value || null })} placeholder="Search party, PAN, phone, voucher..." className="pl-9" /></div></div>
+          <div className="min-w-[220px] flex-1 sm:max-w-sm"><Label className="sr-only">Search parties or vouchers</Label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => updateParams({ search: event.target.value || null })} placeholder="Search party, PAN, phone, voucher..." className="pl-9" /></div></div>
           <div className="space-y-1"><Label>As of</Label><NepaliDateInput value={asOf} onChange={value => updateParams({ asOf: value })} className="w-40" /></div>
         </div>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={overdueOnly} onChange={event => updateParams({ overdue: event.target.checked ? '1' : null, bucket: event.target.checked && activeBucket === 'Not Due' ? null : activeBucket })} />Show overdue only</label>
           <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={hideZero} onChange={event => updateParams({ hideZero: event.target.checked ? '1' : null })} />Hide zero columns</label>
-          {view === 'aging' && <div className="ml-auto flex gap-1"><Button size="sm" variant="ghost" onClick={() => setExpanded(new Set(filteredRows.map(row => row.party.id)))}><ChevronsDown className="mr-1 h-4 w-4" />Expand All</Button><Button size="sm" variant="ghost" onClick={() => setExpanded(new Set())}><ChevronsUp className="mr-1 h-4 w-4" />Collapse All</Button></div>}
+          {view === 'aging' && <ExpandCollapseControls className="ml-auto" expanded={filteredRows.length > 0 && filteredRows.every(row => expanded.has(row.party.id))} onToggle={() => { const allExpanded = filteredRows.length > 0 && filteredRows.every(row => expanded.has(row.party.id)); setExpanded(allExpanded ? new Set() : new Set(filteredRows.map(row => row.party.id))) }} />}
         </div>
       </CardContent></Card>
 

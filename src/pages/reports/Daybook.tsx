@@ -28,7 +28,7 @@ const badgeVariant = (type: Voucher['type'], cancelled: boolean) => {
 
 function MetricCard({ label, value, note, Icon, tone = 'default' }: { label: string; value: string; note: string; Icon: typeof FileText; tone?: 'default' | 'debit' | 'credit' | 'warning' }) {
   const colors = tone === 'debit' ? 'bg-red-50 text-red-600' : tone === 'credit' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'
-  return <Card><CardContent className="flex items-center gap-3 p-4"><span className={`flex h-11 w-11 shrink-0 items-center justify-center rounded-full ${colors}`}><Icon className="h-5 w-5" /></span><span className="min-w-0"><span className="block text-xs text-muted-foreground">{label}</span><span className="mt-0.5 block truncate font-serif text-xl font-bold num">{value}</span><span className="block text-xs text-muted-foreground">{note}</span></span></CardContent></Card>
+  return <Card className="min-w-0"><CardContent className="flex min-w-0 items-center gap-2.5 p-3 sm:p-4"><span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${colors}`}><Icon className="h-5 w-5" /></span><span className="min-w-0 flex-1"><span className="block text-xs text-muted-foreground">{label}</span><span title={value} className="mt-0.5 block whitespace-nowrap font-serif font-bold leading-tight tracking-tight num text-[clamp(1rem,1.35vw,1.25rem)]">{value}</span><span className="block text-xs text-muted-foreground">{note}</span></span></CardContent></Card>
 }
 
 type OptionalColumn = 'narration' | 'debit' | 'credit' | 'net' | 'status'
@@ -108,7 +108,7 @@ export function DaybookPage() {
           </CardContent>
         </Card>
 
-        <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-5">
+        <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 lg:grid-cols-3 min-[1280px]:grid-cols-5">
           <MetricCard label="Total Vouchers" value={String(activeRows.length)} note="Active vouchers" Icon={FileText} />
           <MetricCard label="Total Debit" value={fmtMoney(totalDebit)} note="Debit movements" Icon={ArrowDown} tone="debit" />
           <MetricCard label="Total Credit" value={fmtMoney(totalCredit)} note="Credit movements" Icon={ArrowUp} tone="credit" />
@@ -119,7 +119,7 @@ export function DaybookPage() {
         <Card className="report-controls"><CardContent className="space-y-3 p-3">
           <div className="flex flex-col gap-2 md:flex-row md:items-center">
             <Button variant="outline" size="sm" onClick={() => setShowColumns(value => !value)}><Columns3 className="mr-2 h-4 w-4" />Columns</Button>
-            <div className="relative min-w-0 flex-1 md:ml-auto md:max-w-md"><Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search voucher no., party, account…" className="pl-8" /></div>
+            <div className="relative min-w-0 flex-1 md:ml-auto md:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search voucher no., party, account…" className="pl-8" /></div>
             <Button variant={showFilters ? 'default' : 'outline'} size="sm" onClick={() => setShowFilters(value => !value)}><SlidersHorizontal className="mr-2 h-4 w-4" />Filters</Button>
           </div>
           {showColumns && <div className="flex flex-wrap gap-x-4 gap-y-2 rounded-md border bg-muted/20 p-3">{(['narration', 'debit', 'credit', 'net', 'status'] as OptionalColumn[]).map(column => <label key={column} className="flex items-center gap-2 text-sm capitalize"><input type="checkbox" checked={columns.has(column)} onChange={() => toggleColumn(column)} />{column === 'net' ? 'Net Amount' : column}</label>)}</div>}

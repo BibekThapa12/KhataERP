@@ -88,21 +88,21 @@ export function SearchableSelect({
 
   return <Popover.Root open={open} onOpenChange={setOpen}>
     <Popover.Trigger asChild>
-      <button id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-3 py-2 text-left text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
+      <button id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
         <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')} title={selected?.label}>{selected?.label || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>
     </Popover.Trigger>
     <Popover.Portal>
-      <Popover.Content collisionPadding={8} sideOffset={4} align="start" className="z-[80] w-[var(--radix-popover-trigger-width)] min-w-[min(14rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
-        <div className="relative border-b p-1.5">
-          <Search className="absolute left-4 top-4 h-3.5 w-3.5 text-muted-foreground" />
+      <Popover.Content collisionPadding={8} sideOffset={4} align="start" className="compact-workspace-surface z-[80] w-[var(--radix-popover-trigger-width)] min-w-[min(14rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+        <div className="relative border-b p-1">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setActiveIndex(0) }} onKeyDown={event => {
             if (event.key === 'ArrowDown') { event.preventDefault(); setActiveIndex(index => enabled.length ? (index + 1) % enabled.length : 0) }
             if (event.key === 'ArrowUp') { event.preventDefault(); setActiveIndex(index => enabled.length ? (index - 1 + enabled.length) % enabled.length : 0) }
             if (event.key === 'Enter' && enabled[activeIndex]) { event.preventDefault(); select(enabled[activeIndex]) }
             if (event.key === 'Escape') { suppressNextFocus.current = true; setOpen(false) }
-          }} placeholder={searchPlaceholder} className="h-8 w-full rounded-sm bg-transparent pl-8 pr-2 text-sm outline-none placeholder:text-muted-foreground" />
+          }} placeholder={searchPlaceholder} className="h-7 w-full rounded-sm bg-transparent pl-7 pr-2 text-[12px] outline-none placeholder:text-muted-foreground" />
         </div>
         <div
           role="listbox"
@@ -118,8 +118,8 @@ export function SearchableSelect({
             const previousGroup = index > 0 ? filtered[index - 1].group : undefined
             const enabledIndex = enabled.findIndex(entry => entry.value === option.value)
             return <div key={option.value}>
-              {option.group && option.group !== previousGroup && <p className="px-2 py-1.5 text-xs font-semibold text-muted-foreground">{option.group}</p>}
-              <button type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => enabledIndex >= 0 && setActiveIndex(enabledIndex)} onClick={() => select(option)} className={cn('relative flex w-full items-center rounded-sm py-1.5 pl-8 pr-2 text-left text-sm outline-none hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50', enabledIndex === activeIndex && 'bg-accent text-accent-foreground')}>
+              {option.group && option.group !== previousGroup && <p className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">{option.group}</p>}
+              <button type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => enabledIndex >= 0 && setActiveIndex(enabledIndex)} onClick={() => select(option)} className={cn('relative flex w-full items-center rounded-sm py-1 pl-7 pr-2 text-left text-[12px] outline-none hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50', enabledIndex === activeIndex && 'bg-accent text-accent-foreground')}>
                 {option.value === value && <Check className="absolute left-2 h-4 w-4" />}
                 <span className="truncate">{option.label}</span>
               </button>

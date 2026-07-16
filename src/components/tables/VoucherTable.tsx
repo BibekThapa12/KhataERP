@@ -72,7 +72,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(voucher.subtotal)}</span></div>
             {(voucher.discount ?? 0) > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(voucher.discount)}</span></div>}
             {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({voucher.vat_rate}%)</span><span className="num">{fmtMoney(voucher.vat_amount)}</span></div>}
-            <div className="flex justify-between font-serif font-bold text-base pt-1 border-t border-border"><span>Total</span><span className="num">{fmtMoney(voucher.total)}</span></div>
+            <div className="flex justify-between border-t border-border pt-1 font-serif font-bold text-base"><span>Total</span><span className="num">{fmtMoney(voucher.total)}</span></div>
           </div>
         </>
       ) : (

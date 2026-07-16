@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAccountReportTree, computeCashFlow, groupReportAccounts } from '@/lib/reports'
+import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, groupReportAccounts } from '@/lib/reports'
 import type { Account, AccountCategory, AccountType, Voucher, VoucherLine, VoucherType } from '@/types'
 
 const account = (id: string, name: string, type: AccountType, group: string, balance: number, category_id = group) => ({
@@ -49,6 +49,43 @@ describe('financial report account grouping', () => {
     const archived: AccountCategory = { id: 'old', name: 'Old', parent_category_id: null, account_type: 'Asset', company_id: 'company', is_system: false, is_archived: true }
     const tree = buildAccountReportTree([account('legacy', 'Legacy', 'Asset', 'Old', 75, 'old')], [archived])
     expect(tree[0]).toMatchObject({ key: 'uncategorized:Asset', balance: 75, totalCount: 1 })
+  })
+})
+
+describe('detailed profit and loss', () => {
+  const categories: AccountCategory[] = [
+    { id: 'income-root', company_id: 'company', name: 'Income', account_type: 'Income', is_system: false, is_archived: false },
+    { id: 'sales-group', company_id: 'company', name: 'Sales Accounts', account_type: 'Income', parent_category_id: 'income-root', is_system: false, is_archived: false },
+    { id: 'other-income', company_id: 'company', name: 'Indirect Income', account_type: 'Income', parent_category_id: 'income-root', is_system: false, is_archived: false },
+    { id: 'expense-root', company_id: 'company', name: 'Expenses', account_type: 'Expense', is_system: false, is_archived: false },
+    { id: 'purchase-group', company_id: 'company', name: 'Purchase Accounts', account_type: 'Expense', parent_category_id: 'expense-root', is_system: false, is_archived: false },
+    { id: 'direct-group', company_id: 'company', name: 'Cost of Goods Sold', account_type: 'Expense', parent_category_id: 'expense-root', is_system: false, is_archived: false },
+    { id: 'indirect-group', company_id: 'company', name: 'Indirect Expenses', account_type: 'Expense', parent_category_id: 'expense-root', is_system: false, is_archived: false },
+  ]
+
+  it('classifies accounts and balances gross and net profit', () => {
+    const statement = computeDetailedProfitLoss('company', [
+      account('company:sales', 'Sales', 'Income', 'Renamed Sales', 1000, 'other-income'),
+      account('commission', 'Commission', 'Income', 'Indirect Income', 50, 'other-income'),
+      account('company:purchase', 'Purchases', 'Expense', 'Renamed Purchase', 600, 'indirect-group'),
+      account('freight', 'Freight', 'Expense', 'Cost of Goods Sold', 100, 'direct-group'),
+      account('rent', 'Rent', 'Expense', 'Indirect Expenses', 80, 'indirect-group'),
+    ], categories, [{ id: 'item', name: 'Item', unit: 'Pcs', qty: 10, avg_cost: 20, value: 200 }], [{ id: 'item', name: 'Item', unit: 'Pcs', qty: 15, avg_cost: 20, value: 300 }])
+    expect(statement.directIncome.map(entry => entry.id)).toEqual(['company:sales'])
+    expect(statement.directExpenses.map(entry => entry.id)).toEqual(['company:purchase', 'freight'])
+    expect(statement).toMatchObject({ openingStockValue: 200, closingStockValue: 300, grossProfit: 400, netProfit: 370, totalIncome: 1050, totalExpense: 780 })
+    expect(statement.debitTotal).toBe(statement.creditTotal)
+  })
+
+  it('places unmatched nominal accounts in indirect sections and supports losses', () => {
+    const statement = computeDetailedProfitLoss('company', [
+      account('misc-income', 'Misc Income', 'Income', 'General', 20, 'income-root'),
+      account('admin', 'Admin', 'Expense', 'General', 50, 'expense-root'),
+    ], categories, [{ id: 'item', name: 'Item', unit: 'Pcs', qty: 1, avg_cost: 100, value: 100 }], [])
+    expect(statement.indirectIncome.map(entry => entry.id)).toEqual(['misc-income'])
+    expect(statement.indirectExpenses.map(entry => entry.id)).toEqual(['admin'])
+    expect(statement).toMatchObject({ grossProfit: -100, netProfit: -130 })
+    expect(statement.debitTotal).toBe(statement.creditTotal)
   })
 })
 
