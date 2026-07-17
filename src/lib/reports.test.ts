@@ -1,10 +1,26 @@
 import { describe, expect, it } from 'vitest'
-import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, groupReportAccounts } from '@/lib/reports'
+import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, groupReportAccounts, vouchersInFiscalYear } from '@/lib/reports'
 import type { Account, AccountCategory, AccountType, Voucher, VoucherLine, VoucherType } from '@/types'
 
 const account = (id: string, name: string, type: AccountType, group: string, balance: number, category_id = group) => ({
   id, name, type, group, balance, category_id, company_id: 'company', is_system: false, is_party: group.startsWith('Sundry'), opening_balance: 0,
 }) as Account
+
+const datedVoucher = (id: string, date_bs: string) => ({
+  id, company_id: 'company', type: 'Sales', date_bs, date_bs_key: Number(date_bs.replaceAll('-', '')), seq: 1, total: 0, is_cash: false, cancelled: false,
+}) as Voucher
+
+describe('fiscal-year voucher filtering', () => {
+  it('includes both fiscal boundaries correctly and excludes adjacent years', () => {
+    const rows = vouchersInFiscalYear([
+      datedVoucher('previous', '2083-03-31'),
+      datedVoucher('first', '2083-04-01'),
+      datedVoucher('last', '2084-03-31'),
+      datedVoucher('next', '2084-04-01'),
+    ], '2083-04-01')
+    expect(rows.map(row => row.id)).toEqual(['first', 'last'])
+  })
+})
 
 describe('financial report account grouping', () => {
   it('groups party ledgers and preserves aggregate balances', () => {

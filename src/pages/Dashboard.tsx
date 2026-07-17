@@ -4,13 +4,13 @@ import {
   Building2, Landmark, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeProfitAndLoss, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
+import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { computeCashFlow, fiscalYearStartBs, getDaybookRows } from '@/lib/reports'
 import {
   accountBalance, buildDashboardSeries, dashboardVouchersInRange, dashboardVouchersThrough,
-  isPostedDashboardVoucher, topSellingItems,
+  dashboardFiscalYearOptions, dashboardFiscalYearRange, isPostedDashboardVoucher, topSellingItems,
 } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -20,6 +20,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { Voucher } from '@/types'
 
 const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
@@ -73,7 +74,9 @@ export function Dashboard() {
   const { company, rawAccounts, accountCategories, vouchers, parties, items } = useAppStore()
   const navigate = useNavigate()
   const fiscalStart = fiscalYearStartBs(company)
+  const currentFiscalYear = Number(fiscalStart.slice(0, 4))
   const [range, setRange] = useState<ReportRange>('fiscal')
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState(currentFiscalYear)
   const [from, setFrom] = useState(fiscalStart)
   const [to, setTo] = useState(todayBs())
   const [detail, setDetail] = useState<Voucher | null>(null)
@@ -81,15 +84,20 @@ export function Dashboard() {
     try { return localStorage.getItem(CHART_MODE_KEY) !== 'false' } catch { return true }
   })
 
+  useEffect(() => { setSelectedFiscalYear(currentFiscalYear) }, [company?.id, currentFiscalYear])
   useEffect(() => {
-    if (range === 'fiscal') setFrom(fiscalStart)
-  }, [fiscalStart, range])
+    if (range !== 'fiscal') return
+    const fiscalRange = dashboardFiscalYearRange(selectedFiscalYear, fiscalStart)
+    setFrom(fiscalRange.from)
+    setTo(fiscalRange.to)
+  }, [fiscalStart, range, selectedFiscalYear])
   useEffect(() => {
     try { localStorage.setItem(CHART_MODE_KEY, String(chartMode)) } catch { /* local storage may be unavailable */ }
   }, [chartMode])
 
   const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
   const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const fiscalYearOptions = useMemo(() => dashboardFiscalYearOptions(vouchers, fiscalStart), [vouchers, fiscalStart])
   const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
   const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
   const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
@@ -103,6 +111,7 @@ export function Dashboard() {
 
   const stockBefore = useMemo(() => recomputeStock(items, beforeFrom, valuationMethod), [items, beforeFrom, valuationMethod])
   const stockAsOf = useMemo(() => recomputeStock(items, throughTo, valuationMethod), [items, throughTo, valuationMethod])
+  const saleableStockAsOf = useMemo(() => computeStockConditionSummary(items, throughTo, 'saleable', valuationMethod), [items, throughTo, valuationMethod])
   const openingStockValue = round2(stockBefore.reduce((sum, row) => sum + row.value, 0))
   const closingStockValue = round2(stockAsOf.reduce((sum, row) => sum + row.value, 0))
   const pnl = useMemo(() => computeProfitAndLoss(periodAccounts, round2(closingStockValue - openingStockValue)), [periodAccounts, closingStockValue, openingStockValue])
@@ -130,7 +139,7 @@ export function Dashboard() {
   const cashMovements = useMemo(() => cashFlow?.sections.flatMap(section => section.rows.map(row => ({ voucher: row.voucher, amount: row.amount }))) || [], [cashFlow])
   const chartSeries = useMemo(() => buildDashboardSeries(postedVouchers, cashMovements, from, to), [postedVouchers, cashMovements, from, to])
   const topItems = useMemo(() => topSellingItems(postedVouchers, items, from, to), [postedVouchers, items, from, to])
-  const stockMap = useMemo(() => new Map(stockAsOf.map(row => [row.id, row])), [stockAsOf])
+  const stockMap = useMemo(() => new Map(saleableStockAsOf.map(row => [row.id, { ...row, qty: row.closing_qty }])), [saleableStockAsOf])
   const lowStock = useMemo(() => items
     .filter(item => !item.is_archived && item.reorder_level != null && (stockMap.get(item.id)?.qty || 0) <= Number(item.reorder_level))
     .map(item => ({ item, qty: stockMap.get(item.id)?.qty || 0 }))
@@ -146,9 +155,12 @@ export function Dashboard() {
 
   return <div>
     <PageHeader title="Dashboard" description="Overview of your business" action={
-      <button type="button" role="switch" aria-checked={chartMode} aria-label="Toggle chart mode" onClick={() => setChartMode(value => !value)} className="flex w-full items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-auto sm:justify-start">
-        <span>Chart Mode</span><span aria-hidden className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`block h-4 w-4 shrink-0 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-4' : 'translate-x-0'}`} /></span>
-      </button>
+      <div className="flex w-full items-center gap-2 sm:w-auto">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none"><span className="shrink-0 text-xs font-semibold text-muted-foreground">FY</span><SearchableSelect value={range === 'fiscal' ? String(selectedFiscalYear) : ''} onValueChange={value => { setSelectedFiscalYear(Number(value)); setRange('fiscal') }} options={fiscalYearOptions} placeholder="Fiscal year" searchPlaceholder="Search fiscal year..." className="w-full sm:w-28" /></div>
+        <button type="button" role="switch" aria-checked={chartMode} aria-label="Toggle chart mode" onClick={() => setChartMode(value => !value)} className="flex shrink-0 items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:justify-start">
+          <span>Chart Mode</span><span aria-hidden className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`block h-4 w-4 shrink-0 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-4' : 'translate-x-0'}`} /></span>
+        </button>
+      </div>
     } />
     <PageContent className="space-y-3">
       {companySetupIncomplete && <Card className="border-amber-200 bg-amber-50/50"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-semibold text-amber-800">Complete company setup</p><p className="mt-0.5 text-xs text-amber-700">Add company name, address, phone, PAN/VAT, VAT mode, and fiscal year from Settings.</p></div><Button size="sm" onClick={() => navigate('/settings')}>Open Settings</Button></CardContent></Card>}

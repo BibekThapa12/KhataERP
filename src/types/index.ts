@@ -5,6 +5,7 @@ export type VoucherType = 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Retu
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
 export type InventoryValuationMethod = 'weighted_average' | 'fifo' | 'lifo'
+export type StockCondition = 'saleable' | 'damaged' | 'expired'
 
 export interface Account {
   id: string
@@ -76,6 +77,8 @@ export interface StockLine {
   qty: number
   rate: number
   direction: 'in' | 'out'
+  stock_condition?: StockCondition
+  is_transfer?: boolean
   item?: Item
 }
 
@@ -116,6 +119,7 @@ export interface Voucher {
   date_bs: string
   date_bs_key: number
   invoice_no?: string
+  numbering_period?: string
   credit_days?: number
   due_date_ad?: string
   due_date_bs?: string

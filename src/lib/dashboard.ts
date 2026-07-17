@@ -1,8 +1,39 @@
 import type { Account, Item, Voucher } from '@/types'
-import { adToBs, bsToAd, makeBsKey, parseBsDate } from '@/lib/nepaliDate'
+import { addDaysToBs, adToBs, bsToAd, makeBsKey, parseBsDate, todayBs } from '@/lib/nepaliDate'
 import { round2 } from '@/lib/engine'
 
 export type DashboardGrouping = 'daily' | 'weekly' | 'monthly'
+
+export interface DashboardFiscalYearOption {
+  value: string
+  label: string
+}
+
+export function fiscalYearForBsDate(dateBs: string, fiscalMonthDay: string) {
+  const year = Number(dateBs.slice(0, 4))
+  return dateBs.slice(5) >= fiscalMonthDay ? year : year - 1
+}
+
+export function dashboardFiscalYearOptions(vouchers: Voucher[], currentFiscalStart: string): DashboardFiscalYearOption[] {
+  const currentYear = Number(currentFiscalStart.slice(0, 4))
+  const monthDay = currentFiscalStart.slice(5)
+  const voucherYears = vouchers.map(voucher => fiscalYearForBsDate(voucher.date_bs, monthDay)).filter(Number.isFinite)
+  const earliestYear = Math.min(currentYear - 1, ...voucherYears)
+  return Array.from({ length: currentYear - earliestYear + 1 }, (_, index) => currentYear - index).map(year => ({
+    value: String(year),
+    label: `${String(year).slice(-2)}/${String(year + 1).slice(-2)}`,
+  }))
+}
+
+export function dashboardFiscalYearRange(startYear: number, currentFiscalStart: string, asOf = todayBs()) {
+  const monthDay = currentFiscalStart.slice(5)
+  const from = `${startYear}-${monthDay}`
+  const nextStart = `${startYear + 1}-${monthDay}`
+  return {
+    from,
+    to: startYear === Number(currentFiscalStart.slice(0, 4)) ? asOf : addDaysToBs(nextStart, -1),
+  }
+}
 
 export interface DashboardSeriesPoint {
   key: string

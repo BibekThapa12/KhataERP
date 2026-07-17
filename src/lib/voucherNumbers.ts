@@ -16,6 +16,14 @@ export function savedVoucherNumber(voucher: Voucher): string {
   return voucher.invoice_no || String(voucher.seq)
 }
 
+export function voucherNumberingPeriod(company: Company, dateBs: string): string {
+  if (!company.reset_numbering_fiscal_year || !company.fiscal_year_start) return 'all'
+  const fiscalMonthDay = adToBs(company.fiscal_year_start).slice(5)
+  const voucherYear = Number(dateBs.slice(0, 4))
+  const fiscalYear = dateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1
+  return `FY-${fiscalYear}`
+}
+
 export function previewNextVoucherNumber(company: Company, vouchers: Voucher[], type: VoucherType, dateBs: string): string {
   let candidates = vouchers.filter(voucher => voucher.type === type)
   if (company.reset_numbering_fiscal_year && company.fiscal_year_start && dateBs) {

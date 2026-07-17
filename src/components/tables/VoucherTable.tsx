@@ -128,6 +128,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
   const allVouchers = useAppStore(s => s.vouchers)
   const [detail, setDetail] = useState<Voucher | null>(null)
   const [cancelling, setCancelling] = useState(false)
+  const journalTable = vouchers.length > 0 && vouchers.every(voucher => voucher.type === 'Journal')
 
   const printVoucher = (voucher: Voucher) => {
     const party = voucher.party_account_id
@@ -288,8 +289,8 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
           <thead>
             <tr className="bg-muted/50">
               <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">Date</th>
-              <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">Type</th>
-              <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">Ref / Party</th>
+              <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">{journalTable ? 'Invoice No.' : 'Type'}</th>
+              <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">{journalTable ? 'Party / Account' : 'Ref / Party'}</th>
               <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5 hidden md:table-cell">Narration</th>
               <th className="text-right text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">Amount</th>
               {showActions && <th className="px-4 py-2.5 w-36"></th>}
@@ -303,16 +304,14 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
                 ? getPartyByAccountId(v.party_account_id)?.name ?? '—'
                 : getAccount(legacySettlementAccountId(v) || '')?.name || (v.is_cash ? 'Cash' : '—')
               const settlementName = getAccount(legacySettlementAccountId(v) || '')?.name
+              const journalAccounts = v.type === 'Journal' ? [...new Set((v.lines || []).map(line => getPartyByAccountId(line.account_id)?.name || getAccount(line.account_id)?.name || line.account_id))] : []
+              const journalAccountLabel = journalAccounts.join(', ') || '—'
               return (
                 <tr key={v.id} className={`border-t border-border hover:bg-muted/30 transition-colors ${v.cancelled ? 'opacity-50' : ''}`}>
                   <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date_bs)}</td>
+                  {journalTable ? <td className="px-4 py-3 whitespace-nowrap font-mono text-xs">{v.invoice_no || v.seq}</td> : <td className="px-4 py-3"><Badge variant={voucherBadgeVariant(v.type, v.cancelled)}>{v.type}</Badge></td>}
                   <td className="px-4 py-3">
-                    <Badge variant={voucherBadgeVariant(v.type, v.cancelled)}>{v.type}</Badge>
-                  </td>
-                  <td className="px-4 py-3">
-                    {v.invoice_no && <span className="text-xs text-muted-foreground block num">{v.invoice_no}</span>}
-                    <span className="font-medium">{partyName}</span>
-                    {(v.type === 'Receipt' || v.type === 'Payment') && settlementName && <span className="block text-xs text-muted-foreground">via {settlementName}</span>}
+                    {journalTable ? <span className="font-medium" title={journalAccountLabel}>{journalAccountLabel}</span> : <>{v.invoice_no && <span className="text-xs text-muted-foreground block num">{v.invoice_no}</span>}<span className="font-medium">{partyName}</span>{(v.type === 'Receipt' || v.type === 'Payment') && settlementName && <span className="block text-xs text-muted-foreground">via {settlementName}</span>}</>}
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell max-w-[200px] truncate">{v.narration}</td>
                   <td className="px-4 py-3 text-right num font-semibold">{fmtMoney(v.total)}</td>

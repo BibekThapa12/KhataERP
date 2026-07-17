@@ -5,6 +5,8 @@
 
 begin;
 
+alter table public.vouchers add column if not exists numbering_period text not null default 'all';
+
 create unique index if not exists vouchers_company_seq_unique
   on public.vouchers (company_id, seq);
 
@@ -13,6 +15,7 @@ with parsed as (
     id,
     company_id,
     type,
+    numbering_period,
     invoice_no,
     created_at,
     seq,
@@ -23,26 +26,26 @@ with parsed as (
       else 0
     end as number_part,
     row_number() over (
-      partition by company_id, type, invoice_no
+      partition by company_id, type, numbering_period, invoice_no
       order by created_at nulls last, seq, id
     ) as duplicate_rank
   from public.vouchers
   where invoice_no is not null
 ), maxima as (
-  select company_id, type, prefix, max(number_part) as max_number
+  select company_id, type, numbering_period, prefix, max(number_part) as max_number
   from parsed
-  group by company_id, type, prefix
+  group by company_id, type, numbering_period, prefix
 ), duplicates as (
   select
     p.id,
     p.prefix,
     m.max_number,
     row_number() over (
-      partition by p.company_id, p.type, p.prefix
+      partition by p.company_id, p.type, p.numbering_period, p.prefix
       order by p.created_at nulls last, p.seq, p.id
     ) as repair_number
   from parsed p
-  join maxima m using (company_id, type, prefix)
+  join maxima m using (company_id, type, numbering_period, prefix)
   where p.duplicate_rank > 1
 )
 update public.vouchers v
@@ -50,8 +53,10 @@ set invoice_no = d.prefix || lpad((d.max_number + d.repair_number)::text, 4, '0'
 from duplicates d
 where v.id = d.id;
 
-create unique index if not exists vouchers_company_type_invoice_no_unique
-  on public.vouchers (company_id, type, invoice_no)
+drop index if exists public.vouchers_company_type_invoice_no_unique;
+
+create unique index if not exists vouchers_company_type_period_invoice_no_unique
+  on public.vouchers (company_id, type, numbering_period, invoice_no)
   where invoice_no is not null;
 
 -- This deferred guard rejects malformed journals at transaction commit.

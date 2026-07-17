@@ -335,6 +335,11 @@ export async function updateAccount(id: string, updates: Partial<Account>) {
   if (error) throw error
 }
 
+export async function deleteAccount(id: string) {
+  const { error } = await supabase.from('accounts').delete().eq('id', id)
+  if (error) throw error
+}
+
 export async function fetchAccountCategories(company_id: string): Promise<AccountCategory[]> {
   const { data, error } = await supabase.from('account_categories').select('*').eq('company_id', company_id).order('name')
   if (error) throw error
@@ -354,6 +359,11 @@ export async function updateAccountCategory(id: string, updates: Partial<Account
     const { error: accountsError } = await supabase.from('accounts').update({ group: updates.name }).eq('category_id', id)
     if (accountsError) throw accountsError
   }
+}
+
+export async function deleteAccountCategory(id: string) {
+  const { error } = await supabase.from('account_categories').delete().eq('id', id)
+  if (error) throw error
 }
 
 // ─── Parties ──────────────────────────────────────────────────────────────────

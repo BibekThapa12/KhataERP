@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
-  buildPaymentData, buildPurchaseVoucherData, buildReceiptData,
-  buildSalesVoucherData, computeStockLedger, computeStockSummary, defaultChartOfAccounts, recomputeAllBalances, recomputeStock, validateBalanced,
+  buildPaymentData, buildPurchaseVoucherData, buildReceiptData, buildReturnVoucherData,
+  buildSalesVoucherData, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
 } from './engine'
 import type { Account, Item, Voucher } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
@@ -99,6 +99,80 @@ describe('accounting engine integrity', () => {
     expect(fifo.movements[0]).toMatchObject({ voucher_id: 'sale', outward_rate: 10, outward_value: 50, balance_qty: 15, balance_rate: 16.67, balance_value: 250 })
     const weighted = computeStockLedger(item, vouchers, '2082-09-17', '2082-09-17', 'weighted_average')
     expect(weighted).toMatchObject({ outward_value: 75, closing_value: 225 })
+  })
+
+  it('moves stock between saleable, damaged, and expired conditions without changing total inventory', () => {
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 20 } as Item
+    const transfer = (id: string, seq: number, destination: 'damaged' | 'expired', qty: number) => ({
+      id, company_id: 'c', type: 'Stock Adjustment', date_bs: `2083-04-0${seq}`, date_bs_key: 20830400 + seq, is_cash: false, total: 0, cancelled: false, seq,
+      stock_lines: [
+        { item_id: 'tea', direction: 'out', qty, rate: 20, stock_condition: 'saleable', is_transfer: true },
+        { item_id: 'tea', direction: 'in', qty, rate: 20, stock_condition: destination, is_transfer: true },
+      ],
+    }) as Voucher
+    const vouchers = [transfer('damage', 1, 'damaged', 3), transfer('expiry', 2, 'expired', 2)]
+
+    expect(recomputeStock([item], vouchers)[0]).toMatchObject({ qty: 10, value: 200 })
+    expect(stockConditionQuantity([item], vouchers, item.id, 'saleable')).toBe(5)
+    expect(stockConditionQuantity([item], vouchers, item.id, 'damaged')).toBe(3)
+    expect(stockConditionQuantity([item], vouchers, item.id, 'expired')).toBe(2)
+    expect(computeStockConditionSummary([item], vouchers, 'damaged')[0]).toMatchObject({ closing_qty: 3, closing_rate: 20, closing_value: 60 })
+  })
+
+  it('posts return stock to or from the selected condition', () => {
+    const original = {
+      id: 'invoice', company_id: 'c', type: 'Sales', date_bs: '2083-04-01', date_bs_key: 20830401, seq: 1,
+      party_account_id: 'party', is_cash: false, subtotal: 100, discount: 0, vat_rate: 0, total: 100, cancelled: false,
+      invoice_items: [{ id: 'source', voucher_id: 'invoice', item_id: 'tea', qty: 1, rate: 100 }],
+    } as Voucher
+    const item = { source_invoice_item_id: 'source', item_id: 'tea', qty: 1, rate: 100, cost_rate: 60 }
+    const systemAccounts = { sales_return: 'sales-return', purchase_return: 'purchase-return', vat_payable: 'vat-payable', vat_receivable: 'vat-receivable' }
+
+    const salesReturn = buildReturnVoucherData({ type: 'Sales Return', original, items: [item], settlement_mode: 'party', restock_items: true, stock_condition: 'damaged', system_accounts: systemAccounts })
+    const purchaseReturn = buildReturnVoucherData({ type: 'Purchase Return', original: { ...original, type: 'Purchase' }, items: [item], settlement_mode: 'party', restock_items: true, stock_condition: 'expired', system_accounts: systemAccounts })
+
+    expect(salesReturn.stock_lines[0]).toMatchObject({ direction: 'in', stock_condition: 'damaged' })
+    expect(purchaseReturn.stock_lines[0]).toMatchObject({ direction: 'out', stock_condition: 'expired' })
+  })
+
+  it('resets nominal accounts at fiscal year start and carries prior results into equity', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const cash = chart.find(account => account.id === 'c:cash')!
+    const sales = chart.find(account => account.id === 'c:sales')!
+    const expense = chart.find(account => account.id === 'c:rent')!
+    const historicalSale = { id: 'sale', company_id: 'c', type: 'Journal', date_bs: '2082-03-30', date_bs_key: 20820330, seq: 1, total: 100, cancelled: false, lines: [
+      { account_id: cash.id, debit: 100, credit: 0 },
+      { account_id: sales.id, debit: 0, credit: 100 },
+    ] } as Voucher
+    const currentExpense = { id: 'expense', company_id: 'c', type: 'Journal', date_bs: '2082-04-02', date_bs_key: 20820402, seq: 2, total: 20, cancelled: false, lines: [
+      { account_id: expense.id, debit: 20, credit: 0 },
+      { account_id: cash.id, debit: 0, credit: 20 },
+    ] } as Voucher
+
+    const balances = recomputeFiscalTrialAccounts(chart, [historicalSale, currentExpense], '2082-04-01', 'c')
+
+    expect(balances.find(account => account.id === sales.id)?.balance).toBe(0)
+    expect(balances.find(account => account.id === expense.id)?.balance).toBe(20)
+    expect(balances.find(account => account.id === 'c:retained-earnings-report')?.balance).toBe(100)
+    expect(computeTrialBalance(balances)).toMatchObject({ total_debit: 100, total_credit: 100, balanced: true })
+  })
+
+  it('builds a stock summary for the selected period with opening and closing balances', () => {
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 2, opening_rate: 10 } as Item
+    const stockVoucher = (seq: number, direction: 'in' | 'out', qty: number, rate: number, date_bs: string) => ({ id: String(seq), company_id: 'c', type: 'Purchase', date: '2026-01-01', date_ad: '2026-01-01', date_bs, date_bs_key: Number(date_bs.replaceAll('-', '')), is_cash: true, total: 0, cancelled: false, seq, stock_lines: [{ item_id: 'tea', direction, qty, rate }] }) as Voucher
+    const vouchers = [
+      stockVoucher(1, 'in', 3, 20, '2082-01-01'),
+      stockVoucher(2, 'in', 4, 30, '2082-02-01'),
+      stockVoucher(3, 'out', 2, 999, '2082-02-15'),
+      stockVoucher(4, 'in', 10, 40, '2082-03-01'),
+    ]
+
+    const [row] = computeStockSummary([item], vouchers, 'weighted_average', '2082-02-01', '2082-02-30')
+
+    expect(row.opening_qty).toBe(5)
+    expect(row.inward_qty).toBe(4)
+    expect(row.outward_qty).toBe(2)
+    expect(row.closing_qty).toBe(7)
   })
 
   it('removes an original purchase layer first for purchase returns', () => {

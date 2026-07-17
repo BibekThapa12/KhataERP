@@ -334,6 +334,7 @@ create table if not exists vouchers (
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
+  numbering_period text not null default 'all',
   credit_days      integer,
   due_date_ad      date,
   due_date_bs      text,
@@ -395,7 +396,9 @@ create table if not exists stock_lines (
   item_id          uuid not null references items(id),
   qty              numeric(14,4) not null,
   rate             numeric(14,2) not null,
-  direction        text not null check (direction in ('in','out'))
+  direction        text not null check (direction in ('in','out')),
+  stock_condition  text not null default 'saleable' check (stock_condition in ('saleable','damaged','expired')),
+  is_transfer      boolean not null default false
 );
 
 -- ── Invoice Items (human-readable line items for invoice display) ─────────────
@@ -463,10 +466,12 @@ create index if not exists idx_item_categories_company on item_categories(compan
 create index if not exists idx_master_logs_company on master_change_logs(company_id, created_at desc);
 create index if not exists idx_vouchers_company   on vouchers(company_id, date desc, seq desc);
 create index if not exists idx_vouchers_company_bs on vouchers(company_id, date_bs_key desc, seq desc);
+create unique index if not exists vouchers_company_type_period_invoice_no_unique on vouchers(company_id, type, numbering_period, invoice_no) where invoice_no is not null;
 create index if not exists idx_vouchers_original on vouchers(original_voucher_id) where original_voucher_id is not null;
 create index if not exists idx_iitems_source on invoice_items(source_invoice_item_id) where source_invoice_item_id is not null;
 create index if not exists idx_vlines_voucher     on voucher_lines(voucher_id);
 create index if not exists idx_slines_voucher     on stock_lines(voucher_id);
+create index if not exists idx_slines_item_condition on stock_lines(item_id, stock_condition);
 create index if not exists idx_iitems_voucher     on invoice_items(voucher_id);
 create index if not exists idx_vsettlements_company on voucher_settlements(company_id);
 create index if not exists idx_vsettlements_settlement on voucher_settlements(settlement_voucher_id);

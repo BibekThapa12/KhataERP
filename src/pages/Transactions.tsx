@@ -9,15 +9,18 @@ import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { ReturnForm } from '@/components/forms/ReturnForm'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { fiscalYearStartBs, vouchersInFiscalYear } from '@/lib/reports'
 import type { Voucher, VoucherType } from '@/types'
 
 function useVouchersByType(type: VoucherType) {
   const allVouchers = useAppStore(s => s.vouchers)
+  const company = useAppStore(s => s.company)
+  const fiscalStart = fiscalYearStartBs(company)
   return useMemo(
-    () => allVouchers
+    () => vouchersInFiscalYear(allVouchers, fiscalStart)
       .filter(v => v.type === type)
       .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq),
-    [allVouchers, type]
+    [allVouchers, fiscalStart, type]
   )
 }
 

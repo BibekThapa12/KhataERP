@@ -16,6 +16,8 @@ SQL Editor → paste `supabase-schema.sql` → Run.
 
 ### 3. Set environment variables
 Apply `supabase-integrity-migration.sql` after the base schema to enable database-level numbering and journal-balance guards.
+Apply `supabase-fiscal-voucher-numbering-migration.sql` to allow voucher prefixes and numbers to restart independently in each fiscal year.
+Apply `supabase-stock-condition-migration.sql` to track saleable, damaged, and expired stock and condition transfers.
 Apply `supabase-alternative-units-migration.sql` to enable main and alternative item units.
 Apply `supabase-category-hierarchy-migration.sql` to seed editable account roots and enforce three-level account and item category trees.
 Apply `supabase-sundry-parties-migration.sql` afterwards to migrate party ledgers into Sundry Debtors and Sundry Creditors.

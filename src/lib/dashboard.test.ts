@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildDashboardSeries, createDashboardSeries, dashboardGrouping, dashboardVouchersInRange, isPostedDashboardVoucher, topSellingItems } from './dashboard'
+import { buildDashboardSeries, createDashboardSeries, dashboardFiscalYearOptions, dashboardFiscalYearRange, dashboardGrouping, dashboardVouchersInRange, fiscalYearForBsDate, isPostedDashboardVoucher, topSellingItems } from './dashboard'
 import type { Item, Voucher } from '@/types'
 
 const voucher = (id: string, type: Voucher['type'], date_bs: string, total: number, extras: Partial<Voucher> = {}) => ({
@@ -8,6 +8,19 @@ const voucher = (id: string, type: Voucher['type'], date_bs: string, total: numb
 }) as Voucher
 
 describe('dashboard aggregation', () => {
+  it('builds automatic fiscal-year options and exact historical ranges', () => {
+    const vouchers = [voucher('old', 'Sales', '2081-12-15', 10), voucher('current', 'Sales', '2083-04-05', 10)]
+    expect(fiscalYearForBsDate('2083-03-30', '04-01')).toBe(2082)
+    expect(fiscalYearForBsDate('2083-04-01', '04-01')).toBe(2083)
+    expect(dashboardFiscalYearOptions(vouchers, '2083-04-01')).toEqual([
+      { value: '2083', label: '83/84' },
+      { value: '2082', label: '82/83' },
+      { value: '2081', label: '81/82' },
+    ])
+    expect(dashboardFiscalYearRange(2082, '2083-04-01', '2083-04-05')).toEqual({ from: '2082-04-01', to: '2083-03-32' })
+    expect(dashboardFiscalYearRange(2083, '2083-04-01', '2083-04-05')).toEqual({ from: '2083-04-01', to: '2083-04-05' })
+  })
+
   it('excludes cancelled and future workflow records', () => {
     expect(isPostedDashboardVoucher(voucher('a', 'Sales', '2083-03-29', 10))).toBe(true)
     expect(isPostedDashboardVoucher(voucher('b', 'Sales', '2083-03-29', 10, { cancelled: true }))).toBe(false)

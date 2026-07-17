@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { previewNextVoucherNumber, savedVoucherNumber, voucherPrefix } from '@/lib/voucherNumbers'
+import { previewNextVoucherNumber, savedVoucherNumber, voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
+import { DEFAULT_FISCAL_YEAR_START_AD } from '@/lib/nepaliDate'
 import type { Company, Voucher } from '@/types'
 
 const company = { id: 'c', sales_prefix: 'SI-', purchase_prefix: 'PI-' } as Company
@@ -25,5 +26,12 @@ describe('voucher numbering', () => {
 
   it('falls back to sequence numbers for historical vouchers', () => {
     expect(savedVoucherNumber(voucher('Journal', undefined, 27))).toBe('27')
+  })
+
+  it('uses separate uniqueness periods when fiscal-year numbering is enabled', () => {
+    const fiscalCompany = { ...company, reset_numbering_fiscal_year: true, fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD } as Company
+    expect(voucherNumberingPeriod(fiscalCompany, '2083-03-30')).toBe('FY-2082')
+    expect(voucherNumberingPeriod(fiscalCompany, '2083-04-01')).toBe('FY-2083')
+    expect(voucherNumberingPeriod(company, '2083-04-01')).toBe('all')
   })
 })

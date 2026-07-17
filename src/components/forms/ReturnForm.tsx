@@ -16,7 +16,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
-import type { Voucher } from '@/types'
+import type { StockCondition, Voucher } from '@/types'
 
 interface ReturnFormProps {
   type: 'Sales Return' | 'Purchase Return'
@@ -43,7 +43,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const banks = bankAccounts(accounts, accountCategories, !!voucher)
   const defaultBankId = banks[0]?.id || ''
   const [settlementAccountId, setSettlementAccountId] = useState('')
-  const [restock, setRestock] = useState(true)
+  const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -83,7 +83,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
   useEffect(() => {
     if (!open) {
-      setOriginalId(''); setDateBs(todayBs()); setLines([]); setSettlementMode('party'); setSettlementAccountId(''); setRestock(true); setReason(''); setError('')
+      setOriginalId(''); setDateBs(todayBs()); setLines([]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setReason(''); setError('')
       return
     }
     if (voucher) {
@@ -92,7 +92,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       setDateBs(voucher.date_bs)
       setSettlementMode(voucher.settlement_mode || (source?.party_account_id ? 'party' : 'cash'))
       setSettlementAccountId(legacySettlementAccountId(voucher) || (voucher.is_cash ? cashAccountId : defaultBankId))
-      setRestock(voucher.restock_items !== false)
+      setStockCondition(voucher.stock_lines?.[0]?.stock_condition || (voucher.restock_items === false ? 'damaged' : 'saleable'))
       setReason(voucher.return_reason || voucher.narration || '')
       if (source) setLines(makeLines(source, voucher))
     }
@@ -110,7 +110,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const selectedItems = lines.filter(line => line.qty > 0)
   const preview = original && selectedItems.length ? buildReturnVoucherData({
     type, original, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId,
-    restock_items: restock, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
+    restock_items: true, stock_condition: stockCondition, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
 
   const save = async () => {
@@ -124,7 +124,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     }
     if (settlementMode !== 'party' && !settlementAccountId) return setError('Select a settlement account.')
     const returnItems: ReturnItemInput[] = selectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
-    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId, restock_items: restock, return_reason: reason.trim(), date_bs: dateBs }
+    const params: ReturnSaveParams = { type, original_voucher_id: original.id, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? original.party_account_id : settlementAccountId, restock_items: true, stock_condition: stockCondition, return_reason: reason.trim(), date_bs: dateBs }
     setSaving(true)
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params)
@@ -137,7 +137,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setLines([])
         setSettlementMode('party')
         setSettlementAccountId('')
-        setRestock(true)
+        setStockCondition('saleable')
         setReason('')
         setError('')
         window.requestAnimationFrame(() => originalVoucherTriggerRef.current?.focus())
@@ -167,7 +167,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect autoFocus={!!voucher} value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(original?.party_account_id ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}<LedgerBalanceHint account={activeSettlementAccount} party={settlementMode === 'party' ? party : null} /></div>
-            {isSalesReturn && <div className="space-y-1.5"><Label>Returned Stock</Label><SearchableSelect value={restock ? 'restock' : 'damaged'} onValueChange={value => setRestock(value === 'restock')} options={[{ value: 'restock', label: 'Return to sellable stock' }, { value: 'damaged', label: 'Damaged - do not restock' }]} /></div>}
+            <div className="space-y-1.5"><Label>{isSalesReturn ? 'Stock Destination' : 'Stock Source'}</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'expired', label: 'Expired' }, { value: 'damaged', label: 'Damage' }]} /></div>
           </div>
 
           <div className="space-y-1.5"><Label>Return Reason</Label><Textarea value={reason} onChange={event => setReason(event.target.value)} rows={2} placeholder="Damaged goods, wrong item, sundry debtor return..." /></div>

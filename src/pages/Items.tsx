@@ -4,6 +4,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { cn, fmtDate, fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
 import { normalizeSearch } from '@/lib/search'
+import { stockConditionQuantity } from '@/lib/engine'
 import { buildCategoryTree, categoryPath } from '@/lib/categoryHierarchy'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { ItemForm } from '@/components/forms/OtherForms'
@@ -18,27 +19,32 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
-import type { Item, ItemCategory } from '@/types'
+import type { Item, ItemCategory, StockCondition } from '@/types'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 
 function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { items, saveStockAdjustment } = useAppStore()
+  const { items, stock, vouchers, saveStockAdjustment } = useAppStore()
   const [dateBs, setDateBs] = useState(todayBs())
+  const [mode, setMode] = useState<'adjustment' | 'transfer'>('adjustment')
   const [itemId, setItemId] = useState('')
+  const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
+  const [transferTo, setTransferTo] = useState<'damaged' | 'expired'>('damaged')
   const [qtyDelta, setQtyDelta] = useState('')
   const [rate, setRate] = useState('')
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const selectedStock = stock.find(entry => entry.id === itemId)
+  const availableSaleable = itemId ? stockConditionQuantity(items, vouchers, itemId, 'saleable') : 0
 
   const handleSave = async () => {
     setError('')
     setSaving(true)
     try {
-      await saveStockAdjustment({ item_id: itemId, qty_delta: Number(qtyDelta), rate: Number(rate) || 0, narration: narration.trim(), date_bs: dateBs })
-      setDateBs(todayBs()); setItemId(''); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      await saveStockAdjustment({ item_id: itemId, qty_delta: mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), rate: mode === 'transfer' ? selectedStock?.avg_cost || 0 : Number(rate) || 0, narration: narration.trim(), date_bs: dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined })
+      setDateBs(todayBs()); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError((error as Error).message)
@@ -50,8 +56,9 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} /></div>
+        <div className="space-y-1.5"><Label>Adjustment Type</Label><SearchableSelect value={mode} onValueChange={value => setMode(value as typeof mode)} options={[{ value: 'adjustment', label: 'Quantity Adjustment' }, { value: 'transfer', label: 'Transfer Stock Condition' }]} /></div>
         <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={setItemId} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
-        <div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Rate</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div>
+        {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Rate</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableSaleable} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /><p className="text-xs text-muted-foreground">Available: {availableSaleable.toLocaleString('en-NP', { maximumFractionDigits: 4 })}. Transferred at {fmtMoney(selectedStock?.avg_cost || 0)}.</p></div></>}
         <div className="space-y-1.5"><Label>Reason</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Damage, found stock, correction..." /></div>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
@@ -76,7 +83,11 @@ export function ItemsPage() {
     const statusMatches = status === 'all' || (status === 'inactive' ? !!item.is_archived : !item.is_archived)
     const searchMatches = !query || normalizeSearch(`${item.name} ${categoryPath(itemCategories, item.category_id)} ${item.unit} ${item.alternate_unit || ''} ${item.sku || ''} ${item.barcode || ''} ${item.is_archived ? 'inactive archived' : 'active'}`).includes(query)
     return statusMatches && searchMatches
-  }).map(item => ({ item, stock: stock.find(entry => entry.id === item.id) || { qty: 0, avg_cost: 0, value: 0 } })).sort((left, right) => left.item.name.localeCompare(right.item.name)), [items, stock, itemCategories, status, query])
+  }).map(item => {
+    const total = stock.find(entry => entry.id === item.id) || { qty: 0, avg_cost: 0, value: 0 }
+    const qty = stockConditionQuantity(items, vouchers, item.id, 'saleable')
+    return { item, stock: { ...total, qty, value: qty * total.avg_cost } }
+  }).sort((left, right) => left.item.name.localeCompare(right.item.name)), [items, stock, vouchers, itemCategories, status, query])
   const adjustments = useMemo(() => vouchers.filter(voucher => voucher.type === 'Stock Adjustment').filter(voucher => {
     const line = voucher.stock_lines?.[0]
     const item = items.find(entry => entry.id === line?.item_id)
@@ -103,11 +114,14 @@ export function ItemsPage() {
 
         <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="item" title="Item Categories" rows={itemTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as ItemCategory })} onEdit={category => setCategoryDialog({ category: category as ItemCategory })} onArchive={category => alterItemCategory(category.id, { is_archived: !category.is_archived })} /><CategoryLegend kind="item" /></div></TabsContent>
 
-        <TabsContent value="adjustments"><Card className="overflow-hidden">{adjustments.length ? <div className="overflow-x-auto"><table className="w-full min-w-[820px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Item</th><th className="report-th text-right">Qty Change</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Value</th><th className="report-th text-left">Reason</th><th className="report-th text-left">Status</th></tr></thead><tbody>{adjustments.map(voucher => {
+        <TabsContent value="adjustments"><Card className="overflow-hidden">{adjustments.length ? <div className="overflow-x-auto"><table className="w-full min-w-[940px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Item</th><th className="report-th text-left">Stock Movement</th><th className="report-th text-right">Qty Change</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Value</th><th className="report-th text-left">Reason</th><th className="report-th text-left">Status</th></tr></thead><tbody>{adjustments.map(voucher => {
           const line = voucher.stock_lines?.[0]
+          const destination = voucher.stock_lines?.find(entry => entry.is_transfer && entry.direction === 'in')
           const item = items.find(entry => entry.id === line?.item_id)
-          const quantity = (line?.direction === 'out' ? -1 : 1) * (line?.qty || 0)
-          return <tr key={voucher.id} className={cn('border-t hover:bg-muted/30', voucher.cancelled && 'opacity-55')}><td className="report-td whitespace-nowrap text-muted-foreground">{fmtDate(voucher.date_bs)}</td><td className="report-td font-medium">{item?.name || 'Unknown item'}</td><td className={cn('report-td text-right num font-semibold', quantity > 0 ? 'text-forest' : 'text-destructive')}>{quantity > 0 ? '+' : ''}{quantity}</td><td className="report-td text-right num">{fmtMoney(line?.rate || 0)}</td><td className="report-td text-right num">{fmtMoney(Math.abs(quantity) * (line?.rate || 0))}</td><td className="report-td text-muted-foreground">{voucher.narration || '-'}</td><td className="report-td"><Badge variant={voucher.cancelled ? 'cancelled' : 'secondary'}>{voucher.cancelled ? 'Cancelled' : 'Active'}</Badge></td></tr>
+          const quantity = line?.is_transfer ? line.qty : (line?.direction === 'out' ? -1 : 1) * (line?.qty || 0)
+          const condition = (line?.stock_condition || 'saleable').replace(/^./, value => value.toUpperCase())
+          const movement = line?.is_transfer ? `Saleable → ${(destination?.stock_condition || 'damaged').replace(/^./, value => value.toUpperCase())}` : condition
+          return <tr key={voucher.id} className={cn('border-t hover:bg-muted/30', voucher.cancelled && 'opacity-55')}><td className="report-td whitespace-nowrap text-muted-foreground">{fmtDate(voucher.date_bs)}</td><td className="report-td font-medium">{item?.name || 'Unknown item'}</td><td className="report-td">{movement}</td><td className={cn('report-td text-right num font-semibold', !line?.is_transfer && quantity < 0 ? 'text-destructive' : 'text-forest')}>{!line?.is_transfer && quantity > 0 ? '+' : ''}{quantity}</td><td className="report-td text-right num">{fmtMoney(line?.rate || 0)}</td><td className="report-td text-right num">{line?.is_transfer ? '—' : fmtMoney(Math.abs(quantity) * (line?.rate || 0))}</td><td className="report-td text-muted-foreground">{voucher.narration || '-'}</td><td className="report-td"><Badge variant={voucher.cancelled ? 'cancelled' : 'secondary'}>{voucher.cancelled ? 'Cancelled' : 'Active'}</Badge></td></tr>
         })}</tbody></table></div> : <div className="py-16 text-center"><p className="font-medium">{search ? 'No matching adjustments' : 'No stock adjustments yet'}</p><p className="mt-1 text-sm text-muted-foreground">Use adjustments for damage, loss, found stock, and corrections.</p></div>}</Card></TabsContent>
       </Tabs>
     </PageContent>

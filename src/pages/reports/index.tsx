@@ -3,7 +3,7 @@ import { Fragment, useEffect, useState, useMemo, type ReactNode } from 'react'
 import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, TrendingUp } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeStock } from '@/lib/engine'
+import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeStockConditionSummary, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, round2 } from '@/lib/engine'
 import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
 import { dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
@@ -23,9 +23,10 @@ import { ReportActions } from '@/components/reports/ReportActions'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { normalizeSearch } from '@/lib/search'
 import { categoryDescendantIds, categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
-import type { Account, InventoryValuationMethod, Item, StockEntry } from '@/types'
+import type { Account, AccountType, InventoryValuationMethod, Item, StockCondition, StockEntry } from '@/types'
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
 function LedgerLink({ account }: { account: Account }) {
@@ -59,17 +60,42 @@ function GroupedAmountTable({ accounts, total, emptyLabel, totalLabel = 'Total',
   return <table className="w-full border-collapse text-sm"><tbody>{groups.map(group => <Fragment key={group.key}><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td"><GroupButton groupKey={group.key} name={group.name} count={group.accounts.length} expanded={expanded.has(group.key)} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(group.balance)}</td></tr>{expanded.has(group.key) && group.accounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><LedgerLink account={account} /></td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>)}</Fragment>)}{adjustments.map(row => <tr key={row.label} className={`border-t hover:bg-muted/20 ${row.className || ''}`}><td className="report-td italic">{row.label}</td><td className="report-td text-right num">{fmtMoney(row.amount)}</td></tr>)}<tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">{totalLabel}</td><td className="report-td text-right num">{fmtMoney(total)}</td></tr></tbody></table>
 }
 
-function TrialNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
-  const open = expanded.has(node.key)
-  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} type={node.type} expanded={open} toggle={toggle} /></td><td className="report-td text-right num debit-amt">{node.debit ? fmtMoney(node.debit) : '—'}</td><td className="report-td text-right num credit-amt">{node.credit ? fmtMoney(node.credit) : '—'}</td></tr>{open && node.directAccounts.map(account => { const side = normalSide(account.type); const balance = account.balance || 0; const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; return <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}><LedgerLink account={account} /></td><td className="report-td text-right num">{debit ? fmtMoney(debit) : '—'}</td><td className="report-td text-right num">{credit ? fmtMoney(credit) : '—'}</td></tr>})}{open && node.children.map(child => <TrialNodeRows key={child.key} node={child} expanded={expanded} toggle={toggle} />)}</Fragment>
+interface TrialPeriodValues {
+  opening: number
+  debit: number
+  credit: number
+  closing: number
 }
 
-function HierarchicalTrialTable({ accounts, categories, totalDebit, totalCredit }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; totalDebit: number; totalCredit: number }) {
-  const nodes = useMemo(() => buildAccountReportTree(accounts.filter(account => Math.abs(account.balance || 0) >= 0.005), categories), [accounts, categories])
+const TRIAL_TYPE_ORDER: AccountType[] = ['Equity', 'Liability', 'Asset', 'Income', 'Expense']
+
+function signedDebitBalance(account: Account) {
+  const balance = account.balance || 0
+  return round2(normalSide(account.type) === 'debit' ? balance : -balance)
+}
+
+function trialBalanceLabel(value: number) {
+  if (Math.abs(value) < 0.005) return '—'
+  return `${fmtMoney(Math.abs(value))} ${value > 0 ? 'Dr' : 'Cr'}`
+}
+
+function trialNodeValues(node: AccountReportTreeNode, values: Map<string, TrialPeriodValues>): TrialPeriodValues {
+  const rows = [...node.directAccounts.map(account => values.get(account.id)), ...node.children.map(child => trialNodeValues(child, values))].filter((row): row is TrialPeriodValues => !!row)
+  return rows.reduce((total, row) => ({ opening: round2(total.opening + row.opening), debit: round2(total.debit + row.debit), credit: round2(total.credit + row.credit), closing: round2(total.closing + row.closing) }), { opening: 0, debit: 0, credit: 0, closing: 0 })
+}
+
+function TrialNodeRows({ node, values, expanded, toggle }: { node: AccountReportTreeNode; values: Map<string, TrialPeriodValues>; expanded: Set<string>; toggle: (key: string) => void }) {
+  const open = expanded.has(node.key)
+  const totals = trialNodeValues(node, values)
+  return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} type={node.type} expanded={open} toggle={toggle} /></td><td className="report-td whitespace-nowrap text-right num">{trialBalanceLabel(totals.opening)}</td><td className="report-td text-right num debit-amt">{totals.debit ? fmtMoney(totals.debit) : '—'}</td><td className="report-td text-right num credit-amt">{totals.credit ? fmtMoney(totals.credit) : '—'}</td><td className="report-td whitespace-nowrap text-right num">{trialBalanceLabel(totals.closing)}</td></tr>{open && node.directAccounts.map(account => { const row = values.get(account.id)!; return <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td" style={{ paddingLeft: `${2.5 + (node.depth - 1) * 1.25}rem` }}><LedgerLink account={account} /></td><td className="report-td whitespace-nowrap text-right num">{trialBalanceLabel(row.opening)}</td><td className="report-td text-right num">{row.debit ? fmtMoney(row.debit) : '—'}</td><td className="report-td text-right num">{row.credit ? fmtMoney(row.credit) : '—'}</td><td className="report-td whitespace-nowrap text-right num">{trialBalanceLabel(row.closing)}</td></tr>})}{open && node.children.map(child => <TrialNodeRows key={child.key} node={child} values={values} expanded={expanded} toggle={toggle} />)}</Fragment>
+}
+
+function HierarchicalTrialTable({ accounts, categories, values, openingDebit, openingCredit, movementDebit, movementCredit, closingDebit, closingCredit }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; values: Map<string, TrialPeriodValues>; openingDebit: number; openingCredit: number; movementDebit: number; movementCredit: number; closingDebit: number; closingCredit: number }) {
+  const nodes = useMemo(() => buildAccountReportTree(accounts, categories).sort((left, right) => TRIAL_TYPE_ORDER.indexOf(left.type) - TRIAL_TYPE_ORDER.indexOf(right.type) || left.name.localeCompare(right.name)), [accounts, categories])
   const { expanded, setExpanded, toggle } = useExpandedGroups()
   const expandableKeys = reportTreeKeys(nodes)
   const allExpanded = expandableKeys.length > 0 && expandableKeys.every(key => expanded.has(key))
-  return <><ExpandCollapseControls className="border-b px-2 py-1" expanded={allExpanded} onToggle={() => setExpanded(allExpanded ? new Set() : new Set(expandableKeys))} /><div className="overflow-x-auto"><table className="w-full min-w-[520px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Category / Ledger</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div></>
+  return <><ExpandCollapseControls className="border-b px-2 py-1" expanded={allExpanded} onToggle={() => setExpanded(allExpanded ? new Set() : new Set(expandableKeys))} /><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-muted/50"><tr><th rowSpan={2} className="report-th text-left align-middle">Category / Ledger</th><th rowSpan={2} className="report-th text-right align-middle">Opening Balance</th><th colSpan={2} className="report-th border-b text-center">Current Transactions</th><th rowSpan={2} className="report-th text-right align-middle">Closing Balance</th></tr><tr><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} values={values} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num"><span className="block">{fmtMoney(openingDebit)} Dr</span><span className="block">{fmtMoney(openingCredit)} Cr</span></td><td className="report-td text-right num">{fmtMoney(movementDebit)}</td><td className="report-td text-right num">{fmtMoney(movementCredit)}</td><td className="report-td text-right num"><span className="block">{fmtMoney(closingDebit)} Dr</span><span className="block">{fmtMoney(closingCredit)} Cr</span></td></tr></tfoot></table></div></>
 }
 
 function AmountNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
@@ -191,24 +217,59 @@ function ProfitLossGrandTotal({ amount, className = '' }: { amount: number; clas
 }
 
 export function TrialBalancePage() {
-  const { company, accounts, accountCategories } = useAppStore()
-  const tb = useMemo(() => computeTrialBalance(accounts), [accounts])
-  const exportCsv = () => downloadCsv('trial-balance.csv', ['Ledger', 'Category', 'Debit', 'Credit'], accounts.filter(account => Math.abs(account.balance || 0) >= 0.005).map(account => {
-    const balance = account.balance || 0
-    const side = normalSide(account.type)
-    const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0
-    const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0
-    return [account.name, categoryPath(accountCategories, account.category_id), debit || '', credit || '']
+  const { company, rawAccounts, accountCategories, vouchers } = useAppStore()
+  const fiscalStart = fiscalYearStartBs(company)
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(fiscalStart)
+  const [to, setTo] = useState(todayBs())
+  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const reportFiscalStart = useMemo(() => {
+    const monthDay = fiscalStart.slice(5)
+    const fromYear = Number(from.slice(0, 4))
+    return `${from.slice(5) >= monthDay ? fromYear : fromYear - 1}-${monthDay}`
+  }, [fiscalStart, from])
+  const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
+  const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
+  const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
+  const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
+  const openingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, beforeFrom, reportFiscalStart, company?.id || '', retainedCategoryId), [rawAccounts, beforeFrom, reportFiscalStart, company?.id, retainedCategoryId])
+  const closingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, throughTo, reportFiscalStart, company?.id || '', retainedCategoryId), [rawAccounts, throughTo, reportFiscalStart, company?.id, retainedCategoryId])
+  const movements = useMemo(() => {
+    const byAccount = new Map<string, { debit: number; credit: number }>()
+    for (const voucher of periodVouchers) for (const line of voucher.lines || []) {
+      const row = byAccount.get(line.account_id) || { debit: 0, credit: 0 }
+      row.debit = round2(row.debit + (line.debit || 0))
+      row.credit = round2(row.credit + (line.credit || 0))
+      byAccount.set(line.account_id, row)
+    }
+    return byAccount
+  }, [periodVouchers])
+  const openingById = useMemo(() => new Map(openingAccounts.map(account => [account.id, account])), [openingAccounts])
+  const values = useMemo(() => new Map(closingAccounts.map(account => {
+    const openingAccount = openingById.get(account.id) || account
+    const movement = movements.get(account.id) || { debit: 0, credit: 0 }
+    return [account.id, { opening: signedDebitBalance(openingAccount), debit: movement.debit, credit: movement.credit, closing: signedDebitBalance(account) } satisfies TrialPeriodValues]
+  })), [closingAccounts, movements, openingById])
+  const visibleAccounts = useMemo(() => closingAccounts.filter(account => { const row = values.get(account.id)!; return Math.abs(row.opening) >= 0.005 || row.debit >= 0.005 || row.credit >= 0.005 || Math.abs(row.closing) >= 0.005 }), [closingAccounts, values])
+  const openingTb = useMemo(() => computeTrialBalance(openingAccounts), [openingAccounts])
+  const closingTb = useMemo(() => computeTrialBalance(closingAccounts), [closingAccounts])
+  const movementDebit = round2([...movements.values()].reduce((sum, row) => sum + row.debit, 0))
+  const movementCredit = round2([...movements.values()].reduce((sum, row) => sum + row.credit, 0))
+  const exportCsv = () => downloadCsv(`trial-balance-${from}-to-${to}.csv`, ['Ledger', 'Category', 'Opening Balance', 'Debit', 'Credit', 'Closing Balance'], [...visibleAccounts].sort((left, right) => TRIAL_TYPE_ORDER.indexOf(left.type) - TRIAL_TYPE_ORDER.indexOf(right.type) || left.name.localeCompare(right.name)).map(account => {
+    const row = values.get(account.id)!
+    return [account.name, categoryPath(accountCategories, account.category_id), trialBalanceLabel(row.opening), row.debit || '', row.credit || '', trialBalanceLabel(row.closing)]
   }))
 
   return (
     <div className="report-page ">
-      <PageHeader title="Trial Balance" description="All account balances — debits must equal credits" action={<ReportActions onExport={exportCsv} />} />
-      <PageContent className="report-content">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | As of {fmtDate(todayBs())}</p></div>
+      <PageHeader title="Trial Balance" description="Opening balances, period movements, and closing balances" action={<ReportActions onExport={exportCsv} />} />
+      <PageContent className="report-content space-y-4">
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | {fmtDate(from)} to {fmtDate(to)}</p></div>
+        <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
         <Card className="report-table-card">
-          <HierarchicalTrialTable accounts={accounts} categories={accountCategories} totalDebit={tb.total_debit} totalCredit={tb.total_credit} />
-          {tb.balanced
+          <HierarchicalTrialTable accounts={visibleAccounts} categories={accountCategories} values={values} openingDebit={openingTb.total_debit} openingCredit={openingTb.total_credit} movementDebit={movementDebit} movementCredit={movementCredit} closingDebit={closingTb.total_debit} closingCredit={closingTb.total_credit} />
+          {closingTb.balanced
             ? <p className="px-4 py-3 text-sm text-forest font-semibold">✓ Balanced</p>
             : <p className="px-4 py-3 text-sm text-destructive">⚠ Not balanced — check recent journal entries</p>
           }
@@ -432,21 +493,40 @@ export function VatReportPage() {
 // ─── Stock Report ─────────────────────────────────────────────────────────────
 export function StockReportPage() {
   const { company, items, vouchers, itemCategories, saveCompany } = useAppStore()
+  const fiscalStart = fiscalYearStartBs(company)
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(fiscalStart)
+  const [to, setTo] = useState(todayBs())
+  const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
   const [showDetails, setShowDetails] = useState(false)
   const [search, setSearch] = useState('')
   const [categoryId, setCategoryId] = useState('all')
   const [status, setStatus] = useState<'all' | 'in' | 'low' | 'out'>('all')
   const [methodError, setMethodError] = useState('')
   const method = company?.inventory_valuation_method || 'weighted_average'
-  const movements = useMemo(() => computeStockSummary(items, vouchers, method), [items, vouchers, method])
+  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  const conditionSummaries = useMemo(() => ({
+    saleable: computeStockConditionSummary(items, vouchers, 'saleable', method, from, to),
+    damaged: computeStockConditionSummary(items, vouchers, 'damaged', method, from, to),
+    expired: computeStockConditionSummary(items, vouchers, 'expired', method, from, to),
+  }), [items, vouchers, method, from, to])
+  const movements = conditionSummaries[stockCondition]
+  const conditionValues = useMemo(() => {
+    const valueFor = (condition: StockCondition) => conditionSummaries[condition].reduce((sum, row) => sum + row.closing_value, 0)
+    const saleable = round2(valueFor('saleable'))
+    const damaged = round2(valueFor('damaged'))
+    const expired = round2(valueFor('expired'))
+    return { saleable, damaged, expired, combined: round2(saleable + damaged + expired) }
+  }, [conditionSummaries])
   const movementByItem = useMemo(() => new Map(movements.map(entry => [entry.id, entry])), [movements])
   const allowedCategories = useMemo(() => categoryId === 'all' ? null : new Set([categoryId, ...categoryDescendantIds(itemCategories, categoryId)]), [categoryId, itemCategories])
   const query = normalizeSearch(search)
   const rows = items.map(item => {
     const movement = movementByItem.get(item.id) || { id: item.id, opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_rate: 0, closing_value: 0 }
-    const rowStatus: 'in' | 'low' | 'out' = movement.closing_qty <= 0 ? 'out' : item.reorder_level != null && movement.closing_qty <= item.reorder_level ? 'low' : 'in'
+    const rowStatus: 'in' | 'low' | 'out' = movement.closing_qty <= 0 ? 'out' : stockCondition === 'saleable' && item.reorder_level != null && movement.closing_qty <= item.reorder_level ? 'low' : 'in'
     return { item, movement, category: categoryPath(itemCategories, item.category_id), status: rowStatus }
-  }).filter(row => !query || normalizeSearch(`${row.item.name} ${row.category} ${row.item.sku || ''} ${row.item.barcode || ''} ${row.item.unit} ${row.item.alternate_unit || ''}`).includes(query))
+  }).filter(row => stockCondition === 'saleable' || Math.abs(row.movement.opening_qty) >= 0.0001 || Math.abs(row.movement.inward_qty) >= 0.0001 || Math.abs(row.movement.outward_qty) >= 0.0001 || Math.abs(row.movement.closing_qty) >= 0.0001)
+    .filter(row => !query || normalizeSearch(`${row.item.name} ${row.category} ${row.item.sku || ''} ${row.item.barcode || ''} ${row.item.unit} ${row.item.alternate_unit || ''}`).includes(query))
     .filter(row => !allowedCategories || (!!row.item.category_id && allowedCategories.has(row.item.category_id)))
     .filter(row => status === 'all' || row.status === status)
     .sort((left, right) => left.item.name.localeCompare(right.item.name))
@@ -456,8 +536,9 @@ export function StockReportPage() {
   const sameUnit = new Set(rows.map(row => row.item.unit.toLowerCase())).size <= 1
   const totals = rows.reduce((sum, row) => ({ opening: sum.opening + row.movement.opening_qty, inward: sum.inward + row.movement.inward_qty, outward: sum.outward + row.movement.outward_qty, closing: sum.closing + row.movement.closing_qty }), { opening: 0, inward: 0, outward: 0, closing: 0 })
   const methodLabel = method === 'fifo' ? 'FIFO' : method === 'lifo' ? 'LIFO' : 'Weighted Average'
+  const conditionLabel = stockCondition === 'saleable' ? 'Saleable Stock' : stockCondition === 'damaged' ? 'Damaged Stock' : 'Expired Stock'
   const qty = (value: number, item: typeof items[number]) => <><span className="block whitespace-nowrap num">{value.toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.unit}</span>{item.alternate_unit && <span className="block whitespace-nowrap text-[11px] text-muted-foreground">({(value * Number(item.alternate_conversion || 0)).toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.alternate_unit})</span>}</>
-  const badge = (value: 'in' | 'low' | 'out') => value === 'in' ? <Badge className="border-emerald-200 bg-emerald-50 text-emerald-700">In Stock</Badge> : value === 'low' ? <Badge className="border-amber-200 bg-amber-50 text-amber-700">Low</Badge> : <Badge className="border-red-200 bg-red-50 text-red-700">Out</Badge>
+  const badge = (value: 'in' | 'low' | 'out') => value === 'in' ? <Badge className={stockCondition === 'saleable' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : stockCondition === 'damaged' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700'}>{stockCondition === 'saleable' ? 'In Stock' : stockCondition === 'damaged' ? 'Damaged' : 'Expired'}</Badge> : value === 'low' ? <Badge className="border-amber-200 bg-amber-50 text-amber-700">Low</Badge> : <Badge className="border-red-200 bg-red-50 text-red-700">Out</Badge>
   const changeMethod = async (value: string) => {
     const next = value as InventoryValuationMethod
     if (next === method || !window.confirm('Changing the valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
@@ -465,24 +546,32 @@ export function StockReportPage() {
     try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError((error as Error).message) }
   }
   const headings = showDetails ? ['Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
-  const exportCsv = () => downloadCsv('stock-summary.csv', headings, rows.map(row => showDetails
+  const exportCsv = () => downloadCsv(`${stockCondition}-stock-summary-${from}-to-${to}.csv`, headings, rows.map(row => showDetails
     ? [row.item.name, row.category, row.item.unit, row.movement.opening_qty, row.movement.inward_qty, row.movement.outward_qty, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]
     : [row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
 
   return <div className="report-page">
-    <PageHeader title="Stock Summary" description={`Current inventory status with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
+    <PageHeader title="Stock Summary" description={`${conditionLabel} movement and closing quantities with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
     <PageContent className="report-content space-y-5">
-      <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Stock Summary | As of {fmtDate(todayBs())} | {methodLabel}</p></div>
+      <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>{conditionLabel} Summary | {fmtDate(from)} to {fmtDate(to)} | {methodLabel}</p></div>
+      <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
+      <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
+        <StatCard label="Saleable Stock Value" value={conditionValues.saleable} Icon={Boxes} color="positive" />
+        <StatCard label="Damaged Stock Value" value={conditionValues.damaged} Icon={AlertTriangle} color="warning" />
+        <StatCard label="Expired Stock Value" value={conditionValues.expired} Icon={AlertTriangle} color="negative" />
+        <StatCard label="Combined Stock Value" value={conditionValues.combined} Icon={TrendingUp} />
+      </div>
+      <Tabs value={stockCondition} onValueChange={value => { setStockCondition(value as StockCondition); setStatus('all') }}><TabsList className="w-full justify-start overflow-x-auto sm:w-auto"><TabsTrigger value="saleable">Saleable Stock</TabsTrigger><TabsTrigger value="damaged">Damaged Stock</TabsTrigger><TabsTrigger value="expired">Expired Stock</TabsTrigger></TabsList></Tabs>
       <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Total Items" value={String(rows.length)} Icon={Boxes} />
         <StatCard label={`Stock Value (${methodLabel})`} value={totalValue} Icon={TrendingUp} color="positive" />
-        <StatCard label="Low Stock Items" value={String(lowStockCount)} Icon={AlertTriangle} color="warning" />
+         <StatCard label={stockCondition === 'saleable' ? 'Low Stock Items' : `${conditionLabel} Items`} value={String(stockCondition === 'saleable' ? lowStockCount : rows.filter(row => row.movement.closing_qty > 0).length)} Icon={AlertTriangle} color="warning" />
         <StatCard label="Categories" value={String(categoryCount)} Icon={Layers3} />
       </div>
       <div className="report-controls flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
         <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))]} />
-        <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, { value: 'low', label: 'Low Stock' }, { value: 'out', label: 'Out of Stock' }]} />
+         <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, ...(stockCondition === 'saleable' ? [{ value: 'low', label: 'Low Stock' }] : []), { value: 'out', label: 'Out of Stock' }]} />
         <SearchableSelect className="w-full lg:w-52" value={method} onValueChange={changeMethod} options={[{ value: 'weighted_average', label: 'Weighted Average' }, { value: 'fifo', label: 'FIFO' }, { value: 'lifo', label: 'LIFO' }]} />
         <Button size="sm" className="h-9" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
       </div>

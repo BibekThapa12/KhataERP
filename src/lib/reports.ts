@@ -214,6 +214,15 @@ export function fiscalYearStartBs(company: Company | null) {
     : `${Number(current.slice(0, 4)) - 1}-${monthDay}`
 }
 
+export function vouchersInFiscalYear(vouchers: Voucher[], fiscalStart: string) {
+  const startKey = makeBsKey(fiscalStart)
+  const nextStartKey = makeBsKey(`${Number(fiscalStart.slice(0, 4)) + 1}-${fiscalStart.slice(5)}`)
+  return vouchers.filter(voucher => {
+    const key = voucherKey(voucher)
+    return key >= startKey && key < nextStartKey
+  })
+}
+
 const sortVouchers = (left: Voucher, right: Voucher) =>
   voucherKey(left) - voucherKey(right) || left.seq - right.seq
 

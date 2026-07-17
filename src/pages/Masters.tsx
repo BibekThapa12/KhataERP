@@ -21,6 +21,7 @@ import { normalizeSearch } from '@/lib/search'
 import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { validateItemUnits } from '@/lib/itemUnits'
+import { ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -211,7 +212,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
 
 export function MastersPage() {
   const navigate = useNavigate()
-  const { company, accounts, rawAccounts, accountCategories, parties, loading, error, alterAccount, alterParty, alterAccountCategory } = useAppStore()
+  const { company, accounts, rawAccounts, accountCategories, parties, vouchers, loading, error, alterAccount, alterParty, alterAccountCategory, deleteAccount, deleteAccountCategory } = useAppStore()
   const [tab, setTab] = useState('ledgers')
   const [searchByTab, setSearchByTab] = useState<Record<string, string>>({ ledgers: '', categories: '', history: '' })
   const [ledgerOpen, setLedgerOpen] = useState(false)
@@ -219,6 +220,7 @@ export function MastersPage() {
   const [categoryDialog, setCategoryDialog] = useState<{ category?: AccountCategory | null; parentCategory?: AccountCategory | null } | null>(null)
   const [changeLogs, setChangeLogs] = useState<MasterChangeLog[]>([])
   const [historyError, setHistoryError] = useState('')
+  const [actionError, setActionError] = useState('')
   const search = searchByTab[tab] || ''
   const q = normalizeSearch(search)
   const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
@@ -239,15 +241,21 @@ export function MastersPage() {
     if (party) await alterParty(party.id, { is_archived: !party.is_archived })
     else await alterAccount(account.id, { is_archived: !account.is_archived })
   }
+  const removeLedger = async (account: Account) => {
+    if (!window.confirm(`Delete ledger "${account.name}" permanently? This cannot be undone.`)) return
+    setActionError('')
+    try { await deleteAccount(account.id) } catch (error: unknown) { setActionError((error as Error).message) }
+  }
 
   return (
     <div><PageHeader title="Masters" description="Create, alter, categorize, archive, and restore business masters" />
       <PageContent className="space-y-4">
+        {actionError && <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{actionError}</div>}
         <Tabs value={tab} onValueChange={setTab}><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="ledgers">Ledgers</TabsTrigger><TabsTrigger value="categories">Account Categories</TabsTrigger><TabsTrigger value="history">Change History</TabsTrigger></TabsList></div>
           <div className="flex flex-wrap gap-2">{tab !== 'categories' && <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearchByTab(current => ({ ...current, [tab]: event.target.value }))} placeholder={searchPlaceholder} className="w-full pl-8 sm:w-64" /></div>}{tab === 'ledgers' && <Button onClick={() => openLedger()}><Plus className="mr-1.5 h-4 w-4" />New Ledger</Button>}</div></div>
           {search && tab === 'ledgers' && ledgerRows.length === 0 && <p className="w-full rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">No matching ledgers.</p>}
-          <TabsContent value="ledgers"><Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Ledger</th><th className="report-th text-left">Category</th><th className="report-th text-left">Type</th><th className="report-th text-right">Balance</th><th className="report-th text-left">Status</th><th className="report-th"></th></tr></thead><tbody>{ledgerRows.map(account => { const current = accounts.find(item => item.id === account.id); const party = partyByAccount.get(account.id); const archived = party?.is_archived || account.is_archived; return <tr key={account.id} className={`border-t ${archived ? 'opacity-55' : ''}`}><td className="report-td font-medium">{account.name}{party && <span className="ml-2 text-xs text-muted-foreground">{partyTerminology(party.type).singular}</span>}</td><td className="report-td text-muted-foreground">{categoryPath(accountCategories, account.category_id) || account.group}</td><td className="report-td">{account.type}</td><td className="report-td text-right num font-semibold">{fmtMoney(current?.balance || 0)}</td><td className="report-td"><Badge variant={archived ? 'secondary' : account.is_system ? 'outline' : 'default'}>{archived ? 'Archived' : account.is_system ? 'System' : 'Active'}</Badge></td><td className="report-td"><div className="flex justify-end gap-1"><Button title="Open ledger report" variant="ghost" size="icon" onClick={() => navigate(`/reports/ledger?account=${encodeURIComponent(account.id)}`)}><ExternalLink className="h-4 w-4" /></Button><Button title="Alter ledger" variant="ghost" size="icon" onClick={() => openLedger(account)}><Pencil className="h-4 w-4" /></Button>{!account.is_system && <Button title={archived ? 'Restore ledger' : 'Archive ledger'} variant="ghost" size="icon" onClick={() => toggleLedger(account)}>{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button>}</div></td></tr>})}</tbody></table></div></Card></TabsContent>
-          <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="account" title="Account Categories" rows={accountCategoryTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as AccountCategory })} onEdit={category => setCategoryDialog({ category: category as AccountCategory })} onArchive={category => alterAccountCategory(category.id, { is_archived: !category.is_archived })} /><CategoryLegend kind="account" /></div></TabsContent>
+          <TabsContent value="ledgers"><Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Ledger</th><th className="report-th text-left">Category</th><th className="report-th text-left">Type</th><th className="report-th text-right">Balance</th><th className="report-th text-left">Status</th><th className="report-th"></th></tr></thead><tbody>{ledgerRows.map(account => { const current = accounts.find(item => item.id === account.id) || account; const party = partyByAccount.get(account.id); const archived = party?.is_archived || account.is_archived; const deleteBlocked = ledgerDeletionBlockReason(current, vouchers); return <tr key={account.id} className={`border-t ${archived ? 'opacity-55' : ''}`}><td className="report-td font-medium">{account.name}{party && <span className="ml-2 text-xs text-muted-foreground">{partyTerminology(party.type).singular}</span>}</td><td className="report-td text-muted-foreground">{categoryPath(accountCategories, account.category_id) || account.group}</td><td className="report-td">{account.type}</td><td className="report-td text-right num font-semibold">{fmtMoney(current.balance || 0)}</td><td className="report-td"><Badge variant={archived ? 'secondary' : account.is_system ? 'outline' : 'default'}>{archived ? 'Archived' : account.is_system ? 'System' : 'Active'}</Badge></td><td className="report-td"><div className="flex justify-end gap-1"><Button title="Open ledger report" variant="ghost" size="icon" onClick={() => navigate(`/reports/ledger?account=${encodeURIComponent(account.id)}`)}><ExternalLink className="h-4 w-4" /></Button><Button title="Alter ledger" variant="ghost" size="icon" onClick={() => openLedger(account)}><Pencil className="h-4 w-4" /></Button>{!account.is_system && <Button title={archived ? 'Restore ledger' : 'Archive ledger'} variant="ghost" size="icon" onClick={() => toggleLedger(account)}>{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button>}{!account.is_system && !archived && <Button title={deleteBlocked || 'Delete ledger permanently'} variant="ghost" size="icon" disabled={!!deleteBlocked} className="text-muted-foreground hover:text-destructive" onClick={() => removeLedger(account)}><Trash2 className="h-4 w-4" /></Button>}</div></td></tr>})}</tbody></table></div></Card></TabsContent>
+          <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="account" title="Account Categories" rows={accountCategoryTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as AccountCategory })} onEdit={category => setCategoryDialog({ category: category as AccountCategory })} onArchive={category => alterAccountCategory(category.id, { is_archived: !category.is_archived })} onDelete={category => deleteAccountCategory(category.id)} /><CategoryLegend kind="account" /></div></TabsContent>
           <TabsContent value="history"><Card className="overflow-hidden">{historyError ? <p className="p-4 text-sm text-destructive">{historyError}</p> : <div className="overflow-x-auto"><table className="w-full min-w-[850px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">When</th><th className="report-th text-left">Record</th><th className="report-th text-left">Action</th><th className="report-th text-left">Changed Fields</th></tr></thead><tbody>{filteredChangeLogs.map(log => <tr key={log.id} className="border-t"><td className="report-td whitespace-nowrap text-muted-foreground">{new Date(log.created_at).toLocaleString()}</td><td className="report-td font-medium">{log.record_type.replaceAll('_', ' ')}</td><td className="report-td">{log.action.replaceAll('_', ' ')}</td><td className="report-td text-muted-foreground">{Object.keys(log.new_values || {}).join(', ') || '-'}</td></tr>)}{filteredChangeLogs.length === 0 && <tr><td colSpan={4} className="p-12 text-center text-muted-foreground">{search ? 'No matching history records.' : 'No master changes recorded yet.'}</td></tr>}</tbody></table></div>}</Card></TabsContent>
         </Tabs>
       </PageContent>
@@ -298,13 +306,19 @@ export function CategoryLegend({ kind }: { kind: 'account' | 'item' }) {
   return <div className="col-span-full flex flex-wrap items-center gap-x-8 gap-y-2 border-l px-4 py-1 text-xs text-muted-foreground"><span className="font-semibold text-foreground">Legend:</span>{entries.map(entry => <span key={entry.label} className="flex items-center gap-2"><entry.icon className="h-4 w-4 text-[#806f5b]" />{entry.label}</span>)}</div>
 }
 
-function CategoryActions({ row, onAddChild, onEdit, onArchive, onError }: { row: CategoryRow; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void; onError: (message: string) => void }) {
+function CategoryActions({ row, onAddChild, onEdit, onArchive, onDelete, onError }: { row: CategoryRow; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void; onDelete?: (category: AccountCategory | ItemCategory) => Promise<void> | void; onError: (message: string) => void }) {
   const category = row.category
   const system = 'is_system' in category && category.is_system
   const canAddChild = row.depth < 3 && !category.is_archived
-  const canDelete = !system && !category.is_archived && row.totalCount === 0
+  const deleteBlocked = system ? 'System-created account groups cannot be deleted.' : row.totalCount > 0 ? 'Delete every ledger in this group and its subgroups first.' : row.children.length > 0 ? 'Delete child account groups first.' : null
   const runArchive = async () => {
     try { await onArchive(category) } catch (error: unknown) { onError((error as Error).message) }
+  }
+  const runDelete = async () => {
+    if (!onDelete) return
+    if (deleteBlocked) { onError(deleteBlocked); return }
+    if (!window.confirm(`Delete account group "${category.name}" permanently? This cannot be undone.`)) return
+    try { await onDelete(category) } catch (error: unknown) { onError((error as Error).message) }
   }
 
   return <DropdownMenuPrimitive.Root>
@@ -318,13 +332,14 @@ function CategoryActions({ row, onAddChild, onEdit, onArchive, onError }: { row:
         <DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" />
         {category.is_archived
           ? <DropdownMenuPrimitive.Item disabled={system} onSelect={runArchive} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><RotateCcw className="h-3.5 w-3.5" />Restore</DropdownMenuPrimitive.Item>
-          : <DropdownMenuPrimitive.Item disabled={!canDelete} onSelect={runArchive} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-destructive outline-none focus:bg-destructive/10 data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><Trash2 className="h-3.5 w-3.5" />Delete</DropdownMenuPrimitive.Item>}
+          : <DropdownMenuPrimitive.Item disabled={system} onSelect={runArchive} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent data-[disabled]:pointer-events-none data-[disabled]:opacity-50"><Archive className="h-3.5 w-3.5" />Archive</DropdownMenuPrimitive.Item>}
+        {onDelete && !system && !category.is_archived && <><DropdownMenuPrimitive.Separator className="my-1 h-px bg-border" /><DropdownMenuPrimitive.Item title={deleteBlocked || 'Delete account group permanently'} onSelect={runDelete} className={cn('flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 text-destructive outline-none focus:bg-destructive/10', deleteBlocked && 'opacity-55')}><Trash2 className="h-3.5 w-3.5" />Delete permanently</DropdownMenuPrimitive.Item></>}
       </DropdownMenuPrimitive.Content>
     </DropdownMenuPrimitive.Portal>
   </DropdownMenuPrimitive.Root>
 }
 
-export function CategoryTable({ kind, title, rows, loading, error, onAdd, onAddChild, onEdit, onArchive }: { kind: 'account' | 'item'; title: string; rows: CategoryRow[]; loading: boolean; error: string | null; onAdd: () => void; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void }) {
+export function CategoryTable({ kind, title, rows, loading, error, onAdd, onAddChild, onEdit, onArchive, onDelete }: { kind: 'account' | 'item'; title: string; rows: CategoryRow[]; loading: boolean; error: string | null; onAdd: () => void; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void; onDelete?: (category: AccountCategory | ItemCategory) => Promise<void> | void }) {
   const initialIds = () => new Set(flattenCategoryTree(rows).filter(row => row.children.length).map(row => row.category.id))
   const [expanded, setExpanded] = useState<Set<string>>(initialIds)
   const [selectedId, setSelectedId] = useState<string | null>(() => rows[0]?.category.id || null)
@@ -380,7 +395,7 @@ export function CategoryTable({ kind, title, rows, loading, error, onAdd, onAddC
             </div>
             <div className="flex items-center gap-1.5">
               <div className="hidden items-center gap-3 whitespace-nowrap text-[11px] text-muted-foreground sm:flex"><span title={`Records directly assigned to ${category.name}`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{row.directCount}</strong> direct</span><span title={`Records in ${category.name} and all child categories`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{row.totalCount}</strong> total</span><span title={`Categories immediately below ${category.name}`} className="rounded bg-background/80 px-2 py-1"><strong className="font-medium text-foreground">{childCount}</strong> {childCount === 1 ? 'child' : 'children'}</span></div>
-              <CategoryActions row={row} onAddChild={onAddChild} onEdit={onEdit} onArchive={onArchive} onError={setActionError} />
+              <CategoryActions row={row} onAddChild={onAddChild} onEdit={onEdit} onArchive={onArchive} onDelete={onDelete} onError={setActionError} />
             </div>
             <p className="col-span-2 pl-7 text-[11px] text-muted-foreground sm:hidden" style={{ marginLeft: `${(row.depth - 1) * 1.125}rem` }}>{row.directCount} direct {recordLabel}{row.directCount === 1 ? '' : 's'} / {row.totalCount} total {recordLabel}{row.totalCount === 1 ? '' : 's'} / {childCount} {childCount === 1 ? 'child' : 'children'}</p>
           </div>

@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockEntry, Voucher, VoucherLine, StockLine } from '@/types'
+import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, insertParty, insertItem,
@@ -7,11 +7,12 @@ import {
   updateVoucher, getNextSeq, getNextVoucherNo, getOrCreateCompany, logAppEvent,
   fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertItemCategory,
   updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, logMasterChange,
+  deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
 } from '@/lib/supabase'
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
-  buildReturnVoucherData, resolveSystemAccountId, round2, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
+  buildReturnVoucherData, resolveSystemAccountId, round2, stockConditionQuantity, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
 } from '@/lib/engine'
 import { addDaysToBs, bsToAd, makeBsKey } from '@/lib/nepaliDate'
 import { categoryDepth, categoryDescendantIds, subtreeHeight } from '@/lib/categoryHierarchy'
@@ -19,8 +20,9 @@ import { partyTerminology, partyTypeForCategory } from '@/lib/partyTerminology'
 import { bankAccounts } from '@/lib/banks'
 import { toBaseQty, toBaseRate } from '@/lib/units'
 import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
-import { voucherPrefix } from '@/lib/voucherNumbers'
+import { voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
 import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from '@/lib/systemAccountGroups'
+import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 
@@ -71,9 +73,11 @@ interface AppState {
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number }) => Promise<Account>
   addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
+  deleteAccountCategory: (id: string) => Promise<void>
   addItemCategory: (data: { name: string; parent_category_id?: string | null }) => Promise<void>
   alterItemCategory: (id: string, updates: Partial<ItemCategory>) => Promise<void>
   alterAccount: (id: string, updates: Partial<Account>) => Promise<void>
+  deleteAccount: (id: string) => Promise<void>
   alterParty: (id: string, updates: Partial<Party>) => Promise<void>
   alterItem: (id: string, updates: Partial<Item>) => Promise<void>
 
@@ -82,7 +86,7 @@ interface AppState {
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }) => Promise<void>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }) => Promise<void>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
-  saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string }) => Promise<void>
+  saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams) => Promise<void>
   updateSalesVoucher: (id: string, params: InvoiceSaveParams) => Promise<void>
   updatePurchaseVoucher: (id: string, params: InvoiceSaveParams) => Promise<void>
@@ -100,6 +104,7 @@ export interface ReturnSaveParams {
   settlement_mode: 'party' | 'cash' | 'bank'
   settlement_account_id?: string
   restock_items: boolean
+  stock_condition: StockCondition
   return_reason: string
   date_bs: string
 }
@@ -183,7 +188,7 @@ function systemAccountKeyFromId(companyId: string, accountId: string): SystemAcc
   return keys.includes(key as SystemAccountKey) ? key as SystemAccountKey : null
 }
 
-function validateReturnRequest(vouchers: Voucher[], stock: StockEntry[], params: ReturnSaveParams, editingId?: string) {
+function validateReturnRequest(items: Item[], vouchers: Voucher[], params: ReturnSaveParams, editingId?: string) {
   const original = vouchers.find(voucher => voucher.id === params.original_voucher_id)
   const expectedType = params.type === 'Sales Return' ? 'Sales' : 'Purchase'
   if (!original || original.type !== expectedType || original.cancelled) throw new Error(`Select an active ${expectedType.toLowerCase()} voucher`)
@@ -207,8 +212,8 @@ function validateReturnRequest(vouchers: Voucher[], stock: StockEntry[], params:
     for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + toBaseQty(item.qty, item.conversion_factor || 1))
     const editing = editingId ? vouchers.find(voucher => voucher.id === editingId) : undefined
     for (const [itemId, qty] of requestedByItem) {
-      const currentReturnQty = editing?.stock_lines?.filter(line => line.item_id === itemId && line.direction === 'out').reduce((sum, line) => sum + line.qty, 0) || 0
-      const available = (stock.find(entry => entry.id === itemId)?.qty || 0) + currentReturnQty
+      const currentReturnQty = editing?.stock_lines?.filter(line => line.item_id === itemId && line.direction === 'out' && (line.stock_condition || 'saleable') === params.stock_condition).reduce((sum, line) => sum + line.qty, 0) || 0
+      const available = stockConditionQuantity(items, vouchers, itemId, params.stock_condition) + currentReturnQty
       if (qty > available + 0.0001) throw new Error(`Not enough stock to return ${qty}; only ${available} is available`)
     }
   }
@@ -235,7 +240,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   getParty: (id) => get().parties.find(p => p.id === id),
   getPartyByAccountId: (accountId) => get().parties.find(p => p.account_id === accountId),
   getItem: (id) => get().items.find(i => i.id === id),
-  getStockEntry: (itemId) => get().stock.find(s => s.id === itemId) ?? { id: itemId, name: '', unit: '', qty: 0, avg_cost: 0, value: 0 },
+  getStockEntry: (itemId) => {
+    const total = get().stock.find(entry => entry.id === itemId) ?? { id: itemId, name: '', unit: '', qty: 0, avg_cost: 0, value: 0 }
+    const qty = stockConditionQuantity(get().items, get().vouchers, itemId, 'saleable')
+    return { ...total, qty, value: round2(qty * total.avg_cost) }
+  },
   partyAccounts: (type) =>
     get().parties.filter(p => p.type === type && !p.is_archived).map(p => ({
       ...p,
@@ -502,6 +511,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(console.warn)
   },
 
+  deleteAccountCategory: async (id) => {
+    const company = get().company
+    const existing = get().accountCategories.find(category => category.id === id)
+    if (!company || !existing) throw new Error('Category not found')
+    const blocked = accountCategoryDeletionBlockReason(existing, get().accountCategories, get().rawAccounts)
+    if (blocked) throw new Error(blocked)
+    await removeAccountCategory(id)
+    set({ accountCategories: get().accountCategories.filter(category => category.id !== id) })
+    logMasterChange(company.id, 'account_category', id, 'delete', existing, {}).catch(console.warn)
+  },
+
   addItemCategory: async ({ name, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
@@ -546,6 +566,23 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rawAccounts = get().rawAccounts.map(account => account.id === id ? { ...account, ...effectiveUpdates } : account)
     set({ rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers), parties: newParty ? [...get().parties, newParty] : get().parties })
     logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(console.warn)
+  },
+
+  deleteAccount: async (id) => {
+    const company = get().company
+    const existing = get().rawAccounts.find(account => account.id === id)
+    if (!company || !existing) throw new Error('Ledger not found')
+    const current = get().accounts.find(account => account.id === id) || existing
+    const blocked = ledgerDeletionBlockReason(current, get().vouchers)
+    if (blocked) throw new Error(blocked)
+    await removeAccount(id)
+    const rawAccounts = get().rawAccounts.filter(account => account.id !== id)
+    set({
+      rawAccounts,
+      accounts: recomputeAllBalances(rawAccounts, get().vouchers),
+      parties: get().parties.filter(party => party.account_id !== id),
+    })
+    logMasterChange(company.id, 'account', id, 'delete', existing, {}).catch(console.warn)
   },
 
   alterParty: async (id, updates) => {
@@ -602,7 +639,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
@@ -624,7 +661,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
@@ -647,7 +684,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const invoice_no = await getNextVoucherNo(company.id, 'Receipt', voucherPrefix(company, 'Receipt'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
     })
@@ -668,7 +705,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const invoice_no = await getNextVoucherNo(company.id, 'Payment', voucherPrefix(company, 'Payment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
     })
@@ -687,7 +724,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const invoice_no = await getNextVoucherNo(company.id, 'Journal', voucherPrefix(company, 'Journal'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', seq, invoice_no, ...dateFields, narration, is_cash: false, total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Journal', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, is_cash: false, total, cancelled: false },
       lines,
     })
     const vouchers = [newVoucher, ...get().vouchers]
@@ -696,9 +733,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   saveReturnVoucher: async (params) => {
-    const { company, vouchers, stock } = get()
+    const { company, vouchers } = get()
     if (!company) throw new Error('No company')
-    const original = validateReturnRequest(vouchers, stock, params)
+    const original = validateReturnRequest(get().items, vouchers, params)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories)
@@ -710,7 +747,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(params.date_bs)
     const newVoucher = await insertVoucher({
       voucher: {
-        company_id: company.id, type: params.type, seq, invoice_no, ...dateFields,
+        company_id: company.id, type: params.type, seq, invoice_no, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
         original_voucher_id: original.id, return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
         settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? original.party_account_id : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
         party_account_id: original.party_account_id, is_cash: params.settlement_mode === 'cash',
@@ -744,7 +781,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { ...dateFields, ...creditFields, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
@@ -767,7 +804,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { ...dateFields, ...creditFields, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
@@ -790,7 +827,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(date_bs)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
     })
@@ -799,23 +836,32 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ vouchers, accounts })
   },
 
-  saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs }) => {
+  saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs, stock_condition, transfer_to }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
     if (!item_id) throw new Error('Select an item')
     if (!qty_delta) throw new Error('Enter a quantity adjustment')
+    const quantity = Math.abs(qty_delta)
+    const sourceCondition: StockCondition = transfer_to ? 'saleable' : stock_condition
+    if (transfer_to && transfer_to === sourceCondition) throw new Error('Select a different destination for the transfer')
+    if ((transfer_to || qty_delta < 0) && quantity > stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition) + 0.0001) throw new Error(`Only ${stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition)} units are available in ${sourceCondition} stock`)
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextVoucherNo(company.id, 'Stock Adjustment', voucherPrefix(company, 'Stock Adjustment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, invoice_no, ...dateFields, narration, is_cash: false, total: Math.abs(qty_delta * rate), cancelled: false },
+      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration: narration || (transfer_to ? `Transfer from saleable to ${transfer_to} stock` : undefined), is_cash: false, total: transfer_to ? 0 : Math.abs(qty_delta * rate), cancelled: false },
       lines: [],
-      stock_lines: [{ item_id, qty: Math.abs(qty_delta), rate, direction: qty_delta > 0 ? 'in' : 'out' }],
+      stock_lines: transfer_to
+        ? [
+            { item_id, qty: quantity, rate, direction: 'out', stock_condition: 'saleable', is_transfer: true },
+            { item_id, qty: quantity, rate, direction: 'in', stock_condition: transfer_to, is_transfer: true },
+          ]
+        : [{ item_id, qty: quantity, rate, direction: qty_delta > 0 ? 'in' : 'out', stock_condition, is_transfer: false }],
     })
     const vouchers = [newVoucher, ...get().vouchers]
     const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
     set({ vouchers, stock })
-    logAppEvent('stock_adjustment', company.id, { item_id, qty_delta, rate })
+    logAppEvent('stock_adjustment', company.id, { item_id, qty_delta, rate, stock_condition, transfer_to })
   },
 
   updatePayment: async (id, { allocations, paid_from_account_id, narration, date_bs }) => {
@@ -830,7 +876,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(date_bs)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
     })
@@ -842,12 +888,14 @@ export const useAppStore = create<AppState>((set, get) => ({
   updateJournal: async (id, { lines, narration, date_bs }) => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
+    const company = get().company
+    if (!company) throw new Error('No company')
     if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
     const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
     const dateFields = voucherDateFields(date_bs)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, narration, is_cash: false, total, cancelled: false },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, is_cash: false, total, cancelled: false },
       lines,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
@@ -860,7 +908,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing || (existing.type !== 'Sales Return' && existing.type !== 'Purchase Return')) throw new Error('Return voucher not found')
     if (!company) throw new Error('No company')
-    const original = validateReturnRequest(get().vouchers, get().stock, params, id)
+    const original = validateReturnRequest(get().items, get().vouchers, params, id)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories, true)
@@ -870,7 +918,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const updated = await updateVoucher({
       id,
       voucher: {
-        ...voucherDateFields(params.date_bs), original_voucher_id: original.id,
+        ...voucherDateFields(params.date_bs), numbering_period: voucherNumberingPeriod(company, params.date_bs), original_voucher_id: original.id,
         return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
         settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? original.party_account_id : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
         party_account_id: original.party_account_id, is_cash: params.settlement_mode === 'cash',

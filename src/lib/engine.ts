@@ -1,6 +1,6 @@
 import type {
   Account, AccountType, Voucher, VoucherLine,
-  TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item, InventoryValuationMethod, StockLedgerMovement, StockLedgerReport
+  TrialBalance, ProfitAndLoss, BalanceSheet, VatReport, StockEntry, Item, InventoryValuationMethod, StockCondition, StockLedgerMovement, StockLedgerReport
 } from '@/types'
 import { makeBsKey } from '@/lib/nepaliDate'
 import { toBaseQty, toBaseRate } from '@/lib/units'
@@ -94,6 +94,34 @@ export function recomputeAllBalances(accounts: Account[], vouchers: Voucher[]): 
   return Array.from(byId.values())
 }
 
+export function recomputeFiscalTrialAccounts(accounts: Account[], vouchers: Voucher[], fiscalStartBs: string, companyId: string, retainedCategoryId?: string): Account[] {
+  const fiscalStartKey = makeBsKey(fiscalStartBs)
+  const priorVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fiscalStartKey)
+  const fiscalVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) >= fiscalStartKey)
+  const permanentBalances = recomputeAllBalances(accounts, vouchers)
+  const nominalAccounts = accounts.map(account => account.type === 'Income' || account.type === 'Expense' ? { ...account, opening_balance: 0, balance: 0 } : account)
+  const fiscalBalances = new Map(recomputeAllBalances(nominalAccounts, fiscalVouchers).map(account => [account.id, account]))
+  const priorBalances = recomputeAllBalances(accounts, priorVouchers)
+  const retainedSignedDebit = round2(priorBalances
+    .filter(account => account.type === 'Income' || account.type === 'Expense')
+    .reduce((sum, account) => sum + (normalSide(account.type) === 'debit' ? account.balance || 0 : -(account.balance || 0)), 0))
+  const result = permanentBalances.map(account => account.type === 'Income' || account.type === 'Expense' ? fiscalBalances.get(account.id)! : account)
+
+  if (Math.abs(retainedSignedDebit) >= 0.005) result.push({
+    id: `${companyId}:retained-earnings-report`,
+    company_id: '',
+    name: 'Retained Earnings (Prior Years)',
+    type: 'Equity',
+    group: 'Reserves & Surplus',
+    is_system: true,
+    is_party: false,
+    opening_balance: -retainedSignedDebit,
+    balance: -retainedSignedDebit,
+    category_id: retainedCategoryId,
+  })
+  return result
+}
+
 const roundQty = (n: number) => Math.round((Number(n) + Number.EPSILON) * 10_000) / 10_000
 
 export interface StockSummaryMovement {
@@ -151,6 +179,7 @@ function replayInventory(items: Item[], vouchers: Voucher[], method: InventoryVa
   for (const voucher of sorted) {
     if (!isPostedInventoryVoucher(voucher) || !voucher.stock_lines) continue
     for (const line of voucher.stock_lines) {
+      if (line.is_transfer) continue
       const row = summary.get(line.item_id)
       const state = states.get(line.item_id)
       if (!row || !state) continue
@@ -235,8 +264,86 @@ function replayInventory(items: Item[], vouchers: Voucher[], method: InventoryVa
   return { summary: [...summary.values()], issueCosts, movements }
 }
 
-export function computeStockSummary(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod = 'weighted_average'): StockSummaryMovement[] {
-  return replayInventory(items, vouchers, method).summary
+export function computeStockSummary(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod = 'weighted_average', from?: string, to?: string): StockSummaryMovement[] {
+  if (!from && !to) return replayInventory(items, vouchers, method).summary
+
+  const fromKey = from ? makeBsKey(from) : null
+  const toKey = to ? makeBsKey(to) : null
+  const throughTo = toKey == null ? vouchers : vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) <= toKey)
+  const beforeFrom = fromKey == null ? [] : vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fromKey)
+  const closingByItem = new Map(replayInventory(items, throughTo, method).summary.map(row => [row.id, row]))
+  const openingByItem = new Map(replayInventory(items, beforeFrom, method).summary.map(row => [row.id, row]))
+
+  return items.map(item => {
+    const closing = closingByItem.get(item.id)!
+    const before = openingByItem.get(item.id)!
+    return {
+      id: item.id,
+      opening_qty: before.closing_qty,
+      opening_value: before.closing_value,
+      inward_qty: roundQty(closing.inward_qty - before.inward_qty),
+      inward_value: round2(closing.inward_value - before.inward_value),
+      outward_qty: roundQty(closing.outward_qty - before.outward_qty),
+      outward_value: round2(closing.outward_value - before.outward_value),
+      closing_qty: closing.closing_qty,
+      closing_rate: closing.closing_rate,
+      closing_value: closing.closing_value,
+    }
+  })
+}
+
+function replayStockConditionQuantities(items: Item[], vouchers: Voucher[], condition: StockCondition) {
+  const rows = new Map(items.map(item => [item.id, {
+    opening_qty: condition === 'saleable' ? item.opening_qty || 0 : 0,
+    inward_qty: 0,
+    outward_qty: 0,
+    closing_qty: condition === 'saleable' ? item.opening_qty || 0 : 0,
+  }]))
+  const sorted = [...vouchers].sort((left, right) => (left.date_bs_key || makeBsKey(left.date_bs)) - (right.date_bs_key || makeBsKey(right.date_bs)) || left.seq - right.seq)
+  for (const voucher of sorted) {
+    if (!isPostedInventoryVoucher(voucher)) continue
+    for (const line of voucher.stock_lines || []) {
+      if ((line.stock_condition || 'saleable') !== condition) continue
+      const row = rows.get(line.item_id)
+      if (!row) continue
+      if (line.direction === 'in') row.inward_qty = roundQty(row.inward_qty + line.qty)
+      else row.outward_qty = roundQty(row.outward_qty + line.qty)
+      row.closing_qty = roundQty(row.opening_qty + row.inward_qty - row.outward_qty)
+    }
+  }
+  return rows
+}
+
+export function stockConditionQuantity(items: Item[], vouchers: Voucher[], itemId: string, condition: StockCondition) {
+  return replayStockConditionQuantities(items, vouchers, condition).get(itemId)?.closing_qty || 0
+}
+
+export function computeStockConditionSummary(items: Item[], vouchers: Voucher[], condition: StockCondition, method: InventoryValuationMethod = 'weighted_average', from?: string, to?: string): StockSummaryMovement[] {
+  const fromKey = from ? makeBsKey(from) : null
+  const toKey = to ? makeBsKey(to) : null
+  const throughTo = toKey == null ? vouchers : vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) <= toKey)
+  const beforeFrom = fromKey == null ? [] : vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fromKey)
+  const closingRows = replayStockConditionQuantities(items, throughTo, condition)
+  const openingRows = replayStockConditionQuantities(items, beforeFrom, condition)
+  const valuationRows = new Map(computeStockSummary(items, vouchers, method, from, to).map(row => [row.id, row]))
+  return items.map(item => {
+    const opening = openingRows.get(item.id)!
+    const closing = closingRows.get(item.id)!
+    const valuation = valuationRows.get(item.id)!
+    const openingRate = Math.abs(valuation.opening_qty) > 0.0001 ? valuation.opening_value / valuation.opening_qty : valuation.closing_rate
+    return {
+      id: item.id,
+      opening_qty: opening.closing_qty,
+      opening_value: round2(opening.closing_qty * openingRate),
+      inward_qty: roundQty(closing.inward_qty - opening.inward_qty),
+      inward_value: 0,
+      outward_qty: roundQty(closing.outward_qty - opening.outward_qty),
+      outward_value: 0,
+      closing_qty: closing.closing_qty,
+      closing_rate: valuation.closing_rate,
+      closing_value: round2(closing.closing_qty * valuation.closing_rate),
+    }
+  })
 }
 
 export function recomputeStock(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod = 'weighted_average'): StockEntry[] {
@@ -322,7 +429,7 @@ export function buildSalesVoucherData(p: InvoiceParams) {
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
   const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const, stock_condition: 'saleable' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -338,7 +445,7 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
   lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
   const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
-  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const }))
+  const stock_lines = p.items.map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const, stock_condition: 'saleable' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -363,6 +470,7 @@ export interface ReturnVoucherParams {
   settlement_mode: 'party' | 'cash' | 'bank'
   settlement_account_id?: string
   restock_items: boolean
+  stock_condition: StockCondition
   system_accounts?: Partial<Record<SystemAccountKey, string>>
 }
 
@@ -415,8 +523,8 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
         ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_receivable'), debit: 0, credit: vat_amount }] : []),
       ]
   const stock_lines = isSalesReturn
-    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'in' as const })) : [])
-    : p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'out' as const }))
+    ? (p.restock_items ? p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'in' as const, stock_condition: p.stock_condition })) : [])
+    : p.items.map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'out' as const, stock_condition: p.stock_condition }))
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
