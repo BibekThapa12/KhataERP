@@ -30,18 +30,18 @@ export function categoryAccountIds(categoryId: string, categories: AccountCatego
   return new Set(accounts.filter(account => account.category_id && ids.has(account.category_id)).map(account => account.id))
 }
 
-export function getGroupReport(categoryId: string, categories: AccountCategory[], accounts: Account[], vouchers: Voucher[], from: string, to: string, includeCancelled = false) {
+export function getGroupReport(categoryId: string, categories: AccountCategory[], accounts: Account[], vouchers: Voucher[], from: string, to: string, includeCancelled = false, fiscalStartDate?: string) {
   const category = categories.find(entry => entry.id === categoryId) || null
   const ids = categoryAccountIds(categoryId, categories, accounts)
   const summary: GroupSummaryRow[] = accounts.filter(account => ids.has(account.id)).map(account => {
-    const report = getLedgerRows(account.id, accounts, vouchers, from, to, includeCancelled)
+    const report = getLedgerRows(account.id, accounts, vouchers, from, to, includeCancelled, fiscalStartDate)
     return { account, opening: report.opening_balance, debit: report.total_debit, credit: report.total_credit, closing: report.closing_balance }
   }).sort((a, b) => a.account.name.localeCompare(b.account.name))
   const side = category ? normalSide(category.account_type) : 'debit'
   const movement = (debit: number, credit: number) => side === 'debit' ? debit - credit : credit - debit
   const opening = round2(summary.reduce((sum, row) => sum + row.opening, 0))
   let running = opening
-  const transactions: GroupTransactionRow[] = summary.flatMap(row => getLedgerRows(row.account.id, accounts, vouchers, from, to, includeCancelled).rows.map(entry => ({ ...entry, account: row.account, group_running_balance: 0 })))
+  const transactions: GroupTransactionRow[] = summary.flatMap(row => getLedgerRows(row.account.id, accounts, vouchers, from, to, includeCancelled, fiscalStartDate).rows.map(entry => ({ ...entry, account: row.account, group_running_balance: 0 })))
     .sort((a, b) => a.date_bs_key - b.date_bs_key || a.voucher.seq - b.voucher.seq || a.account.name.localeCompare(b.account.name))
     .map(row => {
       if (!row.cancelled) running = round2(running + movement(row.debit, row.credit))
@@ -318,30 +318,37 @@ export interface RegisterRow {
   net: number
 }
 
-export function getRegister(kind: 'sales' | 'purchase', vouchers: Voucher[], parties: Party[], from: string, to: string, includeCancelled = false) {
-  const type = kind === 'sales' ? 'Sales' : 'Purchase'
-  const returnType = kind === 'sales' ? 'Sales Return' : 'Purchase Return'
+export type InvoiceRegisterKind = 'sales' | 'purchase' | 'sales-return' | 'purchase-return'
+
+export function getRegister(kind: InvoiceRegisterKind, vouchers: Voucher[], parties: Party[], from: string, to: string, includeCancelled = false) {
+  const isReturn = kind === 'sales-return' || kind === 'purchase-return'
+  const type: Voucher['type'] = kind === 'sales'
+    ? 'Sales'
+    : kind === 'purchase'
+      ? 'Purchase'
+      : kind === 'sales-return'
+        ? 'Sales Return'
+        : 'Purchase Return'
+  const sourceType: Voucher['type'] = kind === 'sales' || kind === 'sales-return' ? 'Sales' : 'Purchase'
   const fromKey = makeBsKey(from), toKey = makeBsKey(to)
   const partyMap = new Map(parties.map(party => [party.account_id, party.name]))
   const period = vouchers.filter(voucher => keyOf(voucher) >= fromKey && keyOf(voucher) <= toKey && (includeCancelled || !voucher.cancelled))
-  const invoiceById = new Map(vouchers.filter(voucher => voucher.type === type).map(voucher => [voucher.id, voucher]))
-  const rows: RegisterRow[] = period.filter(voucher => voucher.type === type || voucher.type === returnType).map(voucher => {
-    const isReturn = voucher.type === returnType
+  const invoiceById = new Map(vouchers.filter(voucher => voucher.type === sourceType).map(voucher => [voucher.id, voucher]))
+  const rows: RegisterRow[] = period.filter(voucher => voucher.type === type).map(voucher => {
     const source = voucher.original_voucher_id ? invoiceById.get(voucher.original_voucher_id) : undefined
     const partyAccountId = voucher.party_account_id || source?.party_account_id
-    const sign = isReturn ? -1 : 1
     const subtotal = voucher.subtotal || 0
     const discount = voucher.discount || 0
     return {
       voucher,
       party: partyAccountId ? partyMap.get(partyAccountId) || 'Party' : 'Cash',
-      subtotal: round2(sign * subtotal),
-      discount: round2(sign * discount),
-      taxable: round2(sign * (subtotal - discount)),
-      vat: round2(sign * (voucher.vat_amount || 0)),
+      subtotal: round2(subtotal),
+      discount: round2(discount),
+      taxable: round2(subtotal - discount),
+      vat: round2(voucher.vat_amount || 0),
       returns: isReturn ? voucher.total : 0,
-      gross: round2(sign * voucher.total),
-      net: round2(sign * voucher.total),
+      gross: round2(voucher.total),
+      net: round2(voucher.total),
     }
   }).sort((a, b) => sortChronologically(a.voucher, b.voucher))
   const activeRows = rows.filter(row => !row.voucher.cancelled)

@@ -8,6 +8,7 @@ import { downloadCsv } from '@/lib/csv'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { ReportActions } from '@/components/reports/ReportActions'
+import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { StatCard } from '@/components/StatCard'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
@@ -86,7 +87,7 @@ export function CashFlowPage() {
     <div className="report-page">
       <PageHeader title="Cash Flow" description="Cash and bank movement by operating, investing and financing activities" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Cash Flow | {fmtDate(from)} to {fmtDate(to)}</p></div>
+        <FormalReportPrintHeader company={company} title="Cash Flow Statement" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={cashAccountNames} />
         <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
 
         <div className="report-summary grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
@@ -100,6 +101,7 @@ export function CashFlowPage() {
         {report.sections.map(section => <CashFlowSectionTable key={section.activity} section={section} expanded={expanded.has(section.activity)} onToggle={() => toggleSection(section.activity)} onVoucherClick={setSelectedVoucher} />)}
 
         <Card className="report-table-card"><CardContent className="p-4"><div className="flex flex-wrap items-center justify-between gap-2 text-sm"><span className="font-medium">Opening balance + net cash movement</span><span className="num font-semibold">{fmtMoney(report.opening_balance)} + {fmtMoney(report.net_change)} = {fmtMoney(report.closing_balance)}</span></div></CardContent></Card>
+        <FormalReportPrintFooter />
       </PageContent>
 
       <Dialog open={!!selectedVoucher} onOpenChange={open => !open && setSelectedVoucher(null)}>

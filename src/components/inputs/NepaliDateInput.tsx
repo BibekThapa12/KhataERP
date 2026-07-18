@@ -50,7 +50,7 @@ export function NepaliDateInput({
               id={id}
               value={value}
               onChange={e => handleChange(e.target.value)}
-              onFocus={() => { setFocused(true); setOpen(true) }}
+              onFocus={() => setFocused(true)}
               onBlur={handleBlur}
               placeholder={placeholder}
               inputMode="numeric"

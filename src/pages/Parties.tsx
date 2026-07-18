@@ -1,10 +1,11 @@
 import { useEffect, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Download, Eye, Printer, Share2 } from 'lucide-react'
+import { Plus, Download, Eye, Printer, Search, Share2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent } from '@/lib/supabase'
 import { downloadCsv } from '@/lib/csv'
 import { getPartyBalanceSummary, type PartyBalanceRow, type PartyBalanceTotals } from '@/lib/partyBalances'
+import { round2 } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { partyTerminology } from '@/lib/partyTerminology'
@@ -12,13 +13,33 @@ import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { PartyForm } from '@/components/forms/PartyForm'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Party } from '@/types'
 
+const statementPrintStyles = `
+  @page{size:auto;margin:9mm}*{box-sizing:border-box}body{margin:0;background:#fff;color:#111827;font-family:Arial,sans-serif;font-size:9px}
+  .statement{border:1px solid #4b5563}.heading{border-bottom:1px solid #4b5563;padding:8px 10px;text-align:center}.heading h1{margin:0;font-family:Georgia,serif;font-size:18px}.heading h2{margin:3px 0 0;font-size:13px}.heading p{margin:2px 0 0;font-size:8.5px}
+  .meta{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:18px;border-bottom:1px solid #4b5563;padding:7px 10px}.meta p{display:grid;grid-template-columns:88px 8px minmax(0,1fr);gap:3px;margin:2px 0}.meta strong{font-weight:600}.meta b{min-width:0;overflow-wrap:anywhere}
+  table{width:100%;table-layout:fixed;border-collapse:collapse;font-size:8px}thead{display:table-header-group}th,td{border-bottom:1px solid #9ca3af;border-right:1px solid #9ca3af;padding:4px;overflow-wrap:anywhere;vertical-align:middle}th:last-child,td:last-child{border-right:0}th{background:#f3f4f6;color:#111827;font-weight:700;text-align:center}tr{break-inside:avoid}.right{text-align:right;white-space:nowrap}.strong{font-weight:700}.center{text-align:center}.cancelled{color:#6b7280;text-decoration:line-through}.closing td{border-top:1.5px solid #4b5563;font-weight:700}.empty{padding:16px;text-align:center;color:#6b7280}
+  .footer{position:relative;display:grid;grid-template-columns:1fr 1fr;gap:24px;min-height:64px;border-top:1px solid #4b5563;padding:9px 12px 18px}.footer>div:last-of-type{text-align:right}.footer p{margin:3px 0}.generated{position:absolute;bottom:4px;left:0;right:0;margin:0!important;text-align:center;font-size:7.5px}
+  .ledger-table th:nth-child(1),.ledger-table td:nth-child(1){width:11%}.ledger-table th:nth-child(2),.ledger-table td:nth-child(2){width:12%}.ledger-table th:nth-child(3),.ledger-table td:nth-child(3){width:13%}.ledger-table th:nth-child(4),.ledger-table td:nth-child(4){width:25%}.ledger-table th:nth-child(5),.ledger-table td:nth-child(5),.ledger-table th:nth-child(6),.ledger-table td:nth-child(6),.ledger-table th:nth-child(7),.ledger-table td:nth-child(7){width:13%}
+  .group-table th:nth-child(1),.group-table td:nth-child(1){width:27%}.group-table th:nth-child(2),.group-table td:nth-child(2){width:16%}.group-table th:nth-child(3),.group-table td:nth-child(3){width:17%}.group-table th:nth-child(4),.group-table td:nth-child(4),.group-table th:nth-child(5),.group-table td:nth-child(5){width:13%}.group-table th:nth-child(6),.group-table td:nth-child(6){width:14%}
+`
+
+const escapePrintHtml = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]!))
+
+function partyBalanceLabel(balance: number, type: Party['type']) {
+  if (Math.abs(balance) < 0.005) return fmtMoney(0)
+  const suffix = balance >= 0 ? (type === 'customer' ? 'Dr' : 'Cr') : (type === 'customer' ? 'Cr' : 'Dr')
+  return `${fmtMoney(Math.abs(balance))} ${suffix}`
+}
+
 function PartyLedger({ party }: { party: Party }) {
-  const { company, vouchers, getAccount } = useAppStore()
+  const { company, vouchers, rawAccounts, getAccount } = useAppStore()
   const account = getAccount(party.account_id)
+  const accountMap = new Map(rawAccounts.map(entry => [entry.id, entry.name]))
   const related = vouchers
     .filter(v => !v.cancelled && (v.party_account_id === party.account_id || (v.lines || []).some(line => line.account_id === party.account_id)))
     .sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
@@ -27,32 +48,26 @@ function PartyLedger({ party }: { party: Party }) {
   const terminology = partyTerminology(party.type)
   let running = account?.opening_balance ?? 0
   const statementRows = related.map(v => {
-    const line = v.lines?.find(l => l.account_id === party.account_id)
-    const dr = line?.debit ?? 0
-    const cr = line?.credit ?? 0
+    const partyLines = (v.lines || []).filter(line => line.account_id === party.account_id)
+    const dr = partyLines.reduce((sum, line) => sum + (line.debit || 0), 0)
+    const cr = partyLines.reduce((sum, line) => sum + (line.credit || 0), 0)
+    const particulars = [...new Set((v.lines || []).filter(line => line.account_id !== party.account_id).map(line => accountMap.get(line.account_id) || line.account_id))].join(', ') || v.type
     running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 100) / 100
-    return { v, dr, cr, balance: running }
+    return { v, dr, cr, particulars, balance: running }
   })
 
   const printStatement = () => {
-    const rows = statementRows.map(({ v, dr, cr, balance }) => `
-      <tr>
-        <td>${fmtDate(v.date_bs)}</td>
-        <td>${v.type}</td>
-        <td>${v.invoice_no || ''}</td>
-        <td class="right">${dr ? fmtMoney(dr) : '-'}</td>
-        <td class="right">${cr ? fmtMoney(cr) : '-'}</td>
-        <td class="right">${fmtMoney(balance)}</td>
-      </tr>
-    `).join('')
+    const opening = account?.opening_balance ?? 0
+    const totalDebit = round2(statementRows.reduce((sum, row) => sum + row.dr, 0))
+    const totalCredit = round2(statementRows.reduce((sum, row) => sum + row.cr, 0))
+    const closing = statementRows.at(-1)?.balance ?? opening
+    const fromDate = statementRows[0]?.v.date_bs || company?.fiscal_year_start || todayBs()
+    const toDate = statementRows.at(-1)?.v.date_bs || todayBs()
+    const rows = statementRows.map(({ v, dr, cr, particulars, balance }) => `<tr><td>${escapePrintHtml(fmtDate(v.date_bs))}</td><td>${escapePrintHtml(v.type)}</td><td>${escapePrintHtml(v.invoice_no || v.seq)}</td><td>${escapePrintHtml(particulars)}</td><td class="right">${dr ? escapePrintHtml(fmtMoney(dr)) : '-'}</td><td class="right">${cr ? escapePrintHtml(fmtMoney(cr)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, party.type))}</td></tr>`).join('')
     const win = window.open('', '_blank', 'width=900,height=900')
     if (!win) return
     logAppEvent('print_party_statement', company?.id, { party_id: party.id, party_type: party.type })
-    win.document.write(`
-      <!doctype html><html><head><title>${party.name} statement</title>
-      <style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111827}h1{margin:0;font-size:20px}table{width:100%;border-collapse:collapse;margin-top:12px}th,td{border:1px solid #d1d5db;padding:6px}th{background:#f3f4f6;text-align:left}.right{text-align:right}.meta{margin-top:6px;color:#4b5563}</style>
-      </head><body><h1>${company?.name || 'KhataERP'}</h1><p class="meta">${terminology.singular} statement for <strong>${party.name}</strong></p><p class="meta">Opening balance: ${fmtMoney(account?.opening_balance ?? 0)} | Current balance: ${fmtMoney(account?.balance ?? 0)}</p><table><thead><tr><th>Date</th><th>Type</th><th>Ref</th><th>Debit</th><th>Credit</th><th>Balance</th></tr></thead><tbody>${rows}</tbody></table></body></html>
-    `)
+    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(party.name)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>Party Ledger Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Party Name</strong><span>:</span><b>${escapePrintHtml(party.name)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(terminology.singular)}</b></p><p><strong>Address</strong><span>:</span><b>${escapePrintHtml(party.address || '-')}</b></p><p><strong>Phone</strong><span>:</span><b>${escapePrintHtml(party.phone || '-')}</b></p></div><div><p><strong>Group</strong><span>:</span><b>${escapePrintHtml(account?.group || '-')}</b></p><p><strong>Opening Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(opening, party.type))}</b></p><p><strong>From Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(fromDate))}</b></p><p><strong>To Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(toDate))}</b></p></div></section><table class="ledger-table"><thead><tr><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody><tr><td></td><td></td><td></td><td class="strong">Opening Balance</td><td class="right">-</td><td class="right">-</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(opening, party.type))}</td></tr>${rows || '<tr><td colspan="7" class="empty">No transactions in this statement.</td></tr>'}<tr class="strong"><td colspan="4" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(totalDebit))}</td><td class="right">${escapePrintHtml(fmtMoney(totalCredit))}</td><td></td></tr><tr class="closing"><td colspan="6" class="center">Closing Balance</td><td class="right">${escapePrintHtml(partyBalanceLabel(closing, party.type))}</td></tr></tbody></table><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(toDate))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
     win.document.close()
     win.focus()
     win.print()
@@ -113,14 +128,16 @@ function PartyLedger({ party }: { party: Party }) {
   )
 }
 
-function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 'supplier'; selectedPartyId?: string | null }) {
-  const { parties, accounts } = useAppStore()
+function PartyTable({ partyType, selectedPartyId, rows, totals, hasSearch }: {
+  partyType: 'customer' | 'supplier'
+  selectedPartyId?: string | null
+  rows: PartyBalanceRow[]
+  totals: PartyBalanceTotals
+  hasSearch: boolean
+}) {
+  const { parties } = useAppStore()
   const [selected, setSelected] = useState<Party | null>(null)
   const terminology = partyTerminology(partyType)
-  const list = parties
-    .filter(p => p.type === partyType && !p.is_archived)
-    .map(p => ({ ...p, account: accounts.find(a => a.id === p.account_id) }))
-    .sort((a, b) => a.name.localeCompare(b.name))
 
   useEffect(() => {
     if (!selectedPartyId) return
@@ -128,7 +145,7 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
     if (party) setSelected(party)
   }, [selectedPartyId, partyType, parties])
 
-  if (list.length === 0) {
+  if (rows.length === 0 && !hasSearch) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <p className="text-3xl mb-3 opacity-30">◔</p>
@@ -153,11 +170,7 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
           </tr>
         </thead>
         <tbody>
-          {list.map(p => {
-            const bal = p.account?.balance ?? 0
-            const debitBalance = partyType === 'customer' ? bal : -bal
-            const debit = debitBalance > 0 ? debitBalance : 0
-            const credit = debitBalance < 0 ? Math.abs(debitBalance) : 0
+          {rows.length ? rows.map(({ party: p, debit, credit }) => {
             return (
               <tr key={p.id} className="border-t border-border hover:bg-muted/30 transition-colors">
                 <td className="px-4 py-3 font-semibold">{p.name}</td>
@@ -173,8 +186,16 @@ function PartyTable({ partyType, selectedPartyId }: { partyType: 'customer' | 's
                 </td>
               </tr>
             )
-          })}
+          }) : <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No matching {terminology.plural.toLowerCase()}.</td></tr>}
         </tbody>
+        <tfoot>
+          <tr className="border-t-2 bg-muted/30 font-semibold">
+            <td colSpan={4} className="px-4 py-2.5">Total ({rows.length})</td>
+            <td className="px-4 py-2.5 text-right num debit-amt">{fmtMoney(totals.debit)}</td>
+            <td className="px-4 py-2.5 text-right num credit-amt">{fmtMoney(totals.credit)}</td>
+            <td className="px-4 py-2.5" />
+          </tr>
+        </tfoot>
       </table>
       <Dialog open={!!selected} onOpenChange={o => !o && setSelected(null)}>
         <DialogContent className="max-w-2xl max-h-[85vh] overflow-y-auto">
@@ -195,9 +216,21 @@ export function PartiesPage() {
   const selectedParty = parties.find(party => party.id === selectedPartyId)
   const [tab, setTab] = useState<'customer' | 'supplier'>(selectedParty?.type || 'customer')
   const [showForm, setShowForm] = useState(false)
+  const [search, setSearch] = useState('')
   const balanceSummary = getPartyBalanceSummary(parties, accounts)
-  const activeRows = tab === 'customer' ? balanceSummary.debtors : balanceSummary.creditors
-  const activeTotals = tab === 'customer' ? balanceSummary.debtorTotals : balanceSummary.creditorTotals
+  const normalizedSearch = search.trim().toLowerCase().replace(/\s+/g, ' ')
+  const sourceRows = tab === 'customer' ? balanceSummary.debtors : balanceSummary.creditors
+  const activeRows = sourceRows.filter(row => {
+    if (!normalizedSearch) return true
+    const terminology = partyTerminology(row.party.type)
+    const searchable = [row.party.name, row.party.phone, row.party.pan_vat, row.party.address, terminology.singular, terminology.plural, row.party.type]
+      .filter(Boolean).join(' ').toLowerCase().replace(/\s+/g, ' ')
+    return searchable.includes(normalizedSearch)
+  })
+  const activeTotals: PartyBalanceTotals = {
+    debit: round2(activeRows.reduce((sum, row) => sum + row.debit, 0)),
+    credit: round2(activeRows.reduce((sum, row) => sum + row.credit, 0)),
+  }
   const activeTitle = tab === 'customer' ? 'Sundry Debtors (Customers)' : 'Sundry Creditors (Suppliers)'
   const reportSlug = tab === 'customer' ? 'sundry-debtors' : 'sundry-creditors'
 
@@ -209,10 +242,14 @@ export function PartiesPage() {
   const printBalances = () => {
     const win = window.open('', '_blank', 'width=1000,height=900')
     if (!win) return
-    const esc = (value: unknown) => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' }[character]!))
-    const section = (title: string, rows: PartyBalanceRow[], totals: PartyBalanceTotals) => `<h2>${esc(title)}</h2><table><thead><tr><th>Party</th><th>Phone</th><th class="right">Debit</th><th class="right">Credit</th></tr></thead><tbody>${rows.map(row => `<tr><td>${esc(row.party.name)}</td><td>${esc(row.party.phone || '-')}</td><td class="right">${row.debit ? esc(fmtMoney(row.debit)) : '-'}</td><td class="right">${row.credit ? esc(fmtMoney(row.credit)) : '-'}</td></tr>`).join('') || '<tr><td colspan="4" class="empty">No parties</td></tr>'}</tbody><tfoot><tr><th colspan="2">Total</th><th class="right">${esc(fmtMoney(totals.debit))}</th><th class="right">${esc(fmtMoney(totals.credit))}</th></tr></tfoot></table>`
+    const asOf = todayBs()
+    const groupBalance = tab === 'customer' ? round2(activeTotals.debit - activeTotals.credit) : round2(activeTotals.credit - activeTotals.debit)
+    const rows = activeRows.map(row => {
+      const balance = row.party.type === 'customer' ? round2(row.debit - row.credit) : round2(row.credit - row.debit)
+      return `<tr><td class="strong">${escapePrintHtml(row.party.name)}</td><td>${escapePrintHtml(row.party.phone || '-')}</td><td>${escapePrintHtml(row.party.pan_vat || '-')}</td><td class="right">${row.debit ? escapePrintHtml(fmtMoney(row.debit)) : '-'}</td><td class="right">${row.credit ? escapePrintHtml(fmtMoney(row.credit)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, row.party.type))}</td></tr>`
+    }).join('')
     const balanceMeaning = tab === 'customer' ? 'Debit: receivable from customers. Credit: customer advance or amount payable.' : 'Debit: supplier advance or amount recoverable. Credit: payable to suppliers.'
-    win.document.write(`<!doctype html><html><head><title>${esc(activeTitle)} Balance Summary</title><style>@page{size:A4;margin:12mm}body{font-family:Arial,sans-serif;font-size:12px;color:#111827}h1{margin:0;font-size:21px}h2{margin:20px 0 7px;font-size:15px}.meta{margin:5px 0;color:#4b5563}table{width:100%;border-collapse:collapse}th,td{border:1px solid #d1d5db;padding:6px}th{background:#f3f4f6;text-align:left}.right{text-align:right}.empty{text-align:center;color:#6b7280}tfoot th{background:#f9fafb}</style></head><body><h1>${esc(company?.name || 'KhataERP')}</h1><p class="meta">${esc(activeTitle)} Balance Summary as of ${esc(fmtDate(todayBs()))}</p><p class="meta">${esc(balanceMeaning)}</p>${section(activeTitle, activeRows, activeTotals)}</body></html>`)
+    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(activeTitle)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>${escapePrintHtml(activeTitle)} Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Group Name</strong><span>:</span><b>${escapePrintHtml(activeTitle)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(tab === 'customer' ? 'Sundry Debtors' : 'Sundry Creditors')}</b></p><p><strong>Party Count</strong><span>:</span><b>${activeRows.length}</b></p></div><div><p><strong>As of Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(asOf))}</b></p><p><strong>Total Debit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.debit))}</b></p><p><strong>Total Credit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.credit))}</b></p><p><strong>Group Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</b></p></div></section><table class="group-table"><thead><tr><th>Party</th><th>Phone</th><th>PAN/VAT</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No matching parties.</td></tr>'}<tr class="strong"><td colspan="3" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.debit))}</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.credit))}</td><td class="right">${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</td></tr></tbody></table><section style="padding:7px 10px;border-top:1px solid #4b5563;font-size:8px">${escapePrintHtml(balanceMeaning)}</section><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(asOf))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
     win.document.close()
     win.focus()
     logAppEvent('print_party_balance_summary', company?.id, { party_type: tab, party_count: activeRows.length })
@@ -229,13 +266,19 @@ export function PartiesPage() {
         action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button></div>} />
       <PageContent>
         <Tabs value={tab} onValueChange={value => setTab(value as 'customer' | 'supplier')}>
-          <TabsList className="mb-4">
-            <TabsTrigger value="customer">Sundry Debtors (Customers)</TabsTrigger>
-            <TabsTrigger value="supplier">Sundry Creditors (Suppliers)</TabsTrigger>
-          </TabsList>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+            <TabsList>
+              <TabsTrigger value="customer">Sundry Debtors (Customers)</TabsTrigger>
+              <TabsTrigger value="supplier">Sundry Creditors (Suppliers)</TabsTrigger>
+            </TabsList>
+            <div className="relative min-w-0 flex-1 sm:max-w-sm">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search name, phone, PAN/VAT, address..." className="pl-8" aria-label="Search parties" />
+            </div>
+          </div>
           <Card>
-            <TabsContent value="customer" className="mt-0"><PartyTable partyType="customer" selectedPartyId={selectedPartyId} /></TabsContent>
-            <TabsContent value="supplier" className="mt-0"><PartyTable partyType="supplier" selectedPartyId={selectedPartyId} /></TabsContent>
+            <TabsContent value="customer" className="mt-0"><PartyTable partyType="customer" selectedPartyId={selectedPartyId} rows={tab === 'customer' ? activeRows : []} totals={tab === 'customer' ? activeTotals : { debit: 0, credit: 0 }} hasSearch={!!normalizedSearch} /></TabsContent>
+            <TabsContent value="supplier" className="mt-0"><PartyTable partyType="supplier" selectedPartyId={selectedPartyId} rows={tab === 'supplier' ? activeRows : []} totals={tab === 'supplier' ? activeTotals : { debit: 0, credit: 0 }} hasSearch={!!normalizedSearch} /></TabsContent>
           </Card>
         </Tabs>
       </PageContent>

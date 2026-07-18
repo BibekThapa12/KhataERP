@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine } from '@/types'
+import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, insertParty, insertItem,
@@ -8,6 +8,7 @@ import {
   fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertItemCategory,
   updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
+  fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
 } from '@/lib/supabase'
 import {
   defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
@@ -24,6 +25,7 @@ import { voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
 import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { selectedFiscalYearStartBs } from '@/lib/reports'
+import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 
@@ -53,6 +55,10 @@ interface AppState {
   itemCategories: ItemCategory[]
   stock: StockEntry[]
   vouchers: Voucher[]
+  companyModules: CompanyModule[]
+  chequePermissions: ChequePermission[]
+  chequeBanks: ChequeBank[]
+  cheques: Cheque[]
   loading: boolean
   error: string | null
 
@@ -68,6 +74,7 @@ interface AppState {
   // Actions
   loadAll: (userId: string) => Promise<void>
   saveCompany: (updates: Partial<Company>) => Promise<void>
+  refreshChequeData: () => Promise<void>
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
   addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean }) => Promise<Item>
@@ -84,7 +91,7 @@ interface AppState {
 
   saveSalesVoucher: (params: InvoiceSaveParams) => Promise<void>
   savePurchaseVoucher: (params: InvoiceSaveParams) => Promise<void>
-  saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }) => Promise<void>
+  saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }) => Promise<Voucher>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }) => Promise<void>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
   saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }) => Promise<void>
@@ -252,6 +259,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   itemCategories: [],
   stock: [],
   vouchers: [],
+  companyModules: [],
+  chequePermissions: [],
+  chequeBanks: [],
+  cheques: [],
   loading: false,
   error: null,
 
@@ -419,7 +430,17 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const accounts = recomputeAllBalances(rawAccounts, vouchers)
       const stock = recomputeStock(items, vouchers, valuationMethod(company))
-      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, userId, loading: false })
+      let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
+      try {
+        companyModules = await fetchCompanyModules(company.id)
+        const entitlement = companyModules.find(entry => entry.module?.key === 'cheque_management')
+        if (chequeEntitlement(entitlement).canRead) {
+          const loaded = await Promise.all([fetchChequePermissions(company.id), fetchChequeBanks(company.id), fetchCheques(company.id)])
+          chequePermissions = loaded[0].length ? loaded[0] : ALL_CHEQUE_PERMISSIONS
+          chequeBanks = loaded[1]; cheques = loaded[2]
+        }
+      } catch (moduleError) { console.warn('Optional module data unavailable', moduleError) }
+      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, companyModules, chequePermissions, chequeBanks, cheques, userId, loading: false })
     } catch (e: unknown) {
       set({ error: (e as Error).message, loading: false })
     }
@@ -435,6 +456,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? recomputeStock(get().items, get().vouchers, valuationMethod(nextCompany))
       : get().stock
     set({ company: nextCompany, stock })
+  },
+  refreshChequeData: async () => {
+    const company=get().company; if(!company) return
+    const [chequeBanks,cheques]=await Promise.all([fetchChequeBanks(company.id),fetchCheques(company.id)])
+    set({chequeBanks,cheques})
   },
 
   // ─── Masters ────────────────────────────────────────────────────────────────
@@ -713,6 +739,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = [newVoucher, ...get().vouchers]
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     set({ vouchers, accounts })
+    return newVoucher
   },
 
   // ─── Payment ────────────────────────────────────────────────────────────────

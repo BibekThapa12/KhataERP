@@ -6,10 +6,11 @@ import {
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
+import { chequeEntitlement, chequeRelativeState } from '@/lib/cheques'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { computeCashFlow, fiscalYearStartBs, getDaybookRows, saveSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
 import {
-  accountBalance, buildDashboardSeries, dashboardVouchersInRange, dashboardVouchersThrough,
+  accountBalance, buildDashboardSeries, computeDashboardPerformance, dashboardVouchersInRange, dashboardVouchersThrough,
   dashboardFiscalYearOptions, dashboardFiscalYearRange, isPostedDashboardVoucher, topSellingItems,
 } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
@@ -26,19 +27,20 @@ import type { Voucher } from '@/types'
 const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
 const CashFlowChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.CashFlowChart })))
 const CHART_MODE_KEY = 'khata-dashboard-chart-mode'
-function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details }: {
+function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details, onClick }: {
   label: string
   value: number
   Icon: typeof Wallet
   tone?: 'navy' | 'green' | 'red' | 'orange' | 'blue' | 'violet'
   sub?: string
   details?: { id: string; label: string; value: number; archived?: boolean }[]
+  onClick?: () => void
 }) {
   const tones = {
     navy: 'border-slate-200 bg-slate-50 text-[#1B2A4A]', green: 'border-emerald-100 bg-emerald-50 text-emerald-700', red: 'border-red-100 bg-red-50 text-red-600',
     orange: 'border-orange-100 bg-orange-50 text-orange-700', blue: 'border-blue-100 bg-blue-50 text-blue-700', violet: 'border-violet-100 bg-violet-50 text-violet-700',
   }
-  const card = <Card className="h-full border-border/80 shadow-none transition-[border-color,box-shadow] duration-200 hover:border-primary/20 hover:shadow-sm" tabIndex={details?.length ? 0 : undefined} aria-describedby={details?.length ? 'bank-balance-breakdown' : undefined}>
+  const card = <Card onClick={onClick} onKeyDown={event=>{if(onClick&&(event.key==='Enter'||event.key===' ')){event.preventDefault();onClick()}}} className={`h-full border-border/80 shadow-none transition-[border-color,box-shadow] duration-200 hover:border-primary/20 hover:shadow-sm ${onClick?'cursor-pointer':''}`} tabIndex={details?.length||onClick ? 0 : undefined} aria-describedby={details?.length ? 'bank-balance-breakdown' : undefined}>
       <CardContent className="flex items-center gap-3.5 p-4 sm:p-5">
         <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border ${tones[tone]}`}><Icon className="h-[18px] w-[18px]" /></div>
         <div className="min-w-0 flex-1">
@@ -70,7 +72,7 @@ function voucherBadge(type: Voucher['type']) {
 }
 
 export function Dashboard() {
-  const { company, rawAccounts, accountCategories, vouchers, parties, items } = useAppStore()
+  const { company, rawAccounts, accountCategories, vouchers, parties, items, cheques, companyModules, chequePermissions } = useAppStore()
   const navigate = useNavigate()
   const fiscalStart = fiscalYearStartBs(company)
   const currentFiscalYear = Number(fiscalStart.slice(0, 4))
@@ -79,6 +81,7 @@ export function Dashboard() {
   const [from, setFrom] = useState(fiscalStart)
   const [to, setTo] = useState(todayBs())
   const [detail, setDetail] = useState<Voucher | null>(null)
+  const [chequeFilter, setChequeFilter] = useState<'priority'|'today'|'overdue'|'7'>('priority')
   const [chartMode, setChartMode] = useState(() => {
     try { return localStorage.getItem(CHART_MODE_KEY) !== 'false' } catch { return true }
   })
@@ -106,7 +109,6 @@ export function Dashboard() {
     rawAccounts.map(account => ({ ...account, opening_balance: 0, balance: 0 })), periodVouchers,
   ), [rawAccounts, periodVouchers])
   const asOfMap = useMemo(() => new Map(asOfAccounts.map(account => [account.id, account])), [asOfAccounts])
-  const periodMap = useMemo(() => new Map(periodAccounts.map(account => [account.id, account])), [periodAccounts])
 
   const stockBefore = useMemo(() => recomputeStock(items, beforeFrom, valuationMethod), [items, beforeFrom, valuationMethod])
   const stockAsOf = useMemo(() => recomputeStock(items, throughTo, valuationMethod), [items, throughTo, valuationMethod])
@@ -127,10 +129,12 @@ export function Dashboard() {
   const salesReturnId = systemId('sales_return')
   const purchaseId = systemId('purchase')
   const purchaseReturnId = systemId('purchase_return')
-  const totalSales = round2(accountBalance(periodMap.get(salesId)) - accountBalance(periodMap.get(salesReturnId)))
-  const totalPurchases = round2(accountBalance(periodMap.get(purchaseId)) - accountBalance(periodMap.get(purchaseReturnId)))
-  const excludedExpenseIds = new Set([purchaseId, salesReturnId])
-  const totalExpenses = round2(periodAccounts.filter(account => account.type === 'Expense' && !excludedExpenseIds.has(account.id)).reduce((sum, account) => sum + (account.balance || 0), 0))
+  const { totalSales, totalPurchases, totalExpenses } = useMemo(() => computeDashboardPerformance(periodAccounts, accountCategories, {
+    sales: salesId,
+    salesReturn: salesReturnId,
+    purchase: purchaseId,
+    purchaseReturn: purchaseReturnId,
+  }), [periodAccounts, accountCategories, salesId, salesReturnId, purchaseId, purchaseReturnId])
 
   const cashFlow = useMemo(() => company
     ? computeCashFlow(company.id, rawAccounts, accountCategories, postedVouchers, from, to)
@@ -144,6 +148,27 @@ export function Dashboard() {
     .map(item => ({ item, qty: stockMap.get(item.id)?.qty || 0 }))
     .sort((left, right) => left.qty - right.qty || left.item.name.localeCompare(right.item.name))
     .slice(0, 5), [items, stockMap])
+
+  const chequeAccess = chequeEntitlement(companyModules.find(entry => entry.module?.key === 'cheque_management'))
+  const showChequeWidgets = chequeAccess.canRead && chequePermissions.includes('cheque.view_reports') && chequeAccess.settings?.enable_dashboard_widgets !== false
+  const pendingChequeSummary = useMemo(() => {
+    const pending=cheques.filter(cheque=>cheque.status==='pending')
+    const today=pending.filter(cheque=>chequeRelativeState(cheque).key==='today')
+    return { pendingCount:pending.length, pendingValue:pending.reduce((sum,cheque)=>sum+cheque.amount,0), todayCount:today.length, todayValue:today.reduce((sum,cheque)=>sum+cheque.amount,0) }
+  },[cheques])
+  const priorityChequeRows = useMemo(() => cheques.filter(cheque => cheque.status === 'pending').map(cheque => ({
+    cheque,
+    state: chequeRelativeState(cheque),
+    partyName: parties.find(party => party.account_id === cheque.party_ledger_id)?.name || rawAccounts.find(account => account.id === cheque.party_ledger_id)?.name || 'Unknown party',
+  })).filter(row => row.state.key === 'today' || row.state.key === 'overdue' || (row.state.days > 0 && row.state.days <= 7)).filter(row => {
+    if (chequeFilter === 'today') return row.state.key === 'today'
+    if (chequeFilter === 'overdue') return row.state.key === 'overdue'
+    if (chequeFilter === '7') return row.state.days > 0 && row.state.days <= 7
+    return true
+  }).sort((left,right) => {
+    const rank=(key:string)=>key==='today'?0:key==='overdue'?1:2
+    return rank(left.state.key)-rank(right.state.key) || left.state.days-right.state.days || left.cheque.due_date_bs_key-right.cheque.due_date_bs_key
+  }).slice(0,8), [cheques, chequeFilter, parties, rawAccounts])
 
   const recentRows = useMemo(() => getDaybookRows(periodVouchers, rawAccounts, parties)
     .sort((left, right) => right.date_bs_key - left.date_bs_key || right.voucher.seq - left.voucher.seq)
@@ -191,6 +216,8 @@ export function Dashboard() {
           <DashboardMetric label="Total Expenses" value={totalExpenses} Icon={ReceiptText} tone="navy" />
         </div>
       </section>
+
+      {showChequeWidgets && <section className="grid gap-3 lg:grid-cols-12" aria-label="Cheque summary"><Card className="overflow-hidden border-border/80 shadow-none lg:col-span-8" aria-labelledby="cheque-heading"><CardHeader className="flex-row flex-wrap items-center justify-between gap-2 space-y-0 border-b px-3 py-2"><div><CardTitle id="cheque-heading" className="text-sm">Priority Received Cheques</CardTitle><p className="mt-0.5 text-[10px] text-muted-foreground">Today, overdue, and due within the next 7 days</p></div><div className="flex flex-wrap items-center gap-1">{([['priority','Priority'],['today','Today'],['overdue','Overdue'],['7','Next 7 Days']] as const).map(([key,label])=><Button key={key} size="sm" variant={chequeFilter===key?'default':'outline'} onClick={()=>setChequeFilter(key)}>{label}</Button>)}<Button size="sm" variant="ghost" onClick={()=>navigate(`/cheques/pending${chequeFilter==='priority'?'':`?filter=${chequeFilter}`}`)}>View All</Button></div></CardHeader><CardContent className="p-0"><div className="overflow-x-auto"><table className="w-full min-w-[620px]"><thead><tr className="border-b bg-muted/30"><th className="report-th text-left">Party</th><th className="report-th text-left">Cheque No.</th><th className="report-th text-left">Due Date</th><th className="report-th text-left">Due Status</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{priorityChequeRows.length?priorityChequeRows.map(({cheque,state,partyName})=>{const overdue=state.key==='overdue',today=state.key==='today';const tone=overdue?'border-l-red-500 bg-red-50/55':today?'border-l-amber-400 bg-amber-50/65':'border-l-emerald-500 bg-emerald-50/45';const text=overdue?'text-red-700':today?'text-amber-700':'text-emerald-700';return <tr key={cheque.id} tabIndex={0} onClick={()=>navigate(`/cheques/${cheque.id}`)} onKeyDown={event=>{if(event.key==='Enter'||event.key===' '){event.preventDefault();navigate(`/cheques/${cheque.id}`)}}} className={`cursor-pointer border-b border-l-[3px] transition-colors hover:brightness-[0.98] ${tone}`}><td className="report-td font-semibold">{partyName}</td><td className="report-td font-mono">{cheque.cheque_number}</td><td className="report-td">{cheque.due_date_bs}</td><td className={`report-td font-semibold ${text}`}>{overdue?`${Math.abs(state.days)} day${Math.abs(state.days)===1?'':'s'} overdue`:today?'Due today':`Due in ${state.days} day${state.days===1?'':'s'}`}</td><td className="report-td text-right num font-semibold">{fmtMoney(cheque.amount)}</td></tr>}) : <tr><td colSpan={5} className="px-3 py-6 text-center text-xs text-muted-foreground">No cheques match this priority filter.</td></tr>}</tbody></table></div></CardContent></Card><div className="grid gap-3 sm:grid-cols-2 lg:col-span-4 lg:grid-cols-1"><Card onClick={()=>navigate('/cheques/pending')} className="cursor-pointer border-blue-100 bg-blue-50/45 shadow-none transition-colors hover:bg-blue-50"><CardContent className="flex h-full items-center justify-between gap-3 p-3"><div><p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">Total Pending Cheques</p><p className="mt-1 num font-serif text-lg font-bold text-primary">{fmtMoney(pendingChequeSummary.pendingValue)}</p><p className="mt-0.5 text-[10px] text-muted-foreground">{pendingChequeSummary.pendingCount} cheque{pendingChequeSummary.pendingCount===1?'':'s'}</p></div><Wallet className="h-6 w-6 text-blue-600"/></CardContent></Card><Card onClick={()=>navigate('/cheques/pending?filter=today')} className="cursor-pointer border-amber-200 bg-amber-50/55 shadow-none transition-colors hover:bg-amber-50"><CardContent className="flex h-full items-center justify-between gap-3 p-3"><div><p className="text-[10px] font-semibold uppercase tracking-wide text-amber-700">Due Today</p><p className="mt-1 num font-serif text-lg font-bold text-amber-800">{fmtMoney(pendingChequeSummary.todayValue)}</p><p className="mt-0.5 text-[10px] text-amber-700/80">{pendingChequeSummary.todayCount} cheque{pendingChequeSummary.todayCount===1?'':'s'}</p></div><ReceiptText className="h-6 w-6 text-amber-600"/></CardContent></Card></div></section>}
 
       {chartMode && <section className="grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-12" aria-label="Dashboard analytics">
         <Card className="xl:col-span-6"><CardHeader className="flex-row items-center justify-between space-y-0 pb-1.5"><CardTitle className="text-sm">Sales vs Purchase</CardTitle><span className="text-xs text-muted-foreground">{rangeLabel}</span></CardHeader><CardContent className="h-56 px-2 pb-2"><Suspense fallback={<div className="flex h-full items-center justify-center text-sm text-muted-foreground">Loading chart…</div>}><SalesPurchaseChart data={chartSeries.points} /></Suspense></CardContent></Card>

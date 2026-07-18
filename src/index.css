@@ -153,18 +153,229 @@
 
 @media print {
   @page { margin: 10mm; }
+  @page ledger-report { size: auto; margin: 9mm; }
+  @page balance-sheet-report { size: auto; margin: 8mm; }
   body { background: white; color: black; }
   body > #root > div > aside,
   .app-mobile-nav,
+  .app-shortcuts,
   .report-page > div:first-child,
   .report-controls { display: none !important; }
   body > #root > div,
   body > #root > div > main { display: block !important; height: auto !important; overflow: visible !important; }
+  .app-workspace-scroll { display: block !important; height: auto !important; overflow: visible !important; scrollbar-width: none; }
+  .app-workspace-scroll::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
   .report-page .report-print-header { display: block !important; margin-bottom: 12px; }
   .report-print-header h1 { margin: 0; font-size: 20px; }
   .report-print-header p { margin: 3px 0 0; font-size: 11px; }
+  .ledger-report-page { page: ledger-report; }
+  .ledger-report-page .report-print-header { margin-bottom: 7px; border-bottom: 1px solid #9ca3af; padding-bottom: 6px; }
+  .ledger-report-page .report-print-header h1 { font-size: 16px; }
+  .ledger-report-page .report-print-header .ledger-print-title { font-size: 12px; font-weight: 700; }
+  .ledger-report-page .ledger-print-balances { margin-top: 5px; font-weight: 600; }
+  .ledger-report-page .report-summary { display: none !important; }
+  .ledger-report-page .ledger-screen-table { display: none !important; }
+  .ledger-report-page .ledger-print-statement { display: block !important; border: 1px solid #4b5563; color: #111827; font-family: Arial, sans-serif; }
+  .ledger-statement-heading { border-bottom: 1px solid #4b5563; padding: 8px 10px; text-align: center; }
+  .ledger-statement-heading h1 { margin: 0; font-family: Georgia, serif; font-size: 18px; font-weight: 700; }
+  .ledger-statement-heading h2 { margin: 3px 0 0; font-size: 13px; font-weight: 700; }
+  .ledger-statement-heading p { margin: 2px 0 0; font-size: 8.5px; }
+  .ledger-statement-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; border-bottom: 1px solid #4b5563; padding: 7px 10px; font-size: 8.5px; }
+  .ledger-statement-meta p { display: grid; grid-template-columns: 88px 8px minmax(0, 1fr); gap: 3px; margin: 2px 0; }
+  .ledger-statement-meta strong { font-weight: 600; }
+  .ledger-statement-meta b { min-width: 0; overflow-wrap: anywhere; }
+  .ledger-statement-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 8px; }
+  .ledger-statement-table thead { display: table-header-group; }
+  .ledger-statement-table th,
+  .ledger-statement-table td { border-bottom: 1px solid #9ca3af; border-right: 1px solid #9ca3af; padding: 4px 4px; overflow-wrap: anywhere; vertical-align: middle; }
+  .ledger-statement-table th:last-child,
+  .ledger-statement-table td:last-child { border-right: 0; }
+  .ledger-statement-table th { background: #f3f4f6 !important; color: #111827; font-weight: 700; text-align: center; }
+  .ledger-statement-table th:nth-child(1), .ledger-statement-table td:nth-child(1) { width: 11%; }
+  .ledger-statement-table th:nth-child(2), .ledger-statement-table td:nth-child(2) { width: 12%; }
+  .ledger-statement-table th:nth-child(3), .ledger-statement-table td:nth-child(3) { width: 13%; }
+  .ledger-statement-table th:nth-child(4), .ledger-statement-table td:nth-child(4) { width: 25%; }
+  .ledger-statement-table th:nth-child(5), .ledger-statement-table td:nth-child(5),
+  .ledger-statement-table th:nth-child(6), .ledger-statement-table td:nth-child(6) { width: 13%; text-align: right; white-space: nowrap; }
+  .ledger-statement-table th:nth-child(7), .ledger-statement-table td:nth-child(7) { width: 13%; text-align: right; white-space: nowrap; }
+  .ledger-opening-row td:nth-child(4) { font-weight: 700; }
+  .ledger-opening-row td:last-child,
+  .ledger-total-row,
+  .ledger-closing-row { font-weight: 700; }
+  .ledger-total-row td:first-child,
+  .ledger-closing-row td:first-child { text-align: center; }
+  .ledger-closing-row td { border-top: 1.5px solid #4b5563; }
+  .ledger-cancelled-row { color: #6b7280; text-decoration: line-through; }
+  .ledger-empty-row { padding: 16px !important; text-align: center !important; color: #6b7280; }
+  .ledger-statement-footer { position: relative; display: grid; grid-template-columns: 1fr 1fr; gap: 24px; min-height: 64px; border-top: 1px solid #4b5563; padding: 9px 12px 18px; font-size: 8.5px; }
+  .ledger-statement-footer > div:last-of-type { text-align: right; }
+  .ledger-statement-footer p { margin: 3px 0; }
+  .ledger-generated-note { position: absolute; bottom: 4px; left: 0; right: 0; margin: 0 !important; text-align: center; font-size: 7.5px; }
+  .formal-report-print-header { display: block !important; border: 1px solid #4b5563; border-bottom: 0; color: #111827; font-family: Arial, sans-serif; }
+  .formal-report-heading { border-bottom: 1px solid #4b5563; padding: 8px 10px; text-align: center; }
+  .formal-report-heading h1 { margin: 0; font-family: Georgia, serif; font-size: 18px; font-weight: 700; }
+  .formal-report-heading h2 { margin: 3px 0 0; font-size: 13px; font-weight: 700; }
+  .formal-report-heading p { margin: 2px 0 0; font-size: 8.5px; }
+  .formal-report-meta { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 18px; padding: 7px 10px; font-size: 8.5px; }
+  .formal-report-meta p { display: grid; grid-template-columns: 82px 8px minmax(0, 1fr); gap: 3px; margin: 2px 0; }
+  .formal-report-meta strong { font-weight: 600; }
+  .formal-report-meta b { min-width: 0; overflow-wrap: anywhere; }
+  .formal-report-print-footer { position: relative; display: grid !important; grid-template-columns: 1fr 1fr; gap: 24px; min-height: 64px; border: 1px solid #4b5563; border-top: 0; padding: 9px 12px 18px; color: #111827; font-family: Arial, sans-serif; font-size: 8.5px; break-inside: avoid; }
+  .formal-report-print-footer > div:last-of-type { text-align: right; }
+  .formal-report-print-footer p { margin: 3px 0; }
+  .formal-report-generated-note { position: absolute; bottom: 4px; left: 0; right: 0; margin: 0 !important; text-align: center; font-size: 7.5px; }
   .report-content { padding: 0 !important; }
-  .report-summary { grid-template-columns: repeat(3, 1fr) !important; }
+  .report-page:not(.ledger-report-page) .report-print-header { display: none !important; }
+  .report-page:not(.ledger-report-page) .report-summary { display: none !important; }
+  .report-page:not(.ledger-report-page) [role='tablist'] { display: none !important; }
+  .daybook-print-hide,
+  .daybook-screen-total { display: none !important; }
+  .daybook-print-total { display: table-row !important; }
+  .daybook-screen-money { display: none !important; }
+  .daybook-print-money { display: inline !important; }
+  .register-print-hide,
+  .register-screen-total { display: none !important; }
+  .register-print-total { display: table-row !important; }
+  .register-screen-money { display: none !important; }
+  .register-print-money { display: inline !important; }
+  .stock-summary-print-hide,
+  .stock-summary-screen-total { display: none !important; }
+  .stock-summary-print-total { display: table-row !important; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-compact { table-layout: fixed; font-size: 10px !important; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-compact th { padding: 4px 5px !important; font-size: 10px !important; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-compact td { padding: 5px !important; font-size: 10px !important; line-height: 1.3; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-compact th *,
+  .report-page.stock-summary-report-page .report-content .stock-summary-compact td * { font-size: inherit !important; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(1) { width: 27%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(3) { width: 27%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(4) { width: 15%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(5) { width: 14%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(6) { width: 17%; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-detailed { table-layout: fixed; font-size: 9px !important; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-detailed th,
+  .report-page.stock-summary-report-page .report-content .stock-summary-detailed td { padding: 2.5px !important; font-size: 9px !important; line-height: 1.25; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-detailed th *,
+  .report-page.stock-summary-report-page .report-content .stock-summary-detailed td * { font-size: inherit !important; }
+  .report-page.stock-summary-report-page .report-content .stock-summary-table td:nth-child(n+4) { white-space: nowrap; }
+  .report-page.stock-summary-report-page .report-content .overflow-x-auto { width: 100% !important; max-width: 100% !important; overflow: visible !important; scrollbar-width: none; }
+  .report-page.stock-summary-report-page .report-content .overflow-x-auto::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+  .stock-summary-report-page,
+  .stock-summary-report-page .report-content,
+  .stock-summary-report-page .report-table-card,
+  .stock-summary-report-page .report-table-card > div { width: 100% !important; max-width: 100% !important; overflow: visible !important; }
+  .stock-summary-report-page * { scrollbar-width: none; }
+  .stock-summary-report-page *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(1) { width: 18%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(3) { width: 15%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(4),
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(5),
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(6),
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(7) { width: 11%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(8) { width: 11%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(9) { width: 12%; }
+  .stock-ledger-screen-header,
+  .stock-ledger-screen-opening,
+  .stock-ledger-screen-total { display: none !important; }
+  .stock-ledger-print-header,
+  .stock-ledger-print-opening,
+  .stock-ledger-print-total { display: table-row !important; }
+  .stock-ledger-report-page .report-table-card tbody tr:not(.stock-ledger-print-opening) > td:nth-child(7),
+  .stock-ledger-report-page .report-table-card tbody tr:not(.stock-ledger-print-opening) > td:nth-child(10) { display: none !important; }
+  .report-page.stock-ledger-report-page .report-content .report-table-card table { table-layout: auto; font-size: 7px !important; }
+  .report-page.stock-ledger-report-page .report-content .report-table-card th,
+  .report-page.stock-ledger-report-page .report-content .report-table-card td { padding: 2.5px 3px !important; font-size: 7px !important; line-height: 1.2; }
+  .report-page.stock-ledger-report-page .report-content .report-table-card tbody td:nth-child(n+6),
+  .report-page.stock-ledger-report-page .report-content .report-table-card tfoot td:nth-child(n+2) { white-space: nowrap; }
+  .stock-ledger-report-page .stock-ledger-alt-unit { font-size: inherit !important; }
+  .report-page.cash-bank-book-report-page .report-content .report-table-card th,
+  .report-page.cash-bank-book-report-page .report-content .report-table-card td { font-size: 9px !important; line-height: 1.25; }
+  .report-page.transaction-register-report-page .report-content .register-print-table th,
+  .report-page.transaction-register-report-page .report-content .register-print-table td { font-size: 9px !important; line-height: 1.25; }
+  .balance-sheet-report-page { page: balance-sheet-report; }
+  .balance-sheet-screen-heading,
+  .balance-sheet-status { display: none !important; }
+  .balance-sheet-report-page .formal-report-print-header,
+  .balance-sheet-report-page .formal-report-print-footer,
+  .balance-sheet-screen-statement { display: none !important; }
+  .balance-sheet-simple-print { display: block !important; color: #000; font-family: Arial, sans-serif; }
+  .balance-sheet-print-heading { padding: 2px 0 12px; text-align: center; }
+  .balance-sheet-print-heading h1 { margin: 0; font-family: Arial, sans-serif; font-size: 15px; font-weight: 700; }
+  .balance-sheet-print-heading h2 { margin: 7px 0 1px; font-family: Arial, sans-serif; font-size: 14px; font-weight: 700; }
+  .balance-sheet-print-heading p { margin: 2px 0 0; font-size: 9px; }
+  .balance-sheet-print-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); align-items: stretch; border-top: 1px solid #111; }
+  .balance-sheet-print-side { display: flex; min-width: 0; min-height: 330px; flex-direction: column; }
+  .balance-sheet-print-side + .balance-sheet-print-side { border-left: 1px solid #111; }
+  .balance-sheet-print-side-title { display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid #111; padding: 3px 7px; font-size: 10px; }
+  .balance-sheet-print-side-title strong { letter-spacing: .24em; }
+  .balance-sheet-print-side-title span { font-size: 8.5px; }
+  .report-page.balance-sheet-report-page .report-content .balance-sheet-print-side table { width: 100% !important; table-layout: fixed; border: 0 !important; border-collapse: collapse !important; color: #000; font-family: Arial, sans-serif; font-size: 9px !important; }
+  .report-page.balance-sheet-report-page .report-content .balance-sheet-print-side td { border: 0 !important; padding: 2.5px 7px !important; overflow-wrap: normal; line-height: 1.15; }
+  .report-page.balance-sheet-report-page .report-content .balance-sheet-print-side td:first-child { width: auto; }
+  .report-page.balance-sheet-report-page .report-content .balance-sheet-print-side td:last-child { width: 34%; text-align: right; white-space: nowrap; }
+  .balance-sheet-print-group td { padding-top: 5px !important; font-weight: 700; }
+  .balance-sheet-print-ledger td:first-child { font-style: italic; }
+  .balance-sheet-print-ledger td:last-child { font-style: italic; text-decoration: underline; text-underline-offset: 2px; }
+  .balance-sheet-print-spacer { min-height: 70px; flex: 1; }
+  .balance-sheet-print-total { display: grid; grid-template-columns: minmax(0, 1fr) 34%; border-top: 1px solid #111; border-bottom: 3px double #111; padding: 3px 7px; font-size: 10px; }
+  .balance-sheet-print-total strong { letter-spacing: .24em; }
+  .balance-sheet-print-total b { text-align: right; white-space: nowrap; }
+  .profit-loss-report-page { page: balance-sheet-report; }
+  .profit-loss-report-page .formal-report-print-header,
+  .profit-loss-report-page .formal-report-print-footer,
+  .profit-loss-screen-statement { display: none !important; }
+  .profit-loss-simple-print { display: block !important; color: #000; font-family: Arial, sans-serif; }
+  .profit-loss-print-columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); border-top: 1px solid #111; }
+  .profit-loss-print-columns > :nth-child(even) { border-left: 1px solid #111; }
+  .profit-loss-print-section { display: flex; min-width: 0; flex-direction: column; padding-top: 6px; }
+  .report-page.profit-loss-report-page .report-content .profit-loss-print-section table { width: 100% !important; table-layout: fixed; border: 0 !important; border-collapse: collapse !important; color: #000; font-family: Arial, sans-serif; font-size: 9px !important; }
+  .report-page.profit-loss-report-page .report-content .profit-loss-print-section td { border: 0 !important; padding: 2.5px 7px !important; overflow-wrap: normal; line-height: 1.15; }
+  .report-page.profit-loss-report-page .report-content .profit-loss-print-section td:last-child { width: 34%; text-align: right; white-space: nowrap; }
+  .report-page.profit-loss-report-page .balance-sheet-print-group td { padding-top: 5px !important; font-weight: 700; }
+  .report-page.profit-loss-report-page .balance-sheet-print-ledger td:first-child { font-style: italic; }
+  .report-page.profit-loss-report-page .balance-sheet-print-ledger td:last-child { font-style: italic; text-decoration: underline; text-underline-offset: 2px; }
+  .profit-loss-print-result td { padding-top: 5px !important; font-style: italic; font-weight: 700; }
+  .profit-loss-print-spacer { min-height: 10px; flex: 1; }
+  .profit-loss-print-subtotal { display: grid; grid-template-columns: minmax(0, 1fr) 34%; border-top: 1px solid #111; padding: 3px 7px; font-size: 9px; }
+  .profit-loss-print-subtotal b { border-bottom: 1px solid #111; text-align: right; white-space: nowrap; }
+  .profit-loss-print-columns > .balance-sheet-print-total { border-top: 1px solid #111; }
+  .trial-balance-report-page { page: balance-sheet-report; }
+  .trial-balance-report-page .formal-report-print-header,
+  .trial-balance-report-page .formal-report-print-footer,
+  .trial-balance-screen-statement { display: none !important; }
+  .trial-balance-simple-print { display: block !important; color: #000; font-family: Arial, sans-serif; }
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table { width: 100% !important; table-layout: fixed; border: 0 !important; border-collapse: collapse !important; color: #000; font-family: Arial, sans-serif; font-size: 9px !important; }
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table th,
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table td { border: 0 !important; padding: 2.5px 5px !important; overflow-wrap: normal; line-height: 1.12; }
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table thead th { border-top: 1px solid #111 !important; border-bottom: 1px solid #111 !important; background: transparent !important; color: #000 !important; font-weight: 600; text-align: center; }
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table thead th + th { border-left: 1px solid #111 !important; }
+  .trial-balance-print-table col.trial-balance-print-particulars { width: 28% !important; }
+  .trial-balance-print-table col:not(.trial-balance-print-particulars) { width: 18% !important; }
+  .trial-balance-print-table thead tr:first-child th:nth-child(3) { width: 36% !important; }
+  .trial-balance-print-table th:first-child,
+  .trial-balance-print-table td:first-child { text-align: left !important; }
+  .trial-balance-print-table tbody td:not(:first-child),
+  .trial-balance-print-table tfoot td:not(:first-child) { overflow: hidden; text-align: right; white-space: nowrap; }
+  .trial-balance-print-group td { padding-top: 5px !important; font-weight: 700; }
+  .trial-balance-print-group td:nth-child(3),
+  .trial-balance-print-group td:nth-child(4) { text-decoration: underline; text-underline-offset: 2px; }
+  .trial-balance-print-ledger td { font-style: italic; }
+  .report-page.trial-balance-report-page .report-content .trial-balance-print-table tfoot td { border-top: 1px solid #111 !important; border-bottom: 3px double #111 !important; font-weight: 700; }
+  .trial-balance-print-table tfoot td:first-child { letter-spacing: .24em; }
+  .report-page.daybook-report-page .report-content .report-table-card table { table-layout: fixed; }
+  .daybook-report-page .report-table-card th:nth-child(1) { width: 13%; }
+  .daybook-report-page .report-table-card th:nth-child(2) { width: 18%; }
+  .daybook-report-page .report-table-card th:nth-child(3) { width: 15%; }
+  .daybook-report-page .report-table-card th:nth-child(4) { width: 24%; }
+  .daybook-report-page .report-table-card th:nth-child(6),
+  .daybook-report-page .report-table-card th:nth-child(7) { width: 15%; }
+  .report-page.daybook-report-page .report-content .report-table-card th:nth-child(6),
+  .report-page.daybook-report-page .report-content .report-table-card td:nth-child(6),
+  .report-page.daybook-report-page .report-content .report-table-card th:nth-child(7),
+  .report-page.daybook-report-page .report-content .report-table-card td:nth-child(7) { padding-left: 2px !important; padding-right: 2px !important; font-size: 8.5px !important; white-space: nowrap; }
+  .report-page.daybook-report-page .report-content .report-table-card td.debit-amt,
+  .report-page.daybook-report-page .report-content .report-table-card td.credit-amt { font-size: 10px !important; font-weight: 600; }
+  .report-page.daybook-report-page .report-content .report-table-card th:nth-child(1),
+  .report-page.daybook-report-page .report-content .report-table-card td:nth-child(1) { padding-left: 1px !important; padding-right: 1px !important; font-size: 9px !important; white-space: nowrap; }
   .report-summary > div,
   .report-table-card { box-shadow: none !important; }
   .report-table-card { overflow: visible !important; }
@@ -177,6 +388,36 @@
   .report-th { padding: 5px 6px !important; font-size: 8px !important; }
   .report-td { padding: 5px 6px !important; }
   .report-table-card tr { break-inside: avoid; }
+  .report-page:not(.ledger-report-page) .report-content > :not(.formal-report-print-header):not(.formal-report-print-footer):not(.report-controls):not(.report-summary) { margin-top: 0 !important; margin-bottom: 0 !important; }
+  .report-page:not(.ledger-report-page) .report-content table { width: 100% !important; min-width: 0 !important; border-collapse: collapse !important; color: #111827; font-family: Arial, sans-serif; font-size: 8px !important; }
+  .report-page:not(.ledger-report-page) .report-content table thead { display: table-header-group; }
+  .report-page:not(.ledger-report-page) .report-content table tfoot { display: table-footer-group; }
+  .report-page:not(.ledger-report-page) .report-content table th,
+  .report-page:not(.ledger-report-page) .report-content table td { border: 1px solid #9ca3af !important; padding: 4px !important; vertical-align: middle; overflow-wrap: anywhere; }
+  .report-page:not(.ledger-report-page) .report-content table th { background: #f3f4f6 !important; color: #111827 !important; font-weight: 700; }
+  .report-page:not(.ledger-report-page) .report-content table tr { break-inside: avoid; }
+  .report-page:not(.ledger-report-page) .report-content .report-table-card,
+  .report-page:not(.ledger-report-page) .report-content > .overflow-hidden { border: 0 !important; border-radius: 0 !important; box-shadow: none !important; }
+  .ledger-report-page .report-table-card { border: 1px solid #9ca3af !important; border-radius: 0 !important; }
+  .ledger-report-page .report-table-card table { width: 100% !important; table-layout: fixed; font-size: 8px; }
+  .ledger-report-page .report-table-card th,
+  .ledger-report-page .report-table-card td { overflow-wrap: anywhere; vertical-align: top; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(1),
+  .ledger-report-page .ledger-transaction-table td:nth-child(1) { width: 10%; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(2),
+  .ledger-report-page .ledger-transaction-table td:nth-child(2) { width: 12%; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(3),
+  .ledger-report-page .ledger-transaction-table td:nth-child(3) { width: 13%; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(4),
+  .ledger-report-page .ledger-transaction-table td:nth-child(4) { width: 25%; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(5),
+  .ledger-report-page .ledger-transaction-table td:nth-child(5) { display: none !important; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(6),
+  .ledger-report-page .ledger-transaction-table td:nth-child(6),
+  .ledger-report-page .ledger-transaction-table th:nth-child(7),
+  .ledger-report-page .ledger-transaction-table td:nth-child(7) { width: 12%; }
+  .ledger-report-page .ledger-transaction-table th:nth-child(8),
+  .ledger-report-page .ledger-transaction-table td:nth-child(8) { width: 16%; }
   .report-summary > div { break-inside: avoid; box-shadow: none !important; }
   .report-print-columns > .report-table-card { break-inside: avoid; }
   .report-section-header { padding: 6px !important; }

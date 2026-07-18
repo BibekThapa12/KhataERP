@@ -298,6 +298,7 @@ export function getLedgerRows(
   fromDate: string,
   toDate: string,
   includeCancelled = false,
+  fiscalStartDate?: string,
 ): LedgerReport {
   const account = accounts.find(item => item.id === accountId) || null
   if (!account) {
@@ -306,13 +307,20 @@ export function getLedgerRows(
 
   const fromKey = makeBsKey(fromDate)
   const toKey = makeBsKey(toDate)
+  const fiscalStartKey = fiscalStartDate ? makeBsKey(fiscalStartDate) : null
   const accountMap = new Map(accounts.map(item => [item.id, item]))
   const side = normalSide(account.type)
   const movement = (debit: number, credit: number) => side === 'debit' ? debit - credit : credit - debit
-  let openingBalance = account.opening_balance || 0
+  const isNominalAccount = account.type === 'Income' || account.type === 'Expense'
+  let openingBalance = isNominalAccount && fiscalStartKey !== null ? 0 : account.opening_balance || 0
 
   for (const voucher of vouchers) {
-    if (voucher.cancelled || voucherKey(voucher) >= fromKey) continue
+    const key = voucherKey(voucher)
+    if (voucher.cancelled || key >= fromKey) continue
+    // Income and Expense accounts close at every fiscal year end. Their report
+    // opening is therefore only the current fiscal year's activity before the
+    // selected From date; balance-sheet accounts continue carrying forward.
+    if (isNominalAccount && fiscalStartKey !== null && key < fiscalStartKey) continue
     for (const line of voucher.lines || []) {
       if (line.account_id === accountId) openingBalance = round2(openingBalance + movement(line.debit || 0, line.credit || 0))
     }

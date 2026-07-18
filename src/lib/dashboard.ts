@@ -1,6 +1,7 @@
-import type { Account, Item, Voucher } from '@/types'
+import type { Account, AccountCategory, Item, Voucher } from '@/types'
 import { addDaysToBs, adToBs, bsToAd, makeBsKey, parseBsDate, todayBs } from '@/lib/nepaliDate'
 import { round2 } from '@/lib/engine'
+import { categoryDescendantIds } from '@/lib/categoryHierarchy'
 
 export type DashboardGrouping = 'daily' | 'weekly' | 'monthly'
 
@@ -197,4 +198,52 @@ export function topSellingItems(vouchers: Voucher[], items: Item[], from: string
 
 export function accountBalance(account: Account | undefined) {
   return round2(account?.balance || 0)
+}
+
+export interface DashboardPerformanceAccountIds {
+  sales: string
+  salesReturn: string
+  purchase: string
+  purchaseReturn: string
+}
+
+export function computeDashboardPerformance(
+  periodAccounts: Account[],
+  categories: AccountCategory[],
+  systemIds: DashboardPerformanceAccountIds,
+) {
+  const categoryIds = (name: string, type: Account['type']) => {
+    const ids = new Set<string>()
+    for (const category of categories.filter(entry => entry.account_type === type && entry.name.trim().toLowerCase() === name.toLowerCase())) {
+      ids.add(category.id)
+      categoryDescendantIds(categories, category.id).forEach(id => ids.add(id))
+    }
+    return ids
+  }
+  const salesCategoryIds = categoryIds('Sales Accounts', 'Income')
+  const purchaseCategoryIds = categoryIds('Purchase Accounts', 'Expense')
+  const inGroup = (account: Account, ids: Set<string>, groupName: string) =>
+    (!!account.category_id && ids.has(account.category_id)) || account.group.trim().toLowerCase() === groupName.toLowerCase()
+
+  const salesAccountIds = new Set(periodAccounts.filter(account => account.type === 'Income' && inGroup(account, salesCategoryIds, 'Sales Accounts')).map(account => account.id))
+  salesAccountIds.add(systemIds.sales)
+  salesAccountIds.add(systemIds.salesReturn)
+
+  const purchaseAccountIds = new Set(periodAccounts.filter(account => account.type === 'Expense' && inGroup(account, purchaseCategoryIds, 'Purchase Accounts')).map(account => account.id))
+  purchaseAccountIds.add(systemIds.purchase)
+  purchaseAccountIds.add(systemIds.purchaseReturn)
+
+  const sumBalances = (ids: Set<string>) => round2(periodAccounts
+    .filter(account => ids.has(account.id))
+    .reduce((sum, account) => sum + (account.balance || 0), 0))
+
+  return {
+    // Return accounts already have opposite (negative) natural balances, so
+    // summing the complete Sales/Purchase group nets them exactly once.
+    totalSales: sumBalances(salesAccountIds),
+    totalPurchases: sumBalances(purchaseAccountIds),
+    totalExpenses: round2(periodAccounts
+      .filter(account => account.type === 'Expense' && !purchaseAccountIds.has(account.id))
+      .reduce((sum, account) => sum + (account.balance || 0), 0)),
+  }
 }

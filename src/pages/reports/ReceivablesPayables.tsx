@@ -16,6 +16,7 @@ import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { ReportActions } from '@/components/reports/ReportActions'
+import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { VoucherDetail } from '@/components/tables/VoucherTable'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
@@ -171,12 +172,7 @@ export function ReceivablesPayablesPage() {
   return <div className="report-page">
     <PageHeader title={pageTitle} description={pageDescription} action={<ReportActions onExport={exportCsv} />} />
     <PageContent className="report-content space-y-4">
-      <div className="report-print-header hidden">
-        <h1>{company?.name || 'KhataERP'}</h1>
-        <p>{title} | As of {fmtDate(asOf)} | Basis: due date (invoice date fallback)</p>
-        <p>View: {printDetails ? 'Detailed' : 'Summary'}{activeBucket ? ` | Bucket: ${bucketLabels[activeBucket]}` : ''}{overdueOnly ? ' | Overdue only' : ''}{search ? ` | Search: ${search}` : ''}</p>
-        <p>Generated {generatedAt}</p>
-      </div>
+      <FormalReportPrintHeader company={company} title={title} periodLabel={`As of ${fmtDate(asOf)}`} detailLabel={`${printDetails ? 'Detailed' : 'Summary'} view${activeBucket ? ` · Bucket: ${bucketLabels[activeBucket]}` : ''}${overdueOnly ? ' · Overdue only' : ''}${search ? ` · Search: ${search}` : ''} · Generated ${generatedAt}`} />
 
       <Card className="report-controls"><CardContent className="space-y-3 p-4">
         <div className="flex flex-wrap items-end gap-3">
@@ -218,6 +214,7 @@ export function ReceivablesPayablesPage() {
         </table></div></Card>
         <div className="ageing-print-detail"><DetailedPrintTable rows={filteredRows} getDocuments={matchingDocuments} showUnaged={!activeBucket && !overdueOnly} /></div>
       </>)}
+      <FormalReportPrintFooter />
     </PageContent>
     <Dialog open={!!selectedVoucher} onOpenChange={open => !open && setSelectedVoucher(null)}><DialogContent className="max-h-[85vh] max-w-2xl overflow-y-auto"><DialogHeader><DialogTitle>{selectedVoucher?.type} {selectedVoucher?.invoice_no || selectedVoucher?.seq}</DialogTitle></DialogHeader>{selectedVoucher && <VoucherDetail voucher={selectedVoucher} />}</DialogContent></Dialog>
   </div>

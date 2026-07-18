@@ -34,6 +34,19 @@ describe('management reports', () => {
     expect(report.closing).toBe(100)
   })
 
+  it('does not carry previous-year Expense balances into group openings', () => {
+    const expenseCategories = [category('expenses', 'Expenses', 'Expense'), category('indirect', 'Indirect Expenses', 'Expense', 'expenses')]
+    const expenseAccounts = [account('rent', 'Rent', 'Expense', 'indirect', 500), account('power', 'Power', 'Expense', 'indirect', 0)]
+    const movements = [
+      voucher('v1', 'Journal', '2083-03-31', 100, [{ account_id: 'rent', debit: 100, credit: 0 }]),
+      voucher('v2', 'Journal', '2083-04-15', 40, [{ account_id: 'rent', debit: 25, credit: 0 }, { account_id: 'power', debit: 15, credit: 0 }]),
+    ]
+    const report = getGroupReport('expenses', expenseCategories, expenseAccounts, movements, '2083-05-01', '2083-05-31', false, '2083-04-01')
+
+    expect(report.opening).toBe(40)
+    expect(report.summary.map(row => [row.account.id, row.opening])).toEqual([['power', 15], ['rent', 25]])
+  })
+
   it('uses deterministic FIFO for legacy receipts and exposes overpayments', () => {
     const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
     const invoices = [
@@ -60,17 +73,31 @@ describe('management reports', () => {
     expect(report.documents.find(row => row.voucher.id === 'i2')?.outstanding).toBe(50)
   })
 
-  it('reduces outstanding and register net by party returns', () => {
+  it('keeps sales and sales returns in separate registers', () => {
     const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
     const invoice = voucher('i1','Sales','2083-04-01',100,[{account_id:'party-c',debit:100,credit:0}],{party_account_id:'party-c',subtotal:90,vat_amount:10})
     const returned = voucher('sr1','Sales Return','2083-04-02',25,[{account_id:'party-c',debit:0,credit:25}],{party_account_id:'party-c',original_voucher_id:'i1',settlement_mode:'party'})
     expect(getOutstandingReport('receivable',[party],accounts,[invoice,returned],'2083-04-20').total_outstanding).toBe(75)
-    const register = getRegister('sales',[invoice,returned],[party],'2083-04-01','2083-04-30')
-    expect(register.rows.map(row => row.voucher.id)).toEqual(['i1', 'sr1'])
-    expect(register.rows[1].voucher.type).toBe('Sales Return')
-    expect(register.rows[1].voucher.date_bs).toBe('2083-04-02')
-    expect(register.returns).toBe(25)
-    expect(register.net).toBe(75)
+    const salesRegister = getRegister('sales',[invoice,returned],[party],'2083-04-01','2083-04-30')
+    const returnRegister = getRegister('sales-return',[invoice,returned],[party],'2083-04-01','2083-04-30')
+    expect(salesRegister.rows.map(row => row.voucher.id)).toEqual(['i1'])
+    expect(salesRegister.net).toBe(100)
+    expect(returnRegister.rows.map(row => row.voucher.id)).toEqual(['sr1'])
+    expect(returnRegister.rows[0].voucher.type).toBe('Sales Return')
+    expect(returnRegister.rows[0].voucher.date_bs).toBe('2083-04-02')
+    expect(returnRegister.returns).toBe(25)
+    expect(returnRegister.net).toBe(25)
+  })
+
+  it('keeps purchases and purchase returns in separate registers', () => {
+    const supplier: Party = { id:'s1', company_id:companyId, name:'Supplier Co', type:'supplier', account_id:'party-s' }
+    const bill = voucher('p1','Purchase','2083-04-01',300,[{account_id:'party-s',debit:0,credit:300}],{party_account_id:'party-s',subtotal:280,vat_amount:20})
+    const returned = voucher('pr1','Purchase Return','2083-04-02',60,[{account_id:'party-s',debit:60,credit:0}],{party_account_id:'party-s',original_voucher_id:'p1',subtotal:55,vat_amount:5})
+
+    expect(getRegister('purchase',[bill,returned],[supplier],'2083-04-01','2083-04-30').rows.map(row => row.voucher.id)).toEqual(['p1'])
+    const returnRegister = getRegister('purchase-return',[bill,returned],[supplier],'2083-04-01','2083-04-30')
+    expect(returnRegister.rows.map(row => row.voucher.id)).toEqual(['pr1'])
+    expect(returnRegister.net).toBe(60)
   })
 
   it('ages supplier bills and reconciles payments on the credit side', () => {

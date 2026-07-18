@@ -18,10 +18,11 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { Voucher } from '@/types'
+import type { Account, Company, Party, Voucher } from '@/types'
 
 type Mode = 'ledger' | 'group'
 type View = 'summary' | 'transactions'
+type StatementRow = ReturnType<typeof getLedgerRows>['rows'][number] & { account?: { name: string } | null; displayBalance: number }
 
 export function LedgerReportPage() {
   const { company, rawAccounts, accountCategories, items, vouchers, parties } = useAppStore()
@@ -48,7 +49,6 @@ export function LedgerReportPage() {
     setSearchParams(mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }, { replace: true })
   }, [mode, targetId, setSearchParams])
 
-  const baseLedger = useMemo(() => getLedgerRows(mode === 'ledger' ? targetId : '', rawAccounts, vouchers, from, to, showCancelled), [mode, targetId, rawAccounts, vouchers, from, to, showCancelled])
   const retainedAccountId = company ? resolveSystemAccountId(rawAccounts, company.id, 'retained_earnings') : ''
   const reportFiscalStart = useMemo(() => {
     const currentStart = fiscalYearStartBs(company)
@@ -56,6 +56,7 @@ export function LedgerReportPage() {
     const fromYear = Number(from.slice(0, 4))
     return `${from.slice(5) >= monthDay ? fromYear : fromYear - 1}-${monthDay}`
   }, [company, from])
+  const baseLedger = useMemo(() => getLedgerRows(mode === 'ledger' ? targetId : '', rawAccounts, vouchers, from, to, showCancelled, reportFiscalStart), [mode, targetId, rawAccounts, vouchers, from, to, showCancelled, reportFiscalStart])
   const retainedBalance = useMemo(() => {
     if (mode !== 'ledger' || targetId !== retainedAccountId || !company) return 0
     const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
@@ -83,7 +84,7 @@ export function LedgerReportPage() {
       closing_balance: round2(baseLedger.closing_balance + retainedBalance),
     }
   }, [mode, targetId, retainedAccountId, retainedBalance, baseLedger, reportFiscalStart, from])
-  const group = useMemo(() => getGroupReport(mode === 'group' ? targetId : '', accountCategories, rawAccounts, vouchers, from, to, showCancelled), [mode, targetId, accountCategories, rawAccounts, vouchers, from, to, showCancelled])
+  const group = useMemo(() => getGroupReport(mode === 'group' ? targetId : '', accountCategories, rawAccounts, vouchers, from, to, showCancelled, reportFiscalStart), [mode, targetId, accountCategories, rawAccounts, vouchers, from, to, showCancelled, reportFiscalStart])
   const partyByAccount = useMemo(() => new Map(parties.map(party => [party.account_id, party])), [parties])
   const title = mode === 'ledger' ? ledger.account?.name || 'Ledger' : group.category?.name || 'Account Group'
   const opening = mode === 'ledger' ? ledger.opening_balance : group.opening
@@ -91,6 +92,13 @@ export function LedgerReportPage() {
   const credit = mode === 'ledger' ? ledger.total_credit : group.total_credit
   const closing = mode === 'ledger' ? ledger.closing_balance : group.closing
   const balanceAccount = mode === 'ledger' ? ledger.account : group.summary[0]?.account || null
+  const statementRows: StatementRow[] = mode === 'ledger'
+    ? ledger.rows.map(row => ({ ...row, account: ledger.account, displayBalance: row.running_balance }))
+    : group.transactions.map(row => ({ ...row, displayBalance: row.group_running_balance }))
+  const statementParty = mode === 'ledger' && ledger.account ? partyByAccount.get(ledger.account.id) : undefined
+  const statementGroup = mode === 'ledger'
+    ? categoryPath(accountCategories, ledger.account?.category_id) || ledger.account?.group || '-'
+    : categoryPath(accountCategories, group.category?.id) || group.category?.name || '-'
 
   const exportCsv = () => {
     if (mode === 'group' && view === 'summary') {
@@ -102,27 +110,87 @@ export function LedgerReportPage() {
   }
 
   const switchMode = (next: Mode) => { setMode(next); setTargetId(''); setView(next === 'group' ? 'summary' : 'transactions') }
-  return <div className="report-page">
+  return <div className="report-page ledger-report-page">
     <PageHeader title="Ledger / Account Group" description="Ledger movements and recursive category reports" action={<div className="flex gap-2"><Button variant="outline" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button></div>} />
     <PageContent className="report-content space-y-4">
-      <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>{title} | {fmtDate(from)} to {fmtDate(to)}</p></div>
+      <PrintableLedgerStatement company={company} mode={mode} title={title} groupLabel={statementGroup} account={balanceAccount} party={statementParty} from={from} to={to} opening={opening} debit={debit} credit={credit} closing={closing} rows={statementRows} />
       <Card className="report-controls"><CardContent className="space-y-4 p-4">
         <div className="flex flex-wrap gap-2"><Button size="sm" variant={mode === 'ledger' ? 'default' : 'outline'} onClick={() => switchMode('ledger')}>Ledger</Button><Button size="sm" variant={mode === 'group' ? 'default' : 'outline'} onClick={() => switchMode('group')}>Group</Button>{mode === 'group' && <><span className="mx-1 border-l" /><Button size="sm" variant={view === 'summary' ? 'default' : 'outline'} onClick={() => setView('summary')}>Summary</Button><Button size="sm" variant={view === 'transactions' ? 'default' : 'outline'} onClick={() => setView('transactions')}>Transactions</Button></>}</div>
         <div className="max-w-xl space-y-1.5"><Label>{mode === 'ledger' ? 'Ledger Account' : 'Account Category'}</Label><SearchableSelect value={targetId} onValueChange={setTargetId} placeholder={mode === 'ledger' ? 'Select ledger account' : 'Select account group'} searchPlaceholder="Search..." options={mode === 'ledger' ? sortedAccounts.map(account => ({ value: account.id, label: account.name, group: account.type, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${partyByAccount.get(account.id)?.name || ''}` })) : categories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), group: category.account_type, searchText: categoryPath(accountCategories, category.id) }))} /></div>
         <div className="flex flex-wrap items-end justify-between gap-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /><label className="flex h-9 items-center gap-2 text-sm"><input type="checkbox" checked={showCancelled} onChange={event => setShowCancelled(event.target.checked)} className="h-4 w-4 accent-primary" />Show cancelled</label></div>
       </CardContent></Card>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-3 report-summary"><Card><CardContent className="p-4"><p className="text-xs uppercase text-muted-foreground">Opening</p><p className="mt-1 font-serif text-lg font-bold num">{formatLedgerBalance(opening, balanceAccount)}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-xs uppercase text-muted-foreground">Movement</p><p className="mt-1 text-sm num">Dr {fmtMoney(debit)} / Cr {fmtMoney(credit)}</p></CardContent></Card><Card><CardContent className="p-4"><p className="text-xs uppercase text-muted-foreground">Closing</p><p className="mt-1 font-serif text-lg font-bold num">{formatLedgerBalance(closing, balanceAccount)}</p></CardContent></Card></div>
-      <Card className="report-table-card overflow-hidden"><div className="overflow-x-auto">
-        {mode === 'group' && view === 'summary' ? <table className="w-full min-w-[720px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Ledger</th><th className="report-th text-left">Type</th><th className="report-th text-right">Opening</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Closing</th></tr></thead><tbody>{group.summary.map(row => <tr key={row.account.id} className="border-t hover:bg-muted/30"><td className="report-td font-medium"><a href={`/reports/ledger?account=${encodeURIComponent(row.account.id)}`} className="hover:underline">{row.account.name}</a></td><td className="report-td text-muted-foreground">{row.account.type}</td><td className="report-td text-right num">{formatLedgerBalance(row.opening, row.account)}</td><td className="report-td text-right num">{fmtMoney(row.debit)}</td><td className="report-td text-right num">{fmtMoney(row.credit)}</td><td className="report-td text-right num font-semibold">{formatLedgerBalance(row.closing, row.account)}</td></tr>)}</tbody></table> : <TransactionTable rows={mode === 'ledger' ? ledger.rows.map(row => ({ ...row, account: ledger.account, displayBalance: row.running_balance })) : group.transactions.map(row => ({ ...row, displayBalance: row.group_running_balance }))} onSelect={setSelected} />}
+      <Card className="ledger-screen-table report-table-card overflow-hidden"><div className="overflow-x-auto">
+        {mode === 'group' && view === 'summary' ? <table className="ledger-summary-table w-full min-w-[720px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Ledger</th><th className="report-th text-left">Type</th><th className="report-th text-right">Opening</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Closing</th></tr></thead><tbody>{group.summary.map(row => <tr key={row.account.id} className="border-t hover:bg-muted/30"><td className="report-td font-medium"><a href={`/reports/ledger?account=${encodeURIComponent(row.account.id)}`} className="hover:underline">{row.account.name}</a></td><td className="report-td text-muted-foreground">{row.account.type}</td><td className="report-td text-right num">{formatLedgerBalance(row.opening, row.account)}</td><td className="report-td text-right num">{fmtMoney(row.debit)}</td><td className="report-td text-right num">{fmtMoney(row.credit)}</td><td className="report-td text-right num font-semibold">{formatLedgerBalance(row.closing, row.account)}</td></tr>)}</tbody></table> : <TransactionTable rows={mode === 'ledger' ? ledger.rows.map(row => ({ ...row, account: ledger.account, displayBalance: row.running_balance })) : group.transactions.map(row => ({ ...row, displayBalance: row.group_running_balance }))} onSelect={setSelected} />}
       </div></Card>
     </PageContent>
     <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}><DialogContent className="max-w-4xl"><DialogHeader><DialogTitle>Voucher actions</DialogTitle></DialogHeader>{selected && <VoucherTable vouchers={[selected]} />}</DialogContent></Dialog>
   </div>
 }
 
-function TransactionTable({ rows, onSelect }: { rows: Array<ReturnType<typeof getLedgerRows>['rows'][number] & { account?: { name: string } | null; displayBalance: number }>; onSelect: (voucher: Voucher) => void }) {
-  return <table className="w-full min-w-[1000px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Ledger</th><th className="report-th text-left">Voucher</th><th className="report-th text-left">Particulars</th><th className="report-th text-left">Narration</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Balance</th></tr></thead><tbody>{rows.map((row, index) => {
+function PrintableLedgerStatement({ company, mode, title, groupLabel, account, party, from, to, opening, debit, credit, closing, rows }: {
+  company: Company | null
+  mode: Mode
+  title: string
+  groupLabel: string
+  account: Account | null
+  party?: Party
+  from: string
+  to: string
+  opening: number
+  debit: number
+  credit: number
+  closing: number
+  rows: StatementRow[]
+}) {
+  const label = mode === 'ledger' ? 'Ledger' : 'Group'
+  return <section className="ledger-print-statement hidden">
+    <header className="ledger-statement-heading">
+      <h1>{label} Statement</h1>
+      <h2>{company?.name || 'Company'}</h2>
+      {company?.address && <p>{company.address}</p>}
+      {company?.pan_vat && <p>PAN/VAT No: {company.pan_vat}</p>}
+    </header>
+    <div className="ledger-statement-meta">
+      <div>
+        <p><strong>{label} Name</strong><span>:</span><b>{title}</b></p>
+        <p><strong>Account Type</strong><span>:</span><b>{account?.type || '-'}</b></p>
+        {party?.address && <p><strong>Address</strong><span>:</span><b>{party.address}</b></p>}
+        {party?.phone && <p><strong>Phone</strong><span>:</span><b>{party.phone}</b></p>}
+      </div>
+      <div>
+        <p><strong>Group</strong><span>:</span><b>{groupLabel}</b></p>
+        <p><strong>Opening Balance</strong><span>:</span><b>{formatLedgerBalance(opening, account)}</b></p>
+        <p><strong>From Date (BS)</strong><span>:</span><b>{fmtDate(from)}</b></p>
+        <p><strong>To Date (BS)</strong><span>:</span><b>{fmtDate(to)}</b></p>
+      </div>
+    </div>
+    <table className="ledger-statement-table">
+      <thead><tr><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead>
+      <tbody>
+        <tr className="ledger-opening-row"><td /><td /><td /><td>Opening Balance</td><td>-</td><td>-</td><td>{formatLedgerBalance(opening, account)}</td></tr>
+        {rows.map((row, index) => {
+          const isCalculated = !row.voucher.company_id
+          const particulars = mode === 'group' && row.account?.name ? `${row.account.name} - ${row.particulars}` : row.particulars
+          return <tr key={`print-${row.voucher.id}-${index}`} className={row.cancelled ? 'ledger-cancelled-row' : ''}><td>{fmtDate(row.date_bs)}</td><td>{isCalculated ? 'Calculated' : row.voucher_type}</td><td>{row.voucher_no}</td><td>{particulars}</td><td>{row.debit ? fmtMoney(row.debit) : '-'}</td><td>{row.credit ? fmtMoney(row.credit) : '-'}</td><td>{formatLedgerBalance(row.displayBalance, account)}</td></tr>
+        })}
+        {!rows.length && <tr><td colSpan={7} className="ledger-empty-row">No movements in the selected period.</td></tr>}
+        <tr className="ledger-total-row"><td colSpan={4}>Total</td><td>{fmtMoney(debit)}</td><td>{fmtMoney(credit)}</td><td /></tr>
+        <tr className="ledger-closing-row"><td colSpan={6}>Closing Balance</td><td>{formatLedgerBalance(closing, account)}</td></tr>
+      </tbody>
+    </table>
+    <footer className="ledger-statement-footer">
+      <div><p>Prepared By: ____________________</p><p>Date: {fmtDate(to)}</p></div>
+      <div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div>
+      <p className="ledger-generated-note">This is a computer-generated report.</p>
+    </footer>
+  </section>
+}
+
+function TransactionTable({ rows, onSelect }: { rows: StatementRow[]; onSelect: (voucher: Voucher) => void }) {
+  return <table className="ledger-transaction-table w-full min-w-[1000px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Voucher Type</th><th className="report-th text-left">Voucher No.</th><th className="report-th text-left">Particulars</th><th className="report-th text-left">Narration</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Balance</th></tr></thead><tbody>{rows.map((row, index) => {
     const isCalculated = !row.voucher.company_id
-    return <tr key={`${row.voucher.id}-${row.account?.name}-${index}`} onClick={() => !isCalculated && onSelect(row.voucher)} className={`${isCalculated ? '' : 'cursor-pointer hover:bg-muted/30'} border-t ${row.cancelled ? 'opacity-50 line-through' : ''}`}><td className="report-td">{fmtDate(row.date_bs)}</td><td className="report-td font-medium">{row.account?.name}</td><td className="report-td">{isCalculated ? 'Calculated' : `${row.voucher_type} ${row.voucher_no}`}</td><td className="report-td">{row.particulars}</td><td className="report-td text-muted-foreground">{row.narration || '-'}</td><td className="report-td text-right num">{row.debit ? fmtMoney(row.debit) : '-'}</td><td className="report-td text-right num">{row.credit ? fmtMoney(row.credit) : '-'}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.displayBalance)}</td></tr>
+    const particulars = row.account?.name && rows.some(entry => entry.account?.name !== row.account?.name) ? `${row.account.name} - ${row.particulars}` : row.particulars
+    return <tr key={`${row.voucher.id}-${row.account?.name}-${index}`} onClick={() => !isCalculated && onSelect(row.voucher)} className={`${isCalculated ? '' : 'cursor-pointer hover:bg-muted/30'} border-t ${row.cancelled ? 'opacity-50 line-through' : ''}`}><td className="report-td">{fmtDate(row.date_bs)}</td><td className="report-td font-medium">{isCalculated ? 'Calculated' : row.voucher_type}</td><td className="report-td num">{row.voucher_no}</td><td className="report-td">{particulars}</td><td className="report-td text-muted-foreground">{row.narration || '-'}</td><td className="report-td text-right num">{row.debit ? fmtMoney(row.debit) : '-'}</td><td className="report-td text-right num">{row.credit ? fmtMoney(row.credit) : '-'}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.displayBalance)}</td></tr>
   })}{!rows.length && <tr><td colSpan={8} className="px-4 py-14 text-center text-muted-foreground">No movements in the selected period.</td></tr>}</tbody></table>
 }

@@ -210,6 +210,29 @@ export interface MasterChangeLog {
   created_at: string
 }
 
+export type ModuleStatus = 'active' | 'trial' | 'grace_period' | 'read_only' | 'disabled'
+export type ModuleBillingType = 'included' | 'monthly' | 'yearly' | 'one_time' | 'custom'
+export type ModulePaymentStatus = 'paid' | 'pending' | 'overdue' | 'waived' | 'cancelled'
+export interface AppModule { id:string; key:string; name:string; description?:string; default_price:number; is_active:boolean; created_at?:string }
+export interface CompanyModule {
+  id:string; company_id:string; module_id:string; is_enabled:boolean; status:ModuleStatus; billing_type:ModuleBillingType;
+  price:number; payment_status:ModulePaymentStatus; starts_at?:string|null; expires_at?:string|null;
+  settings:Record<string,unknown>; internal_notes?:string; enabled_by?:string; created_at?:string; updated_at?:string; module?:AppModule;
+}
+export type ChequePermission = 'cheque.view'|'cheque.create'|'cheque.edit'|'cheque.mark_cleared'|'cheque.mark_bounced'|'cheque.cancel'|'cheque.manage_banks'|'cheque.view_parties'|'cheque.view_reports'
+export interface ChequeBank {
+  id:string; company_id:string; ledger_account_id?:string|null; bank_name:string; branch_name?:string; account_number:string; institution_type?:string; source?:string;
+  account_holder_name?:string; contact_number?:string; notes?:string; is_active:boolean; created_by?:string; updated_by?:string; created_at?:string; updated_at?:string;
+}
+export type ChequeStatus = 'pending'|'cleared'|'bounced'|'cancelled'
+export interface Cheque {
+  id:string; company_id:string; cheque_number:string; bank_id:string; account_number:string; party_ledger_id:string; amount:number;
+  issue_date:string; issue_date_bs:string; issue_date_bs_key:number; due_date:string; due_date_bs:string; due_date_bs_key:number;
+  notes?:string; status:ChequeStatus; cleared_at?:string; bounced_at?:string; cancelled_at?:string; status_reason?:string;
+  linked_voucher_id?:string; cleared_to_account_id?:string; created_by?:string; updated_by?:string; created_at?:string; updated_at?:string;
+}
+export interface ChequeEvent { id:string; company_id:string; cheque_id?:string; bank_id?:string; action:string; old_values:Record<string,unknown>; new_values:Record<string,unknown>; actor_id?:string; created_at:string }
+
 // ─── Report Types ─────────────────────────────────────────────────────────────
 
 export interface TrialBalanceRow {

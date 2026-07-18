@@ -3,6 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { logAppError, supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
+import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 
 const LoginPage = lazy(() => import('@/pages/Login').then(m => ({ default: m.LoginPage })))
 const Dashboard = lazy(() => import('@/pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -31,6 +32,11 @@ const RegistersPage = lazy(() => import('@/pages/reports/Registers').then(m => (
 const CashBankBookPage = lazy(() => import('@/pages/reports/CashBankBook').then(m => ({ default: m.CashBankBookPage })))
 const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default: m.SettingsPage })))
 const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
+const CreateChequePage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.CreateChequePage })))
+const PendingChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.PendingChequesPage })))
+const ChequeBanksPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeBanksPage })))
+const ChequePartiesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequePartiesPage })))
+const ChequeDetailPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeDetailPage })))
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -123,6 +129,9 @@ export default function App() {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'account_categories' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'item_categories' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'company_modules' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheque_banks' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheques' }, scheduleRefresh)
       .subscribe()
 
     return () => {
@@ -198,6 +207,11 @@ export default function App() {
             <Route path="reports/cash-bank-book" element={<CashBankBookPage />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="developer" element={<DeveloperDashboard />} />
+            <Route path="cheques/new" element={<ChequeModuleGuard permission="cheque.create" write><CreateChequePage /></ChequeModuleGuard>} />
+            <Route path="cheques/pending" element={<ChequeModuleGuard><PendingChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/banks" element={<ChequeModuleGuard permission="cheque.manage_banks" write><ChequeBanksPage /></ChequeModuleGuard>} />
+            <Route path="cheques/parties" element={<ChequeModuleGuard permission="cheque.view_parties"><ChequePartiesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/:id" element={<ChequeModuleGuard><ChequeDetailPage /></ChequeModuleGuard>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -6,11 +6,12 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark
+  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
+import { chequeEntitlement } from '@/lib/cheques'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -25,6 +26,13 @@ const VOUCHER_SHORTCUTS = [
   { key: 'F8', label: 'Sales', type: 'Sales' },
   { key: 'F9', label: 'Purchase', type: 'Purchase' },
 ] as const satisfies ReadonlyArray<{ key: string; label: string; type: VoucherShortcutType }>
+
+const NAVIGATION_SHORTCUTS = [
+  { key: 'D', label: 'Daybook', to: '/reports/daybook' },
+  { key: 'P', label: 'Parties', to: '/parties' },
+  { key: 'S', label: 'Stock Summary', to: '/stock-report' },
+  { key: 'L', label: 'Ledger / Group', to: '/reports/ledger' },
+] as const
 
 const NAV_SECTIONS: {
   label: string
@@ -81,6 +89,15 @@ const NAV_SECTIONS: {
         ],
       },
       { to: '/vat-report', label: 'VAT Report', Icon: Percent },
+    ],
+  },
+  {
+    label: 'Cheque Management',
+    items: [
+      { to: '/cheques/new', label: 'Create Cheque', Icon: Plus },
+      { to: '/cheques/pending', label: 'Pending Cheques', Icon: Clock3 },
+      { to: '/cheques/banks', label: 'Banks', Icon: Landmark },
+      { to: '/cheques/parties', label: 'Parties', Icon: Users },
     ],
   },
 ]
@@ -150,6 +167,10 @@ export function AppShell() {
   const navigate = useNavigate()
   const location = useLocation()
   const vatEnabled = company?.vat_enabled ?? true
+  const companyModules = useAppStore(s => s.companyModules)
+  const chequePermissions = useAppStore(s => s.chequePermissions)
+  const chequeAccess = chequeEntitlement(companyModules.find(entry => entry.module?.key === 'cheque_management'))
+  const showChequeNavigation = chequeAccess.canRead && chequePermissions.includes('cheque.view')
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shortcutVoucher, setShortcutVoucher] = useState<VoucherShortcutType | null>(null)
@@ -181,17 +202,22 @@ export function AppShell() {
   useEffect(() => {
     const openVoucherFromKey = (event: KeyboardEvent) => {
       if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
-      const shortcut = VOUCHER_SHORTCUTS.find(entry => entry.key === event.key.toUpperCase())
-      if (!shortcut) return
+      const key = event.key.toUpperCase()
+      const voucherShortcut = VOUCHER_SHORTCUTS.find(entry => entry.key === key)
+      const navigationShortcut = NAVIGATION_SHORTCUTS.find(entry => entry.key === key)
+      if (!voucherShortcut && !navigationShortcut) return
+      const target = event.target as HTMLElement | null
+      if (target?.matches('input, textarea, select, [contenteditable="true"]')) return
       event.preventDefault()
       if (event.repeat) return
       if (document.querySelector('[role="dialog"][data-state="open"]')) return
       setMobileOpen(false)
-      setShortcutVoucher(shortcut.type)
+      if (voucherShortcut) setShortcutVoucher(voucherShortcut.type)
+      else if (navigationShortcut) { setShortcutVoucher(null); navigate(navigationShortcut.to) }
     }
     window.addEventListener('keydown', openVoucherFromKey)
     return () => window.removeEventListener('keydown', openVoucherFromKey)
-  }, [])
+  }, [navigate])
 
   const toggleSection = (label: string) => setOpenSections(current => {
     return current.has(label) ? new Set() : new Set([label])
@@ -243,9 +269,18 @@ export function AppShell() {
         {/* Nav */}
         <nav className="flex-1 px-2 py-3 space-y-4">
           {NAV_SECTIONS.map(section => {
+            if (section.label === 'Cheque Management' && !showChequeNavigation) return null
             const collapsible = section.label !== 'Overview'
             const expanded = !collapsible || openSections.has(section.label)
-            const visibleItems = section.items.filter(item => item.kind === 'group' || vatEnabled || item.to !== '/vat-report')
+            const visibleItems = section.items.filter(item => {
+              if (item.kind === 'group') return true
+              if (!vatEnabled && item.to === '/vat-report') return false
+              if (section.label !== 'Cheque Management') return true
+              if (item.to === '/cheques/new') return chequeAccess.canWrite && chequePermissions.includes('cheque.create')
+              if (item.to === '/cheques/banks') return chequeAccess.canWrite && chequePermissions.includes('cheque.manage_banks')
+              if (item.to === '/cheques/parties') return chequePermissions.includes('cheque.view_parties')
+              return chequePermissions.includes('cheque.view')
+            })
             return <div key={section.label}>
               {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium uppercase tracking-wider text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white">
                 <span>{section.label}</span><ChevronDown className={cn('ml-auto h-3.5 w-3.5 transition-transform duration-300 ease-out motion-reduce:transition-none', !expanded && '-rotate-90')} />
@@ -311,16 +346,21 @@ export function AppShell() {
 
       {/* Main */}
       <main className="compact-workspace flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Voucher shortcuts">
+        <div className="app-shortcuts flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Quick shortcuts">
           <div className="flex items-center gap-1.5 overflow-x-auto">
-            <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick vouchers</span>
+            <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick shortcuts</span>
             {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`New ${shortcut.label} Voucher (${shortcut.key})`}>
+              <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
+              <span>{shortcut.label}</span>
+            </button>)}
+            <span aria-hidden="true" className="mx-0.5 h-5 w-px flex-shrink-0 bg-border" />
+            {NAVIGATION_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { setMobileOpen(false); setShortcutVoucher(null); navigate(shortcut.to) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Open ${shortcut.label} (${shortcut.key})`}>
               <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
               <span>{shortcut.label}</span>
             </button>)}
           </div>
         </div>
-        <div className="min-h-0 flex-1 overflow-y-auto">
+        <div className="app-workspace-scroll min-h-0 flex-1 overflow-y-auto">
           <Outlet />
         </div>
       </main>

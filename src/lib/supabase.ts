@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, VoucherType } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, VoucherType, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
 import { adToBs, DEFAULT_FISCAL_YEAR_START_AD, makeBsKey, normalizeVoucherDates } from '@/lib/nepaliDate'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
@@ -292,7 +292,7 @@ export async function updateCompany(id: string, updates: Partial<Company>) {
 }
 
 export async function fetchDeveloperDashboardData() {
-  const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes] = await Promise.all([
+  const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes, modulesRes, companyModulesRes] = await Promise.all([
     supabase.from('companies').select('*').order('created_at', { ascending: false }),
     supabase.from('accounts').select('*'),
     supabase.from('parties').select('*'),
@@ -304,6 +304,8 @@ export async function fetchDeveloperDashboardData() {
       invoice_items:invoice_items(*)
     `).order('date_bs_key', { ascending: false }),
     supabase.from('app_events').select('*').order('created_at', { ascending: false }).limit(1000),
+    supabase.from('modules').select('*').order('name'),
+    supabase.from('company_modules').select('*,module:modules(*)'),
   ])
 
   for (const res of [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes]) {
@@ -317,6 +319,8 @@ export async function fetchDeveloperDashboardData() {
     items: (itemsRes.data || []) as Item[],
     vouchers: (vouchersRes.data || []).map(v => normalizeVoucherDates(v) as Voucher),
     events: eventsRes.error ? [] : (eventsRes.data || []),
+    modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
+    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
   }
 }
 
@@ -329,6 +333,38 @@ export async function deleteDeveloperCompany(id: string) {
   const { error } = await supabase.from('companies').delete().eq('id', id)
   if (error) throw error
 }
+
+export async function fetchModuleCatalogue(): Promise<AppModule[]> {
+  const {data,error}=await supabase.from('modules').select('*').order('name'); if(error) throw error; return (data||[]) as AppModule[]
+}
+export async function fetchCompanyModules(company_id?:string): Promise<CompanyModule[]> {
+  let query=supabase.from('company_modules').select('*,module:modules(*)'); if(company_id) query=query.eq('company_id',company_id)
+  const {data,error}=await query; if(error) throw error; return (data||[]) as CompanyModule[]
+}
+export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_id:string;module_id:string}) {
+  const {data:old}=await supabase.from('company_modules').select('*').eq('company_id',value.company_id).eq('module_id',value.module_id).maybeSingle()
+  const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('company_modules').upsert({...value,enabled_by:user?.id,updated_at:new Date().toISOString()},{onConflict:'company_id,module_id'}).select('*,module:modules(*)').single(); if(error) throw error
+  const actions:string[]=[]
+  if(!old||old.is_enabled!==data.is_enabled)actions.push(data.is_enabled?'module_enabled':'module_disabled')
+  if(old&&old.status!==data.status)actions.push('module_status_changed')
+  if(old&&old.payment_status!==data.payment_status)actions.push('module_payment_status_changed')
+  if(old&&(old.starts_at!==data.starts_at||old.expires_at!==data.expires_at))actions.push('module_dates_changed')
+  if(old&&Number(old.price)!==Number(data.price))actions.push('module_price_changed')
+  if(old&&JSON.stringify(old.settings)!==JSON.stringify(data.settings))actions.push('module_settings_changed')
+  for(const action of actions.length?actions:['module_updated'])await logChequeEvent(value.company_id,action,undefined,undefined,old||{},data)
+  return data as CompanyModule
+}
+export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
+  const {data,error}=await supabase.from('company_user_permissions').select('permission').eq('company_id',company_id); if(error) throw error; return (data||[]).map(row=>row.permission as ChequePermission)
+}
+export async function fetchChequeBanks(company_id:string):Promise<ChequeBank[]> { const {data,error}=await supabase.from('cheque_banks').select('*').eq('company_id',company_id).order('bank_name'); if(error) throw error; return (data||[]) as ChequeBank[] }
+export async function fetchCheques(company_id:string):Promise<Cheque[]> { const {data,error}=await supabase.from('cheques').select('*').eq('company_id',company_id).order('due_date_bs_key'); if(error) throw error; return (data||[]) as Cheque[] }
+export async function fetchChequeEvents(company_id:string,cheque_id?:string):Promise<ChequeEvent[]> { let query=supabase.from('cheque_events').select('*').eq('company_id',company_id).order('created_at',{ascending:false}); if(cheque_id) query=query.eq('cheque_id',cheque_id); const {data,error}=await query; if(error) throw error; return (data||[]) as ChequeEvent[] }
+export async function createChequeBank(value:Omit<ChequeBank,'id'|'created_at'|'updated_at'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheque_banks').insert({...value,created_by:user?.id,updated_by:user?.id}).select().single(); if(error) throw error; await logChequeEvent(value.company_id,'bank_created',undefined,data.id,{},data); return data as ChequeBank }
+export async function updateChequeBank(id:string,company_id:string,updates:Partial<ChequeBank>,old:ChequeBank) { const {data,error}=await supabase.from('cheque_banks').update({...updates,updated_at:new Date().toISOString()}).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.is_active===false?'bank_archived':'bank_updated',undefined,id,old,data); return data as ChequeBank }
+export async function createCheque(value:Omit<Cheque,'id'|'created_at'|'updated_at'|'status'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheques').insert({...value,status:'pending',created_by:user?.id,updated_by:user?.id}).select().single(); if(error) throw error; await logChequeEvent(value.company_id,'cheque_created',data.id,undefined,{},data); return data as Cheque }
+export async function updateCheque(id:string,company_id:string,updates:Partial<Cheque>,old:Cheque) { const {data,error}=await supabase.from('cheques').update(updates).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.status?`cheque_${updates.status}`:'cheque_updated',id,undefined,old,data); return data as Cheque }
+export async function logChequeEvent(company_id:string,action:string,cheque_id?:string,bank_id?:string,old_values:unknown={},new_values:unknown={}) { const {data:{user}}=await supabase.auth.getUser(); if(!user) return; const {error}=await supabase.from('cheque_events').insert({company_id,action,cheque_id,bank_id,old_values,new_values,actor_id:user.id}); if(error) throw error }
 
 // ─── Accounts ────────────────────────────────────────────────────────────────
 

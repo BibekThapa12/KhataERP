@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { buildDashboardSeries, createDashboardSeries, dashboardFiscalYearOptions, dashboardFiscalYearRange, dashboardGrouping, dashboardVouchersInRange, fiscalYearForBsDate, isPostedDashboardVoucher, topSellingItems } from './dashboard'
-import type { Item, Voucher } from '@/types'
+import { buildDashboardSeries, computeDashboardPerformance, createDashboardSeries, dashboardFiscalYearOptions, dashboardFiscalYearRange, dashboardGrouping, dashboardVouchersInRange, fiscalYearForBsDate, isPostedDashboardVoucher, topSellingItems } from './dashboard'
+import type { Account, AccountCategory, Item, Voucher } from '@/types'
 
 const voucher = (id: string, type: Voucher['type'], date_bs: string, total: number, extras: Partial<Voucher> = {}) => ({
   id, company_id: 'c', type, date: '2026-07-13', date_ad: '2026-07-13', date_bs,
@@ -46,5 +46,31 @@ describe('dashboard aggregation', () => {
     const sales = voucher('s', 'Sales', '2083-03-29', 100, { invoice_items: [{ item_id: 'tea', qty: 2, rate: 10, base_qty: 12 }, { item_id: 'rice', qty: 4, rate: 10 }] })
     const returned = voucher('r', 'Sales Return', '2083-03-29', 20, { invoice_items: [{ item_id: 'tea', qty: 1, rate: 10, base_qty: 2 }] })
     expect(topSellingItems([sales, returned], items, '2083-03-01', '2083-03-29').map(row => [row.itemId, row.qty])).toEqual([['tea', 10], ['rice', 4]])
+  })
+
+  it('nets returns once and separates purchase accounts from operating expenses', () => {
+    const categories = [
+      { id: 'sales', company_id: 'c', name: 'Sales Accounts', account_type: 'Income', is_system: true, is_archived: false },
+      { id: 'online-sales', company_id: 'c', name: 'Online Sales', account_type: 'Income', parent_category_id: 'sales', is_system: false, is_archived: false },
+      { id: 'purchases', company_id: 'c', name: 'Purchase Accounts', account_type: 'Expense', is_system: true, is_archived: false },
+      { id: 'local-purchases', company_id: 'c', name: 'Local Purchases', account_type: 'Expense', parent_category_id: 'purchases', is_system: false, is_archived: false },
+      { id: 'expenses', company_id: 'c', name: 'Indirect Expenses', account_type: 'Expense', is_system: true, is_archived: false },
+    ] as AccountCategory[]
+    const ledger = (id: string, type: Account['type'], group: string, category_id: string, balance: number): Account => ({
+      id, company_id: 'c', name: id, type, group, category_id, balance, opening_balance: 0, is_system: false, is_party: false,
+    })
+    const accounts = [
+      ledger('sales-account', 'Income', 'Sales Accounts', 'sales', 1000),
+      ledger('sales-return', 'Income', 'Sales Accounts', 'sales', -100),
+      ledger('web-sales', 'Income', 'Online Sales', 'online-sales', 50),
+      ledger('purchase-account', 'Expense', 'Purchase Accounts', 'purchases', 600),
+      ledger('purchase-return', 'Expense', 'Purchase Accounts', 'purchases', -60),
+      ledger('local-stock', 'Expense', 'Local Purchases', 'local-purchases', 25),
+      ledger('rent', 'Expense', 'Indirect Expenses', 'expenses', 120),
+    ]
+
+    expect(computeDashboardPerformance(accounts, categories, {
+      sales: 'sales-account', salesReturn: 'sales-return', purchase: 'purchase-account', purchaseReturn: 'purchase-return',
+    })).toEqual({ totalSales: 950, totalPurchases: 565, totalExpenses: 120 })
   })
 })

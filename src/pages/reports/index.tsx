@@ -20,6 +20,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { ReportActions } from '@/components/reports/ReportActions'
+import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
@@ -98,6 +99,32 @@ function HierarchicalTrialTable({ accounts, categories, values, openingDebit, op
   return <><ExpandCollapseControls className="border-b px-2 py-1" expanded={allExpanded} onToggle={() => setExpanded(allExpanded ? new Set() : new Set(expandableKeys))} /><div className="overflow-x-auto"><table className="w-full min-w-[980px] text-sm"><thead className="bg-muted/50"><tr><th rowSpan={2} className="report-th text-left align-middle">Category / Ledger</th><th rowSpan={2} className="report-th text-right align-middle">Opening Balance</th><th colSpan={2} className="report-th border-b text-center">Current Transactions</th><th rowSpan={2} className="report-th text-right align-middle">Closing Balance</th></tr><tr><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{nodes.map(node => <TrialNodeRows key={node.key} node={node} values={values} expanded={expanded} toggle={toggle} />)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num"><span className="block">{fmtMoney(openingDebit)} Dr</span><span className="block">{fmtMoney(openingCredit)} Cr</span></td><td className="report-td text-right num">{fmtMoney(movementDebit)}</td><td className="report-td text-right num">{fmtMoney(movementCredit)}</td><td className="report-td text-right num"><span className="block">{fmtMoney(closingDebit)} Dr</span><span className="block">{fmtMoney(closingCredit)} Cr</span></td></tr></tfoot></table></div></>
 }
 
+function TrialBalancePrintNodeRows({ node, values, depth = 0 }: { node: AccountReportTreeNode; values: Map<string, TrialPeriodValues>; depth?: number }) {
+  const totals = trialNodeValues(node, values)
+  return <Fragment>
+    <tr className="trial-balance-print-group">
+      <td style={{ paddingLeft: `${depth * 12}px` }}>{node.name}</td><td>{trialBalanceLabel(totals.opening)}</td><td>{totals.debit ? fmtMoney(totals.debit) : ''}</td><td>{totals.credit ? fmtMoney(totals.credit) : ''}</td><td>{trialBalanceLabel(totals.closing)}</td>
+    </tr>
+    {node.directAccounts.map(account => {
+      const row = values.get(account.id)!
+      return <tr key={account.id} className="trial-balance-print-ledger"><td style={{ paddingLeft: `${(depth + 1) * 12}px` }}>{account.name}</td><td>{trialBalanceLabel(row.opening)}</td><td>{row.debit ? fmtMoney(row.debit) : ''}</td><td>{row.credit ? fmtMoney(row.credit) : ''}</td><td>{trialBalanceLabel(row.closing)}</td></tr>
+    })}
+    {node.children.map(child => <TrialBalancePrintNodeRows key={child.key} node={child} values={values} depth={depth + 1} />)}
+  </Fragment>
+}
+
+function TrialBalancePrintTable({ accounts, categories, values, movementDebit, movementCredit }: { accounts: Account[]; categories: import('@/types').AccountCategory[]; values: Map<string, TrialPeriodValues>; movementDebit: number; movementCredit: number }) {
+  const nodes = buildAccountReportTree(accounts, categories)
+    .sort((left, right) => TRIAL_TYPE_ORDER.indexOf(left.type) - TRIAL_TYPE_ORDER.indexOf(right.type) || left.name.localeCompare(right.name))
+    .flatMap(node => /^(assets?|liabilit(?:y|ies)|equity|incomes?|expenses?)$/i.test(node.name) && !node.directAccounts.length ? node.children : [node])
+  return <table className="trial-balance-print-table">
+    <colgroup><col className="trial-balance-print-particulars" /><col /><col /><col /><col /></colgroup>
+    <thead><tr><th rowSpan={2}>Particulars</th><th rowSpan={2}>Opening<br />Balance</th><th colSpan={2}>Transactions</th><th rowSpan={2}>Closing<br />Balance</th></tr><tr><th>Debit</th><th>Credit</th></tr></thead>
+    <tbody>{nodes.map(node => <TrialBalancePrintNodeRows key={node.key} node={node} values={values} />)}</tbody>
+    <tfoot><tr><td>Grand Total</td><td /><td>{fmtMoney(movementDebit)}</td><td>{fmtMoney(movementCredit)}</td><td /></tr></tfoot>
+  </table>
+}
+
 function AmountNodeRows({ node, expanded, toggle }: { node: AccountReportTreeNode; expanded: Set<string>; toggle: (key: string) => void }) {
   const open = expanded.has(node.key)
   return <Fragment><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td" style={{ paddingLeft: `${0.75 + (node.depth - 1) * 1.25}rem` }}><GroupButton groupKey={node.key} name={node.name} count={node.totalCount} expanded={open} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(node.balance)}</td></tr>{open && node.directAccounts.map(account => {
@@ -138,6 +165,53 @@ function BalanceSheetStatementSide({ title, total, children, className = '' }: {
       <span className="px-4 py-3">Grand Total</span>
       <span className="whitespace-nowrap px-4 py-3 text-right num">{fmtMoney(total)}</span>
     </div>
+  </section>
+}
+
+function BalanceSheetPrintNodeRows({ node, depth = 0 }: { node: AccountReportTreeNode; depth?: number }) {
+  return <Fragment>
+    <tr className="balance-sheet-print-group"><td style={{ paddingLeft: `${depth * 12}px` }}>{node.name}</td><td>{fmtMoney(node.balance)}</td></tr>
+    {node.directAccounts.map(account => <tr key={account.id} className="balance-sheet-print-ledger"><td style={{ paddingLeft: `${(depth + 1) * 12}px` }}>{account.name}</td><td>{fmtMoney(account.balance)}</td></tr>)}
+    {node.children.map(child => <BalanceSheetPrintNodeRows key={child.key} node={child} depth={depth + 1} />)}
+  </Fragment>
+}
+
+function BalanceSheetPrintSide({ title, asOf, accounts, categories, total, profitLoss }: { title: string; asOf: string; accounts: Account[]; categories: import('@/types').AccountCategory[]; total: number; profitLoss?: number }) {
+  const roots = buildAccountReportTree(accounts, categories).flatMap(node => /^(assets?|liabilit(?:y|ies)|equity)$/i.test(node.name) && !node.directAccounts.length ? node.children : [node])
+  return <section className="balance-sheet-print-side">
+    <div className="balance-sheet-print-side-title"><strong>{title}</strong><span>as at {fmtDate(asOf)}</span></div>
+    <table><tbody>{roots.map(node => <BalanceSheetPrintNodeRows key={node.key} node={node} />)}{profitLoss !== undefined && <><tr className="balance-sheet-print-group"><td>Profit &amp; Loss A/c</td><td>{fmtMoney(profitLoss)}</td></tr><tr className="balance-sheet-print-ledger"><td style={{ paddingLeft: '12px' }}>Current Period</td><td>{fmtMoney(profitLoss)}</td></tr></>}</tbody></table>
+    <div className="balance-sheet-print-spacer" />
+    <div className="balance-sheet-print-total"><strong>Total</strong><b>{fmtMoney(total)}</b></div>
+  </section>
+}
+
+function ProfitLossPrintAccountRows({ accounts, categories }: { accounts: Account[]; categories: import('@/types').AccountCategory[] }) {
+  const roots = buildAccountReportTree(accounts, categories).flatMap(node => /^(incomes?|expenses?)$/i.test(node.name) && !node.directAccounts.length ? node.children : [node])
+  return <>{roots.map(node => <BalanceSheetPrintNodeRows key={node.key} node={node} />)}</>
+}
+
+function ProfitLossPrintStockRows({ label, entries, items }: { label: string; entries: StockEntry[]; items: Item[] }) {
+  const visible = entries.filter(entry => Math.abs(entry.qty) >= 0.00005 || Math.abs(entry.value) >= 0.005)
+  const total = visible.reduce((sum, entry) => sum + entry.value, 0)
+  return <Fragment>
+    <tr className="balance-sheet-print-group"><td>{label}</td><td>{fmtMoney(total)}</td></tr>
+    {visible.map(entry => {
+      const item = items.find(candidate => candidate.id === entry.id)
+      return <tr key={entry.id} className="balance-sheet-print-ledger"><td style={{ paddingLeft: '12px' }}>{item?.name || entry.name}</td><td>{fmtMoney(entry.value)}</td></tr>
+    })}
+  </Fragment>
+}
+
+function ProfitLossPrintResultRow({ label, amount }: { label: string; amount: number }) {
+  return <tr className="profit-loss-print-result"><td>{label}</td><td>{fmtMoney(Math.abs(amount))}</td></tr>
+}
+
+function ProfitLossPrintSection({ total, children, showSubtotal = true }: { total: number; children: ReactNode; showSubtotal?: boolean }) {
+  return <section className="profit-loss-print-section">
+    <table><tbody>{children}</tbody></table>
+    <div className="profit-loss-print-spacer" />
+    {showSubtotal && <div className="profit-loss-print-subtotal"><span /><b>{fmtMoney(total)}</b></div>}
   </section>
 }
 
@@ -264,12 +338,21 @@ export function TrialBalancePage() {
   }))
 
   return (
-    <div className="report-page ">
+    <div className="report-page trial-balance-report-page">
       <PageHeader title="Trial Balance" description="Opening balances, period movements, and closing balances" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Trial Balance | {fmtDate(from)} to {fmtDate(to)}</p></div>
+        <FormalReportPrintHeader company={company} title="Trial Balance" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} />
         <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
-        <Card className="report-table-card">
+        <div className="trial-balance-simple-print hidden" aria-hidden="true">
+          <header className="balance-sheet-print-heading">
+            <h1>{company?.name || 'Our Company'}</h1>
+            {company?.address && <p>{company.address}</p>}
+            <h2>Trial Balance</h2>
+            <p>{from === to ? `For ${fmtDate(to)}` : `For ${fmtDate(from)} to ${fmtDate(to)}`}</p>
+          </header>
+          <TrialBalancePrintTable accounts={visibleAccounts} categories={accountCategories} values={values} movementDebit={movementDebit} movementCredit={movementCredit} />
+        </div>
+        <Card className="trial-balance-screen-statement report-table-card">
           <HierarchicalTrialTable accounts={visibleAccounts} categories={accountCategories} values={values} openingDebit={openingTb.total_debit} openingCredit={openingTb.total_credit} movementDebit={movementDebit} movementCredit={movementCredit} closingDebit={closingTb.total_debit} closingCredit={closingTb.total_credit} />
           {closingTb.balanced
             ? <p className="px-4 py-3 text-sm text-forest font-semibold">✓ Balanced</p>
@@ -325,13 +408,47 @@ export function ProfitLossPage() {
   }
 
   return (
-    <div className="report-page ">
+    <div className="report-page profit-loss-report-page">
       <PageHeader title="Profit & Loss"
         description="Trading and profit statement with period opening and closing inventory" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Profit & Loss | {fmtDate(from)} to {fmtDate(to)}</p></div>
+        <FormalReportPrintHeader company={company} title="Profit & Loss Statement" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={valuationMethod.replace('_', ' ')} />
         <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
-        <Card className="report-table-card overflow-hidden">
+        <div className="profit-loss-simple-print hidden" aria-hidden="true">
+          <header className="balance-sheet-print-heading">
+            <h1>{company?.name || 'Our Company'}</h1>
+            {company?.address && <p>{company.address}</p>}
+            <h2>Profit &amp; Loss Account</h2>
+            <p>For {fmtDate(from)} to {fmtDate(to)}</p>
+          </header>
+          <div className="profit-loss-print-columns">
+            <div className="balance-sheet-print-side-title"><strong>Particulars</strong><span>{from === to ? `For ${fmtDate(to)}` : `For ${fmtDate(from)} to ${fmtDate(to)}`}</span></div>
+            <div className="balance-sheet-print-side-title"><strong>Particulars</strong><span>{from === to ? `For ${fmtDate(to)}` : `For ${fmtDate(from)} to ${fmtDate(to)}`}</span></div>
+            <ProfitLossPrintSection total={statement.tradingTotal}>
+              <ProfitLossPrintStockRows label="Opening Stock" entries={statement.openingStock} items={items} />
+              <ProfitLossPrintAccountRows accounts={statement.directExpenses} categories={accountCategories} />
+              {statement.grossProfit >= 0 && <ProfitLossPrintResultRow label="Gross Profit c/o" amount={statement.grossProfit} />}
+            </ProfitLossPrintSection>
+            <ProfitLossPrintSection total={statement.tradingTotal}>
+              <ProfitLossPrintAccountRows accounts={statement.directIncome} categories={accountCategories} />
+              <ProfitLossPrintStockRows label="Closing Stock" entries={statement.closingStock} items={items} />
+              {statement.grossProfit < 0 && <ProfitLossPrintResultRow label="Gross Loss c/o" amount={statement.grossProfit} />}
+            </ProfitLossPrintSection>
+            <ProfitLossPrintSection total={statement.profitLossTotal} showSubtotal={false}>
+              {statement.grossProfit < 0 && <ProfitLossPrintResultRow label="Gross Loss b/f" amount={statement.grossProfit} />}
+              <ProfitLossPrintAccountRows accounts={statement.indirectExpenses} categories={accountCategories} />
+              {statement.netProfit >= 0 && <ProfitLossPrintResultRow label="Net Profit" amount={statement.netProfit} />}
+            </ProfitLossPrintSection>
+            <ProfitLossPrintSection total={statement.profitLossTotal} showSubtotal={false}>
+              {statement.grossProfit >= 0 && <ProfitLossPrintResultRow label="Gross Profit b/f" amount={statement.grossProfit} />}
+              <ProfitLossPrintAccountRows accounts={statement.indirectIncome} categories={accountCategories} />
+              {statement.netProfit < 0 && <ProfitLossPrintResultRow label="Net Loss" amount={statement.netProfit} />}
+            </ProfitLossPrintSection>
+            <div className="balance-sheet-print-total"><strong>Total</strong><b>{fmtMoney(statement.profitLossTotal)}</b></div>
+            <div className="balance-sheet-print-total"><strong>Total</strong><b>{fmtMoney(statement.profitLossTotal)}</b></div>
+          </div>
+        </div>
+        <Card className="profit-loss-screen-statement report-table-card overflow-hidden">
           <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">For {fmtDate(from)} to {fmtDate(to)} · {valuationMethod.replace('_', ' ')}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
           <div className="report-print-columns">
             <div className="grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
@@ -416,12 +533,24 @@ export function BalanceSheetPage() {
   ])
 
   return (
-    <div className="report-page ">
+    <div className="report-page balance-sheet-report-page">
       <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<div className="flex flex-wrap items-end gap-2"><div className="min-w-32 space-y-1"><Label>Fiscal Year</Label><SearchableSelect value={String(selectedFiscalYear)} onValueChange={changeFiscalYear} options={fiscalYearOptions} searchPlaceholder="Search fiscal year..." className="w-32" /></div><ReportActions onExport={exportCsv} /></div>} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(asOf)}</p></div>
-        <Card className="report-table-card overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">As of {fmtDate(asOf)}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
+        <FormalReportPrintHeader company={company} title="Balance Sheet" periodLabel={`As of ${fmtDate(asOf)}`} detailLabel={`Fiscal Year ${selectedFiscalYear}/${String(selectedFiscalYear + 1).slice(-2)}`} />
+        <div className="balance-sheet-simple-print hidden" aria-hidden="true">
+          <header className="balance-sheet-print-heading">
+            <h1>{company?.name || 'Our Company'}</h1>
+            {company?.address && <p>{company.address}</p>}
+            <h2>Balance Sheet</h2>
+            <p>For {fmtDate(asOf)}</p>
+          </header>
+          <div className="balance-sheet-print-columns">
+            <BalanceSheetPrintSide title="Liabilities" asOf={asOf} accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} total={bs.total_liabilities + bs.total_equity} profitLoss={pnl.net_profit} />
+            <BalanceSheetPrintSide title="Assets" asOf={asOf} accounts={displayAssets} categories={accountCategories} total={bs.total_assets} />
+          </div>
+        </div>
+        <Card className="balance-sheet-screen-statement report-table-card overflow-hidden">
+          <div className="balance-sheet-screen-heading flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">As of {fmtDate(asOf)}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
           <div className="report-print-columns grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
             <BalanceSheetStatementSide title="Liabilities & Equity" total={bs.total_liabilities + bs.total_equity}>
               <BalanceSheetAccountRows accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} emptyLabel="No liability or equity ledgers" command={expansionCommand} />
@@ -433,9 +562,10 @@ export function BalanceSheetPage() {
           </div>
         </Card>
         {bs.balanced
-          ? <p className="text-sm text-forest font-semibold">✓ Balanced — {fmtMoney(bs.total_assets)} = {fmtMoney(bs.total_liabilities + bs.total_equity)}</p>
-          : <p className="text-sm text-destructive">⚠ Balance sheet is out of balance. Check recent entries.</p>
+          ? <p className="balance-sheet-status text-sm text-forest font-semibold">✓ Balanced — {fmtMoney(bs.total_assets)} = {fmtMoney(bs.total_liabilities + bs.total_equity)}</p>
+          : <p className="balance-sheet-status text-sm text-destructive">⚠ Balance sheet is out of balance. Check recent entries.</p>
         }
+        <FormalReportPrintFooter />
       </PageContent>
     </div>
   )
@@ -576,10 +706,10 @@ export function StockReportPage() {
     ? [row.item.name, row.category, row.item.unit, row.movement.opening_qty, row.movement.inward_qty, row.movement.outward_qty, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]
     : [row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
 
-  return <div className="report-page">
+  return <div className="report-page stock-summary-report-page">
     <PageHeader title="Stock Summary" description={`${conditionLabel} movement and closing quantities with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
     <PageContent className="report-content space-y-5">
-      <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>{conditionLabel} Summary | {fmtDate(from)} to {fmtDate(to)} | {methodLabel}</p></div>
+      <FormalReportPrintHeader company={company} title={`${conditionLabel} Summary`} periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={`${methodLabel} valuation`} />
       <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
       <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
         <StatCard label="Saleable Stock Value" value={conditionValues.saleable} Icon={Boxes} color="positive" />
@@ -602,11 +732,12 @@ export function StockReportPage() {
         <Button size="sm" className="h-9" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>
       </div>
       {methodError && <p className="text-sm text-destructive">{methodError}</p>}
-      <Card className="report-table-card overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`w-full border-collapse text-sm ${showDetails ? 'min-w-[1120px]' : 'min-w-[820px]'}`}>
-        <thead><tr className="bg-muted/50">{headings.map((heading, index) => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${index >= 3 && heading !== 'Status' ? 'text-right' : 'text-left'}`}>{heading}</th>)}</tr></thead>
-        <tbody>{rows.map(row => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
-        <tfoot><tr className="border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr></tfoot>
+      <Card className="report-table-card overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`stock-summary-table w-full border-collapse text-sm ${showDetails ? 'stock-summary-detailed min-w-[1120px]' : 'stock-summary-compact min-w-[820px]'}`}>
+        <thead><tr className="bg-muted/50">{headings.map((heading, index) => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${index >= 3 && heading !== 'Status' ? 'text-right' : 'text-left'} ${heading === 'Category' || heading === 'Status' ? 'stock-summary-print-hide' : ''}`}>{heading}</th>)}</tr></thead>
+        <tbody>{rows.map(row => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="stock-summary-print-hide px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="stock-summary-print-hide px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
+        <tfoot><tr className="stock-summary-screen-total border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr><tr className="stock-summary-print-total hidden border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={2}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td></tr></tfoot>
       </table></div>}</Card>
+      <FormalReportPrintFooter />
     </PageContent>
   </div>
 }

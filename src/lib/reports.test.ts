@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, groupReportAccounts, vouchersInFiscalYear } from '@/lib/reports'
+import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, getLedgerRows, groupReportAccounts, vouchersInFiscalYear } from '@/lib/reports'
 import type { Account, AccountCategory, AccountType, Voucher, VoucherLine, VoucherType } from '@/types'
 
 const account = (id: string, name: string, type: AccountType, group: string, balance: number, category_id = group) => ({
@@ -19,6 +19,38 @@ describe('fiscal-year voucher filtering', () => {
       datedVoucher('next', '2084-04-01'),
     ], '2083-04-01')
     expect(rows.map(row => row.id)).toEqual(['first', 'last'])
+  })
+})
+
+describe('ledger fiscal-year opening balances', () => {
+  const movementVoucher = (id: string, date_bs: string, lines: VoucherLine[]): Voucher => ({
+    id, company_id: 'company', type: 'Journal', date: '2026-07-01', date_ad: '2026-07-01', date_bs,
+    date_bs_key: Number(date_bs.replaceAll('-', '')), seq: Number(id.replace(/\D/g, '')) || 1,
+    total: 0, is_cash: false, cancelled: false, lines,
+  })
+
+  it('does not carry a previous-year Income balance into the current fiscal year', () => {
+    const sales = { ...account('sales', 'Sales', 'Income', 'Sales Accounts', 0), opening_balance: 500 }
+    const report = getLedgerRows('sales', [sales], [
+      movementVoucher('v1', '2083-03-31', [{ account_id: 'sales', debit: 0, credit: 100 }]),
+      movementVoucher('v2', '2083-04-15', [{ account_id: 'sales', debit: 0, credit: 20 }]),
+      movementVoucher('v3', '2083-05-10', [{ account_id: 'sales', debit: 0, credit: 30 }]),
+    ], '2083-05-01', '2083-05-31', false, '2083-04-01')
+
+    expect(report.opening_balance).toBe(20)
+    expect(report.closing_balance).toBe(50)
+  })
+
+  it('resets Expense openings but continues carrying permanent-account balances', () => {
+    const rent = { ...account('rent', 'Rent', 'Expense', 'Indirect Expenses', 0), opening_balance: 400 }
+    const cash = { ...account('cash', 'Cash', 'Asset', 'Current Assets', 0), opening_balance: 100 }
+    const vouchers = [
+      movementVoucher('v1', '2083-03-31', [{ account_id: 'rent', debit: 70, credit: 0 }, { account_id: 'cash', debit: 50, credit: 0 }]),
+      movementVoucher('v2', '2083-04-15', [{ account_id: 'rent', debit: 25, credit: 0 }, { account_id: 'cash', debit: 20, credit: 0 }]),
+    ]
+
+    expect(getLedgerRows('rent', [rent, cash], vouchers, '2083-05-01', '2083-05-31', false, '2083-04-01').opening_balance).toBe(25)
+    expect(getLedgerRows('cash', [rent, cash], vouchers, '2083-05-01', '2083-05-31', false, '2083-04-01').opening_balance).toBe(170)
   })
 })
 

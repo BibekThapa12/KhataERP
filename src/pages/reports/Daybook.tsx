@@ -8,6 +8,7 @@ import { normalizeSearch } from '@/lib/search'
 import { legacySettlementAccountId } from '@/lib/banks'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
+import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { VoucherTable } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
@@ -25,6 +26,8 @@ const badgeVariant = (type: Voucher['type'], cancelled: boolean) => {
   const variants = { Sales: 'sales', Purchase: 'purchase', Receipt: 'receipt', Payment: 'payment', Journal: 'journal' } as const
   return type === 'Stock Adjustment' ? 'secondary' as const : variants[type]
 }
+
+const printMoney = (value: number) => fmtMoney(value).replace(/^(-?)Rs\u00a0/, '$1')
 
 function MetricCard({ label, value, note, Icon, tone = 'default' }: { label: string; value: string; note: string; Icon: typeof FileText; tone?: 'default' | 'debit' | 'credit' | 'warning' }) {
   const colors = tone === 'debit' ? 'bg-red-50 text-red-600' : tone === 'credit' ? 'bg-emerald-50 text-emerald-600' : tone === 'warning' ? 'bg-violet-50 text-violet-600' : 'bg-blue-50 text-blue-600'
@@ -87,17 +90,14 @@ export function DaybookPage() {
   const closeEdit = () => setEditing(null)
 
   return (
-    <div className="report-page">
+    <div className="report-page daybook-report-page">
       <PageHeader
         title="Day Book"
         description="Summary of all transactions for the selected period"
         action={<div className="flex gap-2"><Button variant="outline" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button></div>}
       />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden">
-          <h1>{company?.name || 'KhataERP'}</h1>
-          <p>Daybook | {fmtDate(from)} to {fmtDate(to)}</p>
-        </div>
+        <FormalReportPrintHeader company={company} title="Day Book" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} />
         <Card className="report-controls">
           <CardContent className="p-4 flex flex-wrap items-end justify-between gap-4">
             <ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} />
@@ -138,11 +138,11 @@ export function DaybookPage() {
                     <th className="report-th text-left">Voucher Type</th>
                     <th className="report-th text-left">Voucher No.</th>
                     <th className="report-th text-left">Party / Account</th>
-                    {columns.has('narration') && <th className="report-th text-left">Narration</th>}
-                    {columns.has('debit') && <th className="report-th text-right">Debit</th>}
-                    {columns.has('credit') && <th className="report-th text-right">Credit</th>}
-                    {columns.has('net') && <th className="report-th text-right">Net Amount</th>}
-                    {columns.has('status') && <th className="report-th text-left">Status</th>}
+                    {columns.has('narration') && <th className="daybook-print-hide report-th text-left">Narration</th>}
+                    {columns.has('debit') && <th className="report-th text-right"><span className="daybook-screen-money">Debit</span><span className="daybook-print-money hidden">Debit (Rs.)</span></th>}
+                    {columns.has('credit') && <th className="report-th text-right"><span className="daybook-screen-money">Credit</span><span className="daybook-print-money hidden">Credit (Rs.)</span></th>}
+                    {columns.has('net') && <th className="daybook-print-hide report-th text-right">Net Amount</th>}
+                    {columns.has('status') && <th className="daybook-print-hide report-th text-left">Status</th>}
                     <th className="report-th report-controls text-center">Action</th>
                   </tr>
                 </thead>
@@ -157,23 +157,28 @@ export function DaybookPage() {
                       <td className="report-td"><Badge variant={badgeVariant(row.voucher_type, row.cancelled)}>{row.voucher_type}</Badge></td>
                       <td className="report-td num">{row.voucher_no}</td>
                       <td className="report-td font-medium">{(() => { const names = rowParticulars(row); return <>{names.primary}{names.secondary && names.secondary !== names.primary && <span className="block text-xs font-normal text-muted-foreground">{names.secondary}</span>}</> })()}</td>
-                      {columns.has('narration') && <td className="report-td max-w-[220px] truncate text-muted-foreground">{row.narration || '-'}</td>}
-                      {columns.has('debit') && <td className="report-td text-right num debit-amt">{row.debit ? fmtMoney(row.debit) : '—'}</td>}
-                      {columns.has('credit') && <td className="report-td text-right num credit-amt">{row.credit ? fmtMoney(row.credit) : '—'}</td>}
-                      {columns.has('net') && <td className={`report-td text-right num font-semibold ${row.debit - row.credit > 0 ? 'debit-amt' : row.credit - row.debit > 0 ? 'credit-amt' : ''}`}>{fmtMoney(Math.abs(row.debit - row.credit))}</td>}
-                      {columns.has('status') && <td className="report-td"><Badge variant={row.cancelled ? 'cancelled' : 'default'}>{row.cancelled ? 'Cancelled' : 'Active'}</Badge></td>}
+                      {columns.has('narration') && <td className="daybook-print-hide report-td max-w-[220px] truncate text-muted-foreground">{row.narration || '-'}</td>}
+                      {columns.has('debit') && <td className="report-td text-right num debit-amt"><span className="daybook-screen-money">{row.debit ? fmtMoney(row.debit) : '—'}</span><span className="daybook-print-money hidden">{row.debit ? printMoney(row.debit) : '—'}</span></td>}
+                      {columns.has('credit') && <td className="report-td text-right num credit-amt"><span className="daybook-screen-money">{row.credit ? fmtMoney(row.credit) : '—'}</span><span className="daybook-print-money hidden">{row.credit ? printMoney(row.credit) : '—'}</span></td>}
+                      {columns.has('net') && <td className={`daybook-print-hide report-td text-right num font-semibold ${row.debit - row.credit > 0 ? 'debit-amt' : row.credit - row.debit > 0 ? 'credit-amt' : ''}`}>{fmtMoney(Math.abs(row.debit - row.credit))}</td>}
+                      {columns.has('status') && <td className="daybook-print-hide report-td"><Badge variant={row.cancelled ? 'cancelled' : 'default'}>{row.cancelled ? 'Cancelled' : 'Active'}</Badge></td>}
                       <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher_no}`} onClick={event => { event.stopPropagation(); setSelected(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>
                     </tr>
                   ))}
                 </tbody>
                 <tfoot>
-                  <tr className="border-t-2 border-border bg-muted/30 font-semibold">
+                  <tr className="daybook-screen-total border-t-2 border-border bg-muted/30 font-semibold">
                     <td className="report-td" colSpan={4 + (columns.has('narration') ? 1 : 0)}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
-                    {columns.has('debit') && <td className="report-td text-right num debit-amt">{fmtMoney(totalDebit)}</td>}
-                    {columns.has('credit') && <td className="report-td text-right num credit-amt">{fmtMoney(totalCredit)}</td>}
+                    {columns.has('debit') && <td className="report-td text-right num debit-amt"><span className="daybook-screen-money">{fmtMoney(totalDebit)}</span><span className="daybook-print-money hidden">{printMoney(totalDebit)}</span></td>}
+                    {columns.has('credit') && <td className="report-td text-right num credit-amt"><span className="daybook-screen-money">{fmtMoney(totalCredit)}</span><span className="daybook-print-money hidden">{printMoney(totalCredit)}</span></td>}
                     {columns.has('net') && <td className="report-td text-right num">{fmtMoney(Math.abs(netTotal))}</td>}
                     {columns.has('status') && <td className="report-td"></td>}
                     <td className="report-td report-controls"></td>
+                  </tr>
+                  <tr className="daybook-print-total hidden border-t-2 border-border bg-muted/30 font-semibold">
+                    <td className="report-td" colSpan={4}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
+                    {columns.has('debit') && <td className="report-td text-right num debit-amt">{printMoney(totalDebit)}</td>}
+                    {columns.has('credit') && <td className="report-td text-right num credit-amt">{printMoney(totalCredit)}</td>}
                   </tr>
                 </tfoot>
               </table>
@@ -187,6 +192,7 @@ export function DaybookPage() {
         )}
         <Card className="report-controls"><CardContent className="grid gap-4 p-4 text-sm sm:grid-cols-3"><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-red-50 text-red-600"><ArrowDown className="h-4 w-4" /></span><span><strong className="block">Debit</strong><span className="text-xs text-muted-foreground">Asset / expense increase</span></span></div><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-emerald-50 text-emerald-600"><ArrowUp className="h-4 w-4" /></span><span><strong className="block">Credit</strong><span className="text-xs text-muted-foreground">Income / liability increase</span></span></div><div className="flex gap-3"><span className="flex h-9 w-9 items-center justify-center rounded-full bg-blue-50 text-blue-600"><FileText className="h-4 w-4" /></span><span><strong className="block">Net Amount</strong><span className="text-xs text-muted-foreground">Absolute debit-credit difference</span></span></div></CardContent></Card>
         <div className="report-controls flex gap-3 rounded-lg border border-blue-100 bg-blue-50/60 p-4 text-sm"><Info className="mt-0.5 h-4 w-4 shrink-0 text-blue-600" /><div><strong className="block">About Day Book</strong><p className="mt-1 text-xs text-muted-foreground">Day Book shows all vouchers in chronological order. Open any row to view, edit, print, or cancel the underlying voucher.</p></div></div>
+        <FormalReportPrintFooter />
       </PageContent>
 
       <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}>
