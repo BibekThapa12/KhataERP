@@ -63,3 +63,19 @@ export function systemAccountGroup(categories: AccountCategory[], key: string) {
   const spec = SYSTEM_ACCOUNT_GROUPS.find(group => group.key === key)
   return spec ? categories.find(category => category.name === spec.name && category.account_type === spec.account_type) : undefined
 }
+
+export function systemAccountGroupLevels(groups: SystemAccountGroupSpec[] = SYSTEM_ACCOUNT_GROUPS) {
+  const pending = new Map(groups.map(group => [group.key, group]))
+  const resolved = new Set<string>()
+  const levels: SystemAccountGroupSpec[][] = []
+  while (pending.size) {
+    const level = [...pending.values()].filter(group => !group.parent_key || resolved.has(group.parent_key))
+    if (!level.length) throw new Error('System account group hierarchy contains an unresolved parent or cycle')
+    levels.push(level)
+    for (const group of level) {
+      pending.delete(group.key)
+      resolved.add(group.key)
+    }
+  }
+  return levels
+}

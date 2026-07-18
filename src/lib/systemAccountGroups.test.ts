@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from './systemAccountGroups'
+import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS, systemAccountGroupLevels } from './systemAccountGroups'
 
 describe('protected system account groups', () => {
   it('defines a unique, parent-first hierarchy no deeper than three levels', () => {
@@ -25,5 +25,21 @@ describe('protected system account groups', () => {
     expect(Object.values(SYSTEM_ACCOUNT_DESTINATIONS).every(key => keys.has(key))).toBe(true)
     expect(SYSTEM_ACCOUNT_DESTINATIONS.vat_payable).toBe('duties-taxes')
     expect(SYSTEM_ACCOUNT_DESTINATIONS.vat_receivable).toBe('duties-taxes')
+  })
+
+  it('batches hierarchy writes by level while keeping every parent earlier', () => {
+    const levels = systemAccountGroupLevels()
+    expect(levels).toHaveLength(3)
+    const levelByKey = new Map(levels.flatMap((level, index) => level.map(group => [group.key, index] as const)))
+    for (const group of SYSTEM_ACCOUNT_GROUPS) {
+      if (group.parent_key) expect(levelByKey.get(group.parent_key)).toBeLessThan(levelByKey.get(group.key)!)
+    }
+  })
+
+  it('rejects an unresolved or circular hierarchy instead of looping forever', () => {
+    expect(() => systemAccountGroupLevels([
+      { key: 'a', name: 'A', account_type: 'Asset', parent_key: 'b' },
+      { key: 'b', name: 'B', account_type: 'Asset', parent_key: 'a' },
+    ])).toThrow(/unresolved parent or cycle/)
   })
 })

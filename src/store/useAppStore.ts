@@ -2,11 +2,11 @@ import { create } from 'zustand'
 import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
-  insertAccount, insertAccounts, insertParty, insertItem,
+  insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, insertItem,
   insertVoucher, cancelVoucher, updateCompany,
-  updateVoucher, getNextSeq, getNextVoucherNo, getOrCreateCompany, logAppEvent,
-  fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertItemCategory,
-  updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, logMasterChange,
+  updateVoucher, getOrCreateCompany,
+  fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertAccountCategories, insertItemCategory,
+  updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, updateItemsByIds, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
   fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
 } from '@/lib/supabase'
@@ -21,13 +21,26 @@ import { partyTerminology, partyTypeForCategory } from '@/lib/partyTerminology'
 import { bankAccounts } from '@/lib/banks'
 import { toBaseQty, toBaseRate } from '@/lib/units'
 import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
-import { voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
-import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from '@/lib/systemAccountGroups'
+import { voucherNumberingPeriod, voucherNumberingScope } from '@/lib/voucherNumbers'
+import { SYSTEM_ACCOUNT_DESTINATIONS, systemAccountGroupLevels } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { selectedFiscalYearStartBs } from '@/lib/reports'
 import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
+import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } from '@/lib/writePerformance'
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
+
+async function measuredWrite<T>(context: WriteTraceContext, task: (trace: WritePerformanceTrace) => Promise<T>): Promise<T> {
+  const trace = beginWriteTrace(context)
+  try {
+    const result = await task(trace)
+    trace.finish(true)
+    return result
+  } catch (error) {
+    trace.finish(false, error)
+    throw error
+  }
+}
 
 interface InvoiceSaveParams {
   party_account_id: string | null
@@ -316,53 +329,58 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
 
       const groupByKey = new Map<string, AccountCategory>()
-      for (const spec of SYSTEM_ACCOUNT_GROUPS) {
-        const parent = spec.parent_key ? groupByKey.get(spec.parent_key) : undefined
-        let category = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
-        if (!category) {
-          category = await insertAccountCategory({ company_id: company.id, name: spec.name, account_type: spec.account_type, parent_category_id: parent?.id || null, is_system: true, is_archived: false })
-          accountCategories.push(category)
-        } else {
-          const updates: Partial<AccountCategory> = {}
-          if (category.parent_category_id !== (parent?.id || null)) updates.parent_category_id = parent?.id || null
-          if (!category.is_system) updates.is_system = true
-          if (category.is_archived) updates.is_archived = false
-          if (Object.keys(updates).length) {
-            await updateAccountCategory(category.id, updates)
-            Object.assign(category, updates)
-          }
+      for (const ready of systemAccountGroupLevels()) {
+        const changed = ready.filter(spec => {
+          const parentId = spec.parent_key ? groupByKey.get(spec.parent_key)?.id || null : null
+          const existing = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
+          return !existing || existing.parent_category_id !== parentId || !existing.is_system || existing.is_archived
+        })
+        const saved = await insertAccountCategories(changed.map(spec => ({
+          company_id: company.id,
+          name: spec.name,
+          account_type: spec.account_type,
+          parent_category_id: spec.parent_key ? groupByKey.get(spec.parent_key)?.id || null : null,
+          is_system: true,
+          is_archived: false,
+        })))
+        for (const category of saved) {
+          const existingIndex = accountCategories.findIndex(entry => entry.id === category.id)
+          if (existingIndex >= 0) accountCategories[existingIndex] = category
+          else accountCategories.push(category)
         }
-        groupByKey.set(spec.key, category)
+        for (const spec of ready) {
+          const category = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
+          if (!category) throw new Error(`Could not initialize system account group ${spec.name}`)
+          groupByKey.set(spec.key, category)
+        }
+      }
+
+      const dirtyAccountIds = new Set<string>()
+      const applyAccountRepairs = (account: Account, updates: Partial<Account>) => {
+        if (!Object.keys(updates).length) return
+        Object.assign(account, updates)
+        dirtyAccountIds.add(account.id)
       }
 
       const legacyBank = accountCategories.find(category => category.name === 'Bank' && category.account_type === 'Asset')
       const bankCategory = groupByKey.get('bank-accounts')!
       if (legacyBank && legacyBank.id !== bankCategory.id) {
-        for (const account of rawAccounts.filter(entry => entry.category_id === legacyBank.id)) {
-          await updateAccount(account.id, { category_id: bankCategory.id, group: bankCategory.name })
-          account.category_id = bankCategory.id
-          account.group = bankCategory.name
-        }
+        const affected = rawAccounts.filter(entry => entry.category_id === legacyBank.id)
+        for (const account of affected) applyAccountRepairs(account, { category_id: bankCategory.id, group: bankCategory.name })
       }
 
       const legacyIncome = accountCategories.find(category => category.name === 'Income' && category.account_type === 'Income')
       const incomesCategory = groupByKey.get('incomes')!
       if (legacyIncome && legacyIncome.id !== incomesCategory.id) {
-        for (const account of rawAccounts.filter(entry => entry.category_id === legacyIncome.id)) {
-          await updateAccount(account.id, { category_id: incomesCategory.id, group: incomesCategory.name })
-          account.category_id = incomesCategory.id
-          account.group = incomesCategory.name
-        }
+        const affected = rawAccounts.filter(entry => entry.category_id === legacyIncome.id)
+        for (const account of affected) applyAccountRepairs(account, { category_id: incomesCategory.id, group: incomesCategory.name })
       }
 
       const legacyTax = accountCategories.find(category => category.name === 'Duties & Taxes (Liabilities)' && category.account_type === 'Liability')
       const taxCategory = groupByKey.get('duties-taxes')!
       if (legacyTax && legacyTax.id !== taxCategory.id) {
-        for (const account of rawAccounts.filter(entry => entry.category_id === legacyTax.id)) {
-          await updateAccount(account.id, { category_id: taxCategory.id, group: taxCategory.name })
-          account.category_id = taxCategory.id
-          account.group = taxCategory.name
-        }
+        const affected = rawAccounts.filter(entry => entry.category_id === legacyTax.id)
+        for (const account of affected) applyAccountRepairs(account, { category_id: taxCategory.id, group: taxCategory.name })
       }
 
       for (const account of rawAccounts) {
@@ -379,33 +397,30 @@ export const useAppStore = create<AppState>((set, get) => ({
           if (key === 'vat_receivable') repairs.opening_balance = -(account.opening_balance || 0)
         }
         if (!Object.keys(repairs).length) continue
-        await updateAccount(account.id, repairs)
-        Object.assign(account, repairs)
+        applyAccountRepairs(account, repairs)
       }
 
-      for (const account of rawAccounts) {
-        if (account.category_id || !account.group) continue
-        let category = accountCategories.find(item => item.name === account.group && item.account_type === account.type)
-        if (!category) {
-          category = await insertAccountCategory({ company_id: company.id, name: account.group, account_type: account.type, is_system: false, is_archived: false })
-          accountCategories.push(category)
-        }
-      }
+      const missingLegacyGroups = [...new Map(rawAccounts
+        .filter(account => !account.category_id && account.group && !accountCategories.some(category => category.name === account.group && category.account_type === account.type))
+        .map(account => [`${account.type}:${account.group}`, { company_id: company.id, name: account.group, account_type: account.type, parent_category_id: null, is_system: false, is_archived: false }])).values()]
+      const createdLegacyGroups = await insertAccountCategories(missingLegacyGroups)
+      accountCategories.push(...createdLegacyGroups.filter(category => !accountCategories.some(existing => existing.id === category.id)))
+
       for (const account of rawAccounts) {
         if (account.category_id) continue
         const category = accountCategories.find(item => item.name === account.group && item.account_type === account.type)
         if (!category) continue
-        await updateAccount(account.id, { category_id: category.id })
-        account.category_id = category.id
+        applyAccountRepairs(account, { category_id: category.id })
       }
-      for (const account of rawAccounts) {
-        if (parties.some(party => party.account_id === account.id)) continue
+
+      const missingPartyRows = rawAccounts.flatMap(account => {
+        if (parties.some(party => party.account_id === account.id)) return []
         const category = accountCategories.find(entry => entry.id === account.category_id)
         const partyType = partyTypeForCategory(category)
-        if (!partyType) continue
-        const party = await insertParty({ company_id: company.id, name: account.name, type: partyType, account_id: account.id, is_archived: !!account.is_archived })
-        parties.push(party)
-      }
+        if (partyType && !account.is_party) applyAccountRepairs(account, { is_party: true })
+        return partyType ? [{ company_id: company.id, name: account.name, type: partyType, account_id: account.id, is_archived: !!account.is_archived }] : []
+      })
+
       for (const party of parties) {
         const account = rawAccounts.find(entry => entry.id === party.account_id)
         const terminology = partyTerminology(party.type)
@@ -413,20 +428,19 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (!account || !category) continue
         if (account.category_id === category.id && account.group === terminology.category && account.type === terminology.accountType && account.is_party) continue
         const repairs = { category_id: category.id, group: terminology.category, type: terminology.accountType, is_party: true }
-        await updateAccount(account.id, repairs)
-        Object.assign(account, repairs)
+        applyAccountRepairs(account, repairs)
       }
+      await upsertAccounts(rawAccounts.filter(account => dirtyAccountIds.has(account.id)))
+      parties.push(...await insertParties(missingPartyRows))
 
       let generalItemCategory = itemCategories.find(category => category.name === 'General')
       if (!generalItemCategory) {
         generalItemCategory = await insertItemCategory({ company_id: company.id, name: 'General', is_archived: false })
         itemCategories.push(generalItemCategory)
       }
-      for (const item of items) {
-        if (item.category_id) continue
-        await updateItem(item.id, { category_id: generalItemCategory.id })
-        item.category_id = generalItemCategory.id
-      }
+      const uncategorizedItems = items.filter(item => !item.category_id)
+      await updateItemsByIds(uncategorizedItems.map(item => item.id), { category_id: generalItemCategory.id })
+      for (const item of uncategorizedItems) item.category_id = generalItemCategory.id
 
       const accounts = recomputeAllBalances(rawAccounts, vouchers)
       const stock = recomputeStock(items, vouchers, valuationMethod(company))
@@ -467,6 +481,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   addParty: async ({ name, type, phone, pan_vat, address, default_credit_days = 0, opening_balance = 0 }) => {
     const { company, rawAccounts, items, vouchers } = get()
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'create_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
     const accountId = crypto.randomUUID()
     const terminology = partyTerminology(type)
     const categoryName = terminology.category
@@ -485,43 +500,51 @@ export const useAppStore = create<AppState>((set, get) => ({
       is_archived: false,
       opening_balance,
     }
-    await insertAccount(newAccount)
-    const newParty = await insertParty({ company_id: company.id, name, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false })
-    const updatedRawAccounts = [...rawAccounts, { ...newAccount, balance: 0 }]
-    const accounts = recomputeAllBalances(updatedRawAccounts, vouchers)
-    const stock = recomputeStock(items, vouchers, valuationMethod(company))
-    set({ rawAccounts: updatedRawAccounts, accounts, stock, parties: [...get().parties, newParty] })
+    await trace.measure('party_ledger_insert', () => insertAccount(newAccount), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
+    const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
+    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
+      const updatedRawAccounts = [...rawAccounts, { ...newAccount, balance: 0 }]
+      return { rawAccounts: updatedRawAccounts, accounts: recomputeAllBalances(updatedRawAccounts, vouchers), stock: recomputeStock(items, vouchers, valuationMethod(company)), parties: [...get().parties, newParty] }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newParty
+    })
   },
 
   addItem: async (data) => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'create_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
     const unit = canonicalItemUnit(data.unit) || data.unit.trim()
     const alternateUnit = data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null
     const unitError = validateItemUnits(unit, alternateUnit)
     if (unitError) throw new Error(unitError)
     if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null })
-    const items = [...get().items, newItem]
-    const stock = recomputeStock(items, get().vouchers, valuationMethod(company))
-    set({ items, stock })
+    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
+    const nextState = trace.sync('client_stock_recompute', () => {
+      const items = [...get().items, newItem]
+      return { items, stock: recomputeStock(items, get().vouchers, valuationMethod(company)) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newItem
+    })
   },
 
   addAccount: async ({ name, type, group, category_id, opening_balance = 0 }) => {
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'create_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
     const category = get().accountCategories.find(entry => entry.id === category_id)
     const partyType = partyTypeForCategory(category)
     const newAcc = { id: crypto.randomUUID(), company_id: company.id, name, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance }
-    await insertAccount(newAcc)
-    const newParty = partyType ? await insertParty({ company_id: company.id, name, type: partyType, account_id: newAcc.id, is_archived: false }) : null
+    await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
+    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
     const accounts = recomputeAllBalances(updatedRaw, vouchers)
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })
     return { ...newAcc, balance: 0 }
+    })
   },
 
   addAccountCategory: async ({ name, account_type, parent_category_id = null }) => {
@@ -602,6 +625,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     const existing = get().rawAccounts.find(account => account.id === id)
     if (!company || !existing) throw new Error('Ledger not found')
+    return measuredWrite({ operation: 'update_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
     const used = get().vouchers.some(voucher => voucher.lines?.some(line => line.account_id === id))
     if ((existing.is_system || used) && updates.type && updates.type !== existing.type) throw new Error('The account type of a system or used ledger cannot be changed')
     const categoryId = updates.category_id || existing.category_id
@@ -609,11 +633,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const partyType = partyTypeForCategory(category)
     const existingParty = get().parties.find(party => party.account_id === id)
     const effectiveUpdates = partyType ? { ...updates, category_id: category!.id, group: category!.name, type: category!.account_type, is_party: true } : updates
-    await updateAccount(id, effectiveUpdates)
-    const newParty = partyType && !existingParty ? await insertParty({ company_id: company.id, name: effectiveUpdates.name || existing.name, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }) : null
+    await trace.measure('account_update', () => updateAccount(id, effectiveUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
+    const newParty = partyType && !existingParty ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: effectiveUpdates.name || existing.name, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const rawAccounts = get().rawAccounts.map(account => account.id === id ? { ...account, ...effectiveUpdates } : account)
     set({ rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers), parties: newParty ? [...get().parties, newParty] : get().parties })
     logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(console.warn)
+    })
   },
 
   deleteAccount: async (id) => {
@@ -637,6 +662,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     const party = get().parties.find(item => item.id === id)
     if (!company || !party) throw new Error('Party not found')
+    return measuredWrite({ operation: 'update_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
     if (updates.default_credit_days !== undefined && (!Number.isInteger(updates.default_credit_days) || updates.default_credit_days < 0)) throw new Error('Default Credit Days must be a whole number of 0 or more')
     const nextType = updates.type || party.type
     const terminology = partyTerminology(nextType)
@@ -644,18 +670,20 @@ export const useAppStore = create<AppState>((set, get) => ({
     const accountType = terminology.accountType
     const category = get().accountCategories.find(item => item.name === categoryName && item.account_type === accountType)
     const accountUpdates: Partial<Account> = { name: updates.name || party.name, type: accountType, group: categoryName, category_id: category?.id, is_archived: updates.is_archived }
-    await updateParty(id, updates)
-    await updateAccount(party.account_id, accountUpdates)
+    await trace.measure('party_master_update', () => updateParty(id, updates), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.update' })
+    await trace.measure('party_ledger_update', () => updateAccount(party.account_id, accountUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
     const parties = get().parties.map(item => item.id === id ? { ...item, ...updates } : item)
     const rawAccounts = get().rawAccounts.map(account => account.id === party.account_id ? { ...account, ...accountUpdates } : account)
     set({ parties, rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers) })
     logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(console.warn)
+    })
   },
 
   alterItem: async (id, updates) => {
     const company = get().company
     const existing = get().items.find(item => item.id === id)
     if (!company || !existing) throw new Error('Item not found')
+    return measuredWrite({ operation: 'update_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
     const normalizedUpdates = { ...updates }
     const unitFieldsChanged = updates.unit !== undefined || updates.alternate_unit !== undefined || updates.alternate_conversion !== undefined
     if (typeof updates.unit === 'string') normalizedUpdates.unit = canonicalItemUnit(updates.unit) || updates.unit.trim()
@@ -669,121 +697,155 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (effectiveAlternate && Number(effectiveConversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
       if (!effectiveAlternate) normalizedUpdates.alternate_conversion = null
     }
-    await updateItem(id, normalizedUpdates)
+    await trace.measure('item_update', () => updateItem(id, normalizedUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:items.update' })
     const items = get().items.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
     set({ items, stock: recomputeStock(items, get().vouchers, valuationMethod(company)) })
     logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(console.warn)
+    })
   },
 
   // ─── Sales ──────────────────────────────────────────────────────────────────
   saveSalesVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
-    const data = buildSalesVoucherData(effectiveParams)
-    if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Sales', voucherPrefix(company, 'Sales'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
+    return measuredWrite({ operation: 'create_sales_invoice', companyId: company.id, recordType: 'Sales', lineItems: params.items.length }, async trace => {
+    const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
+      const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+      const data = buildSalesVoucherData(effectiveParams)
+      if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
+      return { effectiveParams, data }
+    })
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Sales', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
+      numbering: voucherNumberingScope(company, 'Sales', effectiveParams.date_bs),
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
-    set({ vouchers, accounts, stock })
+    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    })
   },
 
   // ─── Purchase ───────────────────────────────────────────────────────────────
   savePurchaseVoucher: async (params) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
-    const data = buildPurchaseVoucherData(effectiveParams)
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Purchase', voucherPrefix(company, 'Purchase'), company.reset_numbering_fiscal_year, company.fiscal_year_start, effectiveParams.date_bs)
+    return measuredWrite({ operation: 'create_purchase_invoice', companyId: company.id, recordType: 'Purchase', lineItems: params.items.length }, async trace => {
+    const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
+      const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+      return { effectiveParams, data: buildPurchaseVoucherData(effectiveParams) }
+    })
     const dateFields = voucherDateFields(effectiveParams.date_bs)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Purchase', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Purchase', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
+      numbering: voucherNumberingScope(company, 'Purchase', effectiveParams.date_bs),
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
-    set({ vouchers, accounts, stock })
+    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    })
   },
 
   // ─── Receipt ────────────────────────────────────────────────────────────────
   saveReceipt: async ({ allocations, deposit_to_account_id, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const { isCash } = validateMoneyAccount(deposit_to_account_id, company, get().rawAccounts, get().accountCategories)
-    const validAllocations = validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories)
-    const data = buildReceiptData(validAllocations, deposit_to_account_id)
-    if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Receipt', voucherPrefix(company, 'Receipt'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    return measuredWrite({ operation: 'create_receipt', companyId: company.id, recordType: 'Receipt', lineItems: allocations.length }, async trace => {
+    const { isCash, validAllocations, data } = trace.sync('validation_and_payload', () => {
+      const { isCash } = validateMoneyAccount(deposit_to_account_id, company, get().rawAccounts, get().accountCategories)
+      const validAllocations = validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories)
+      const data = buildReceiptData(validAllocations, deposit_to_account_id)
+      if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
+      return { isCash, validAllocations, data }
+    })
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Receipt', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Receipt', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
+      numbering: voucherNumberingScope(company, 'Receipt', date_bs),
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    set({ vouchers, accounts })
+    const nextState = trace.sync('client_balance_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newVoucher
+    })
   },
 
   // ─── Payment ────────────────────────────────────────────────────────────────
   savePayment: async ({ allocations, paid_from_account_id, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    const { isCash } = validateMoneyAccount(paid_from_account_id, company, get().rawAccounts, get().accountCategories)
-    const validAllocations = validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories)
-    const data = buildPaymentData(validAllocations, paid_from_account_id)
-    if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Payment', voucherPrefix(company, 'Payment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    return measuredWrite({ operation: 'create_payment', companyId: company.id, recordType: 'Payment', lineItems: allocations.length }, async trace => {
+    const { isCash, validAllocations, data } = trace.sync('validation_and_payload', () => {
+      const { isCash } = validateMoneyAccount(paid_from_account_id, company, get().rawAccounts, get().accountCategories)
+      const validAllocations = validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories)
+      const data = buildPaymentData(validAllocations, paid_from_account_id)
+      if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
+      return { isCash, validAllocations, data }
+    })
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Payment', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Payment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
+      numbering: voucherNumberingScope(company, 'Payment', date_bs),
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    set({ vouchers, accounts })
+    const nextState = trace.sync('client_balance_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    })
   },
 
   // ─── Journal ────────────────────────────────────────────────────────────────
   saveJournal: async ({ lines, narration, date_bs }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
-    if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
-    const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Journal', voucherPrefix(company, 'Journal'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    return measuredWrite({ operation: 'create_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
+    const total = trace.sync('validation_and_payload', () => {
+      if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
+      return lines.reduce((sum, line) => sum + (line.debit || 0), 0)
+    })
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, is_cash: false, total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, is_cash: false, total, cancelled: false },
       lines,
+      numbering: voucherNumberingScope(company, 'Journal', date_bs),
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    set({ vouchers, accounts })
+    const nextState = trace.sync('client_balance_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    })
   },
 
   saveReturnVoucher: async (params) => {
     const { company, vouchers } = get()
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: params.type === 'Sales Return' ? 'create_credit_note' : 'create_debit_note', companyId: company.id, recordType: params.type, lineItems: params.items.length }, async trace => {
+    const { original, partyAccountId, data } = trace.sync('validation_and_payload', () => {
     const original = validateReturnRequest(company, get().parties, get().items, vouchers, params)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
@@ -792,12 +854,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     const partyAccountId = original?.party_account_id || params.party_account_id || null
     const data = buildReturnVoucherData({ ...params, original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, params.type, voucherPrefix(company, params.type), company.reset_numbering_fiscal_year, company.fiscal_year_start, params.date_bs)
+    return { original, partyAccountId, data }
+    })
     const dateFields = voucherDateFields(params.date_bs)
     const newVoucher = await insertVoucher({
       voucher: {
-        company_id: company.id, type: params.type, seq, invoice_no, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
+        company_id: company.id, type: params.type, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
         original_voucher_id: original?.id || null, return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
         settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? partyAccountId : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
         party_account_id: partyAccountId, is_cash: params.settlement_mode === 'cash',
@@ -807,14 +869,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: data.lines,
       stock_lines: data.stock_lines,
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
+      numbering: voucherNumberingScope(company, params.type, params.date_bs),
+      audit: { eventType: 'return_created', metadata: { type: params.type, original_voucher_id: original?.id || null } },
+      trace,
     })
-    const nextVouchers = [newVoucher, ...vouchers]
-    set({
-      vouchers: nextVouchers,
-      accounts: recomputeAllBalances(get().rawAccounts, nextVouchers),
-      stock: recomputeStock(get().items, nextVouchers, valuationMethod(company)),
+    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
+      const nextVouchers = [newVoucher, ...vouchers]
+      return { vouchers: nextVouchers, accounts: recomputeAllBalances(get().rawAccounts, nextVouchers), stock: recomputeStock(get().items, nextVouchers, valuationMethod(company)) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
-    logAppEvent('return_created', company.id, { voucher_id: newVoucher.id, type: params.type, original_voucher_id: original?.id || null })
   },
 
   // ─── Cancel ─────────────────────────────────────────────────────────────────
@@ -823,6 +887,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'update_sales_invoice', companyId: company.id, recordType: 'Sales', lineItems: params.items.length }, async trace => {
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('This invoice has an active return and can no longer be edited')
     const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildSalesVoucherData(effectiveParams)
@@ -835,11 +900,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
     set({ vouchers, accounts, stock })
+    })
   },
 
   updatePurchaseVoucher: async (id, params) => {
@@ -847,6 +914,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'update_purchase_invoice', companyId: company.id, recordType: 'Purchase', lineItems: params.items.length }, async trace => {
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('This bill has an active return and can no longer be edited')
     const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
@@ -858,11 +926,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
     set({ vouchers, accounts, stock })
+    })
   },
 
   updateReceipt: async (id, { allocations, deposit_to_account_id, narration, date_bs }) => {
@@ -870,6 +940,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'update_receipt', companyId: company.id, recordType: 'Receipt', lineItems: allocations.length }, async trace => {
     const { isCash } = validateMoneyAccount(deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true)
     const validAllocations = validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true)
     const data = buildReceiptData(validAllocations, deposit_to_account_id)
@@ -880,26 +951,30 @@ export const useAppStore = create<AppState>((set, get) => ({
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     set({ vouchers, accounts })
+    })
   },
 
   saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs, stock_condition, transfer_to }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'create_stock_adjustment', companyId: company.id, recordType: 'Stock Adjustment', lineItems: transfer_to ? 2 : 1 }, async trace => {
+    trace.sync('validation_and_payload', () => {
     if (!item_id) throw new Error('Select an item')
     if (!qty_delta) throw new Error('Enter a quantity adjustment')
     const quantity = Math.abs(qty_delta)
     const sourceCondition: StockCondition = transfer_to ? 'saleable' : stock_condition
     if (transfer_to && transfer_to === sourceCondition) throw new Error('Select a different destination for the transfer')
     if ((transfer_to || qty_delta < 0) && quantity > stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition) + 0.0001) throw new Error(`Only ${stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition)} units are available in ${sourceCondition} stock`)
-    const seq = await getNextSeq(company.id)
-    const invoice_no = await getNextVoucherNo(company.id, 'Stock Adjustment', voucherPrefix(company, 'Stock Adjustment'), company.reset_numbering_fiscal_year, company.fiscal_year_start, date_bs)
+    })
+    const quantity = Math.abs(qty_delta)
     const dateFields = voucherDateFields(date_bs)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Stock Adjustment', seq, invoice_no, numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration: narration || (transfer_to ? `Transfer from saleable to ${transfer_to} stock` : undefined), is_cash: false, total: transfer_to ? 0 : Math.abs(qty_delta * rate), cancelled: false },
+      voucher: { company_id: company.id, type: 'Stock Adjustment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration: narration || (transfer_to ? `Transfer from saleable to ${transfer_to} stock` : undefined), is_cash: false, total: transfer_to ? 0 : Math.abs(qty_delta * rate), cancelled: false },
       lines: [],
       stock_lines: transfer_to
         ? [
@@ -907,11 +982,16 @@ export const useAppStore = create<AppState>((set, get) => ({
             { item_id, qty: quantity, rate, direction: 'in', stock_condition: transfer_to, is_transfer: true },
           ]
         : [{ item_id, qty: quantity, rate, direction: qty_delta > 0 ? 'in' : 'out', stock_condition, is_transfer: false }],
+      numbering: voucherNumberingScope(company, 'Stock Adjustment', date_bs),
+      audit: { eventType: 'stock_adjustment', metadata: { item_id, qty_delta, rate, stock_condition, transfer_to } },
+      trace,
     })
-    const vouchers = [newVoucher, ...get().vouchers]
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
-    set({ vouchers, stock })
-    logAppEvent('stock_adjustment', company.id, { item_id, qty_delta, rate, stock_condition, transfer_to })
+    const nextState = trace.sync('client_stock_recompute', () => {
+      const vouchers = [newVoucher, ...get().vouchers]
+      return { vouchers, stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+    }, { category: 'cache' })
+    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    })
   },
 
   updatePayment: async (id, { allocations, paid_from_account_id, narration, date_bs }) => {
@@ -919,6 +999,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'update_payment', companyId: company.id, recordType: 'Payment', lineItems: allocations.length }, async trace => {
     const { isCash } = validateMoneyAccount(paid_from_account_id, company, get().rawAccounts, get().accountCategories, true)
     const validAllocations = validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories, true)
     const data = buildPaymentData(validAllocations, paid_from_account_id)
@@ -929,10 +1010,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
       settlements: settlementRows(validAllocations),
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     set({ vouchers, accounts })
+    })
   },
 
   updateJournal: async (id, { lines, narration, date_bs }) => {
@@ -940,6 +1023,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'update_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
     if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
     const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
     const dateFields = voucherDateFields(date_bs)
@@ -947,10 +1031,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, is_cash: false, total, cancelled: false },
       lines,
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     set({ vouchers, accounts })
+    })
   },
 
   updateReturnVoucher: async (id, params) => {
@@ -958,6 +1044,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing || (existing.type !== 'Sales Return' && existing.type !== 'Purchase Return')) throw new Error('Return voucher not found')
     if (!company) throw new Error('No company')
+    return measuredWrite({ operation: params.type === 'Sales Return' ? 'update_credit_note' : 'update_debit_note', companyId: company.id, recordType: params.type, lineItems: params.items.length }, async trace => {
     const original = validateReturnRequest(company, get().parties, get().items, get().vouchers, params, id)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
@@ -978,18 +1065,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: data.lines,
       stock_lines: data.stock_lines,
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
+      trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     set({ vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) })
+    })
   },
 
   cancelV: async (id) => {
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('Cancel linked return vouchers before cancelling the original invoice')
-    await cancelVoucher(id)
+    const company = get().company
+    if (!company) throw new Error('No company')
+    return measuredWrite({ operation: 'cancel_voucher', companyId: company.id, recordType: 'Voucher', lineItems: 0 }, async trace => {
+    await cancelVoucher(id, trace)
     const vouchers = get().vouchers.map(v => v.id === id ? { ...v, cancelled: true } : v)
     const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
     const stock = recomputeStock(get().items, vouchers, valuationMethod(get().company))
     set({ vouchers, accounts, stock })
+    })
   },
 
 }))

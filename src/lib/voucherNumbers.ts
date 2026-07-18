@@ -24,6 +24,29 @@ export function voucherNumberingPeriod(company: Company, dateBs: string): string
   return `FY-${fiscalYear}`
 }
 
+export interface VoucherNumberingScope {
+  prefix: string
+  resetByFiscalYear: boolean
+  periodStartKey: number | null
+  nextPeriodStartKey: number | null
+}
+
+/** Numbering inputs sent to the atomic posting RPC. */
+export function voucherNumberingScope(company: Company, type: VoucherType, dateBs: string): VoucherNumberingScope {
+  if (!company.reset_numbering_fiscal_year || !company.fiscal_year_start) {
+    return { prefix: voucherPrefix(company, type), resetByFiscalYear: false, periodStartKey: null, nextPeriodStartKey: null }
+  }
+  const fiscalMonthDay = adToBs(company.fiscal_year_start).slice(5)
+  const voucherYear = Number(dateBs.slice(0, 4))
+  const fiscalYear = dateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1
+  return {
+    prefix: voucherPrefix(company, type),
+    resetByFiscalYear: true,
+    periodStartKey: makeBsKey(`${fiscalYear}-${fiscalMonthDay}`),
+    nextPeriodStartKey: makeBsKey(`${fiscalYear + 1}-${fiscalMonthDay}`),
+  }
+}
+
 export function previewNextVoucherNumber(company: Company, vouchers: Voucher[], type: VoucherType, dateBs: string): string {
   let candidates = vouchers.filter(voucher => voucher.type === type)
   if (company.reset_numbering_fiscal_year && company.fiscal_year_start && dateBs) {

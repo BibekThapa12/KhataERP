@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, VoucherType, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
-import { adToBs, DEFAULT_FISCAL_YEAR_START_AD, makeBsKey, normalizeVoucherDates } from '@/lib/nepaliDate'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
+import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
+import type { WritePerformanceTrace } from '@/lib/writePerformance'
 
 const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
 const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
@@ -351,7 +352,7 @@ export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_
   if(old&&(old.starts_at!==data.starts_at||old.expires_at!==data.expires_at))actions.push('module_dates_changed')
   if(old&&Number(old.price)!==Number(data.price))actions.push('module_price_changed')
   if(old&&JSON.stringify(old.settings)!==JSON.stringify(data.settings))actions.push('module_settings_changed')
-  for(const action of actions.length?actions:['module_updated'])await logChequeEvent(value.company_id,action,undefined,undefined,old||{},data)
+  await logChequeEvents(value.company_id, (actions.length ? actions : ['module_updated']).map(action => ({ action, old_values: old || {}, new_values: data })))
   return data as CompanyModule
 }
 export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
@@ -364,7 +365,8 @@ export async function createChequeBank(value:Omit<ChequeBank,'id'|'created_at'|'
 export async function updateChequeBank(id:string,company_id:string,updates:Partial<ChequeBank>,old:ChequeBank) { const {data,error}=await supabase.from('cheque_banks').update({...updates,updated_at:new Date().toISOString()}).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.is_active===false?'bank_archived':'bank_updated',undefined,id,old,data); return data as ChequeBank }
 export async function createCheque(value:Omit<Cheque,'id'|'created_at'|'updated_at'|'status'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheques').insert({...value,status:'pending',created_by:user?.id,updated_by:user?.id}).select().single(); if(error) throw error; await logChequeEvent(value.company_id,'cheque_created',data.id,undefined,{},data); return data as Cheque }
 export async function updateCheque(id:string,company_id:string,updates:Partial<Cheque>,old:Cheque) { const {data,error}=await supabase.from('cheques').update(updates).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.status?`cheque_${updates.status}`:'cheque_updated',id,undefined,old,data); return data as Cheque }
-export async function logChequeEvent(company_id:string,action:string,cheque_id?:string,bank_id?:string,old_values:unknown={},new_values:unknown={}) { const {data:{user}}=await supabase.auth.getUser(); if(!user) return; const {error}=await supabase.from('cheque_events').insert({company_id,action,cheque_id,bank_id,old_values,new_values,actor_id:user.id}); if(error) throw error }
+export async function logChequeEvents(company_id:string,events:{action:string;cheque_id?:string;bank_id?:string;old_values?:unknown;new_values?:unknown}[]) { if(!events.length)return; const {data:{user}}=await supabase.auth.getUser(); if(!user)return; const {error}=await supabase.from('cheque_events').insert(events.map(event=>({company_id,action:event.action,cheque_id:event.cheque_id,bank_id:event.bank_id,old_values:event.old_values||{},new_values:event.new_values||{},actor_id:user.id}))); if(error)throw error }
+export async function logChequeEvent(company_id:string,action:string,cheque_id?:string,bank_id?:string,old_values:unknown={},new_values:unknown={}) { await logChequeEvents(company_id,[{action,cheque_id,bank_id,old_values,new_values}]) }
 
 // ─── Accounts ────────────────────────────────────────────────────────────────
 
@@ -391,6 +393,16 @@ export async function insertAccount(account: Omit<Account, 'balance' | 'created_
   return data
 }
 
+export async function upsertAccounts(accounts: Account[]) {
+  if (!accounts.length) return
+  const rows = accounts.map(account => {
+    const { balance: _balance, created_at: _createdAt, ...stored } = account
+    return stored
+  })
+  const { error } = await supabase.from('accounts').upsert(rows, { onConflict: 'id' })
+  if (error) throw error
+}
+
 export async function updateAccount(id: string, updates: Partial<Account>) {
   const { balance: _balance, ...storedUpdates } = updates
   const { error } = await supabase.from('accounts').update(storedUpdates).eq('id', id)
@@ -412,6 +424,13 @@ export async function insertAccountCategory(category: Omit<AccountCategory, 'id'
   const { data, error } = await supabase.from('account_categories').upsert(category, { onConflict: 'company_id,name,account_type' }).select().single()
   if (error) throw error
   return data
+}
+
+export async function insertAccountCategories(categories: Omit<AccountCategory, 'id' | 'created_at'>[]): Promise<AccountCategory[]> {
+  if (!categories.length) return []
+  const { data, error } = await supabase.from('account_categories').upsert(categories, { onConflict: 'company_id,name,account_type' }).select()
+  if (error) throw error
+  return data || []
 }
 
 export async function updateAccountCategory(id: string, updates: Partial<AccountCategory>) {
@@ -446,6 +465,13 @@ export async function insertParty(party: Omit<Party, 'id' | 'created_at' | 'acco
   return data as Party
 }
 
+export async function insertParties(parties: Omit<Party, 'id' | 'created_at' | 'account'>[]): Promise<Party[]> {
+  if (!parties.length) return []
+  const { data, error } = await supabase.from('parties').insert(parties).select()
+  if (error) throw error
+  return (data || []) as Party[]
+}
+
 export async function updateParty(id: string, updates: Partial<Party>) {
   const { error } = await supabase.from('parties').update(updates).eq('id', id)
   if (error) throw error
@@ -471,6 +497,12 @@ export async function insertItem(item: Omit<Item, 'id' | 'created_at' | 'stock_q
 
 export async function updateItem(id: string, updates: Partial<Item>) {
   const { error } = await supabase.from('items').update(updates).eq('id', id)
+  if (error) throw error
+}
+
+export async function updateItemsByIds(ids: string[], updates: Partial<Item>) {
+  if (!ids.length) return
+  const { error } = await supabase.from('items').update(updates).in('id', ids)
   if (error) throw error
 }
 
@@ -559,56 +591,15 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
     .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
 }
 
-export async function getNextSeq(company_id: string): Promise<number> {
-  const { data } = await supabase
-    .from('vouchers')
-    .select('seq')
-    .eq('company_id', company_id)
-    .order('seq', { ascending: false })
-    .limit(1)
-    .single()
-  return (data?.seq || 0) + 1
-}
-
-export async function getNextVoucherNo(
-  company_id: string,
-  type: VoucherType,
-  prefix: string,
-  resetByFiscalYear = false,
-  fiscalYearStart?: string,
-  voucherDateBs?: string,
-): Promise<string> {
-  let query = supabase
-    .from('vouchers')
-    .select('invoice_no')
-    .eq('company_id', company_id)
-    .eq('type', type)
-
-  if (resetByFiscalYear && fiscalYearStart && voucherDateBs) {
-    const fiscalMonthDay = adToBs(fiscalYearStart).slice(5)
-    const voucherYear = Number(voucherDateBs.slice(0, 4))
-    const fiscalYear = voucherDateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1
-    const periodStart = makeBsKey(`${fiscalYear}-${fiscalMonthDay}`)
-    const nextPeriodStart = makeBsKey(`${fiscalYear + 1}-${fiscalMonthDay}`)
-    query = query.gte('date_bs_key', periodStart).lt('date_bs_key', nextPeriodStart)
-  }
-
-  const { data, error } = await query
-  if (error) throw error
-
-  const highestNumber = (data || []).reduce((highest, voucher) => {
-    const match = String(voucher.invoice_no || '').match(/(\d+)$/)
-    return match ? Math.max(highest, Number(match[1])) : highest
-  }, 0)
-  return `${prefix}${String(highestNumber + 1).padStart(4, '0')}`
-}
-
 interface InsertVoucherPayload {
-  voucher: Omit<Voucher, 'id' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
+  voucher: Omit<Voucher, 'id' | 'seq' | 'invoice_no' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
   invoice_items?: InvoiceItem[]
   settlements?: VoucherSettlementInput[]
+  numbering: AtomicVoucherNumbering
+  audit?: AtomicVoucherAudit
+  trace?: WritePerformanceTrace
 }
 
 interface UpdateVoucherPayload {
@@ -618,167 +609,72 @@ interface UpdateVoucherPayload {
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
   invoice_items?: InvoiceItem[]
   settlements?: VoucherSettlementInput[]
+  audit?: AtomicVoucherAudit
+  trace?: WritePerformanceTrace
 }
 
 export type VoucherSettlementInput = Pick<VoucherSettlement, 'invoice_voucher_id' | 'party_account_id' | 'amount'>
 
-function invoiceItemInsertRow(item: InvoiceItem, voucherId: string) {
-  return {
-    voucher_id: voucherId,
-    item_id: item.item_id,
-    qty: item.qty,
-    rate: item.rate,
-    source_invoice_item_id: item.source_invoice_item_id,
-    item_name: item.item_name,
-    unit: item.unit,
-    entry_unit: item.entry_unit,
-    conversion_factor: item.conversion_factor,
-    base_qty: item.base_qty,
-    discount_amount: item.discount_amount,
-    taxable_amount: item.taxable_amount,
-    vat_amount: item.vat_amount,
-    cost_rate: item.cost_rate,
-  }
+export interface AtomicVoucherNumbering {
+  prefix: string
+  resetByFiscalYear: boolean
+  periodStartKey: number | null
+  nextPeriodStartKey: number | null
 }
 
-export async function replaceVoucherSettlements(companyId: string, settlementVoucherId: string, rows: VoucherSettlementInput[]): Promise<VoucherSettlement[]> {
-  const { error: deleteError } = await supabase.from('voucher_settlements').delete().eq('settlement_voucher_id', settlementVoucherId)
-  if (deleteError) throw deleteError
-  if (!rows.length) return []
-  const { data, error } = await supabase.from('voucher_settlements').insert(rows.map(row => ({
-    company_id: companyId,
-    settlement_voucher_id: settlementVoucherId,
-    invoice_voucher_id: row.invoice_voucher_id,
-    party_account_id: row.party_account_id,
-    amount: row.amount,
-  }))).select()
+export interface AtomicVoucherAudit {
+  eventType?: string
+  metadata?: Record<string, unknown>
+}
+
+function atomicVoucherRequest(
+  voucher: InsertVoucherPayload['voucher'] | UpdateVoucherPayload['voucher'],
+  lines: UpdateVoucherPayload['lines'],
+  stockLines: UpdateVoucherPayload['stock_lines'],
+  invoiceItems: UpdateVoucherPayload['invoice_items'],
+  settlements: UpdateVoucherPayload['settlements'],
+  id: string | null,
+  numbering?: AtomicVoucherNumbering,
+  audit?: AtomicVoucherAudit,
+) {
+  return supabase.rpc('save_voucher_atomic', {
+    p_voucher: voucher,
+    p_lines: lines,
+    p_stock_lines: stockLines || [],
+    p_invoice_items: invoiceItems || [],
+    p_settlements: settlements || [],
+    p_voucher_id: id,
+    p_invoice_prefix: numbering?.prefix || null,
+    p_reset_numbering: numbering?.resetByFiscalYear || false,
+    p_period_start_key: numbering?.periodStartKey ?? null,
+    p_next_period_start_key: numbering?.nextPeriodStartKey ?? null,
+    p_audit_event_type: audit?.eventType || null,
+    p_audit_metadata: audit?.metadata || {},
+  })
+}
+
+export async function insertVoucher({ voucher, lines, stock_lines, invoice_items, settlements, numbering, audit, trace }: InsertVoucherPayload): Promise<Voucher> {
+  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit)
+  const { data, error } = trace
+    ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_atomic' })
+    : await request()
   if (error) throw error
-  return (data || []) as VoucherSettlement[]
+  return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
-export async function insertVoucher({ voucher, lines, stock_lines, invoice_items, settlements }: InsertVoucherPayload): Promise<Voucher> {
-  const { data: v, error: ve } = await supabase
-    .from('vouchers')
-    .insert(voucher)
-    .select()
-    .single()
-  if (ve) throw ve
-
-  try {
-  let newLines: VoucherLine[] = []
-  if (lines.length) {
-    const { data, error: le } = await supabase
-      .from('voucher_lines')
-      .insert(lines.map(l => ({ ...l, voucher_id: v.id })))
-      .select()
-    if (le) throw le
-    newLines = data || []
-  }
-
-  let newStockLines: StockLine[] = []
-  if (stock_lines?.length) {
-    const { data, error: se } = await supabase
-      .from('stock_lines')
-      .insert(stock_lines.map(s => ({ ...s, voucher_id: v.id })))
-      .select()
-    if (se) throw se
-    newStockLines = data || []
-  }
-
-  let newInvoiceItems: InvoiceItem[] = []
-  if (invoice_items?.length) {
-    const { data, error: ie } = await supabase
-      .from('invoice_items')
-      .insert(invoice_items.map(item => invoiceItemInsertRow(item, v.id)))
-      .select()
-    if (ie) throw ie
-    newInvoiceItems = data || []
-  }
-
-  const newSettlements = settlements?.length
-    ? await replaceVoucherSettlements(v.company_id, v.id, settlements)
-    : []
-
-  return {
-    ...normalizeVoucherDates(v),
-    lines: newLines,
-    stock_lines: newStockLines,
-    invoice_items: newInvoiceItems,
-    settlements: newSettlements,
-  } as Voucher
-  } catch (error) {
-    // Child rows cascade from the voucher. Best-effort cleanup prevents a
-    // partially posted header when a later request fails.
-    const { error: cleanupError } = await supabase.from('vouchers').delete().eq('id', v.id)
-    if (cleanupError) console.error('Failed to clean up partial voucher', cleanupError)
-    throw error
-  }
+export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements, audit, trace }: UpdateVoucherPayload): Promise<Voucher> {
+  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit)
+  const { data, error } = trace
+    ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_atomic' })
+    : await request()
+  if (error) throw error
+  return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
-export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements }: UpdateVoucherPayload): Promise<Voucher> {
-  const { data: v, error: ve } = await supabase
-    .from('vouchers')
-    .update(voucher)
-    .eq('id', id)
-    .select()
-    .single()
-  if (ve) throw ve
-
-  const childTables = ['voucher_lines', 'stock_lines', 'invoice_items'] as const
-  for (const table of childTables) {
-    const { error } = await supabase.from(table).delete().eq('voucher_id', id)
-    if (error) throw error
-  }
-  const { error: settlementDeleteError } = await supabase.from('voucher_settlements').delete().eq('settlement_voucher_id', id)
-  if (settlementDeleteError) throw settlementDeleteError
-
-  let newLines: VoucherLine[] = []
-  if (lines.length) {
-    const { data, error: le } = await supabase
-      .from('voucher_lines')
-      .insert(lines.map(l => ({ ...l, voucher_id: id })))
-      .select()
-    if (le) throw le
-    newLines = data || []
-  }
-
-  let newStockLines: StockLine[] = []
-  if (stock_lines?.length) {
-    const { data, error: se } = await supabase
-      .from('stock_lines')
-      .insert(stock_lines.map(s => ({ ...s, voucher_id: id })))
-      .select()
-    if (se) throw se
-    newStockLines = data || []
-  }
-
-  let newInvoiceItems: InvoiceItem[] = []
-  if (invoice_items?.length) {
-    const { data, error: ie } = await supabase
-      .from('invoice_items')
-      .insert(invoice_items.map(item => invoiceItemInsertRow(item, id)))
-      .select()
-    if (ie) throw ie
-    newInvoiceItems = data || []
-  }
-
-  const newSettlements = settlements?.length
-    ? await replaceVoucherSettlements(v.company_id, id, settlements)
-    : []
-
-  return {
-    ...normalizeVoucherDates(v),
-    lines: newLines,
-    stock_lines: newStockLines,
-    invoice_items: newInvoiceItems,
-    settlements: newSettlements,
-  } as Voucher
-}
-
-export async function cancelVoucher(id: string) {
-  const { error } = await supabase
-    .from('vouchers')
-    .update({ cancelled: true })
-    .eq('id', id)
+export async function cancelVoucher(id: string, trace?: WritePerformanceTrace) {
+  const request = () => supabase.from('vouchers').update({ cancelled: true }).eq('id', id)
+  const { error } = trace
+    ? await trace.measure('voucher_cancel_update', request, { category: 'network_database', query: true, dbFunction: 'postgrest:vouchers.update' })
+    : await request()
   if (error) throw error
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { previewNextVoucherNumber, savedVoucherNumber, voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
+import { previewNextVoucherNumber, savedVoucherNumber, voucherNumberingPeriod, voucherNumberingScope, voucherPrefix } from '@/lib/voucherNumbers'
 import { DEFAULT_FISCAL_YEAR_START_AD } from '@/lib/nepaliDate'
 import type { Company, Voucher } from '@/types'
 
@@ -33,5 +33,13 @@ describe('voucher numbering', () => {
     expect(voucherNumberingPeriod(fiscalCompany, '2083-03-30')).toBe('FY-2082')
     expect(voucherNumberingPeriod(fiscalCompany, '2083-04-01')).toBe('FY-2083')
     expect(voucherNumberingPeriod(company, '2083-04-01')).toBe('all')
+    expect(voucherNumberingScope(fiscalCompany, 'Sales', '2083-03-30')).toEqual({
+      prefix: 'SI-', resetByFiscalYear: true,
+      periodStartKey: 20820401, nextPeriodStartKey: 20830401,
+    })
+    expect(voucherNumberingScope(company, 'Sales', '2083-04-01')).toEqual({
+      prefix: 'SI-', resetByFiscalYear: false,
+      periodStartKey: null, nextPeriodStartKey: null,
+    })
   })
 })
