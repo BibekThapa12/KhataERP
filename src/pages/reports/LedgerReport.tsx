@@ -5,8 +5,10 @@ import { useAppStore } from '@/store/useAppStore'
 import { categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
 import { downloadCsv } from '@/lib/csv'
 import { getGroupReport } from '@/lib/managementReports'
-import { fiscalYearStartBs, formatLedgerBalance, getLedgerRows } from '@/lib/reports'
-import { todayBs } from '@/lib/nepaliDate'
+import { fiscalYearStartBs, formatLedgerBalance, getLedgerRows, selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
+import { isPostedDashboardVoucher } from '@/lib/dashboard'
+import { recomputeFiscalTrialAccounts, resolveSystemAccountId, round2 } from '@/lib/engine'
+import { bsToAd, makeBsKey } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
@@ -22,7 +24,7 @@ type Mode = 'ledger' | 'group'
 type View = 'summary' | 'transactions'
 
 export function LedgerReportPage() {
-  const { company, rawAccounts, accountCategories, vouchers, parties } = useAppStore()
+  const { company, rawAccounts, accountCategories, items, vouchers, parties } = useAppStore()
   const [searchParams, setSearchParams] = useSearchParams()
   const initialMode: Mode = searchParams.get('mode') === 'group' ? 'group' : 'ledger'
   const [mode, setMode] = useState<Mode>(initialMode)
@@ -31,8 +33,8 @@ export function LedgerReportPage() {
   const categories = useMemo(() => accountCategories.filter(category => !category.is_archived).sort((a, b) => a.account_type.localeCompare(b.account_type) || categoryPath(accountCategories, a.id).localeCompare(categoryPath(accountCategories, b.id))), [accountCategories])
   const [targetId, setTargetId] = useState(() => initialMode === 'group' ? searchParams.get('category') || '' : searchParams.get('account') || '')
   const [range, setRange] = useState<ReportRange>('fiscal')
-  const [from, setFrom] = useState(() => fiscalYearStartBs(company))
-  const [to, setTo] = useState(todayBs())
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [showCancelled, setShowCancelled] = useState(false)
   const [selected, setSelected] = useState<Voucher | null>(null)
 
@@ -40,13 +42,47 @@ export function LedgerReportPage() {
     const choices = mode === 'ledger' ? sortedAccounts : categories
     if (!choices.some(choice => choice.id === targetId)) setTargetId(choices[0]?.id || '')
   }, [mode, targetId, sortedAccounts, categories])
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalYearStartBs(company)) }, [company, range])
+  useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   useEffect(() => {
     if (!targetId) return
     setSearchParams(mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }, { replace: true })
   }, [mode, targetId, setSearchParams])
 
-  const ledger = useMemo(() => getLedgerRows(mode === 'ledger' ? targetId : '', rawAccounts, vouchers, from, to, showCancelled), [mode, targetId, rawAccounts, vouchers, from, to, showCancelled])
+  const baseLedger = useMemo(() => getLedgerRows(mode === 'ledger' ? targetId : '', rawAccounts, vouchers, from, to, showCancelled), [mode, targetId, rawAccounts, vouchers, from, to, showCancelled])
+  const retainedAccountId = company ? resolveSystemAccountId(rawAccounts, company.id, 'retained_earnings') : ''
+  const reportFiscalStart = useMemo(() => {
+    const currentStart = fiscalYearStartBs(company)
+    const monthDay = currentStart.slice(5)
+    const fromYear = Number(from.slice(0, 4))
+    return `${from.slice(5) >= monthDay ? fromYear : fromYear - 1}-${monthDay}`
+  }, [company, from])
+  const retainedBalance = useMemo(() => {
+    if (mode !== 'ledger' || targetId !== retainedAccountId || !company) return 0
+    const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
+    const currentAssetsCategoryId = accountCategories.find(category => category.account_type === 'Asset' && category.name === 'Current Assets')?.id
+    const posted = vouchers.filter(isPostedDashboardVoucher)
+    return recomputeFiscalTrialAccounts(rawAccounts, posted, reportFiscalStart, company.id, retainedCategoryId, items, company.inventory_valuation_method || 'weighted_average', currentAssetsCategoryId)
+      .find(account => account.id === retainedAccountId)?.balance || 0
+  }, [mode, targetId, retainedAccountId, company, accountCategories, vouchers, rawAccounts, reportFiscalStart, items])
+  const ledger = useMemo(() => {
+    if (mode !== 'ledger' || targetId !== retainedAccountId || Math.abs(retainedBalance) < 0.005) return baseLedger
+    const broughtForwardDateAd = bsToAd(from)
+    const broughtForwardVoucher: Voucher = {
+      id: `${retainedAccountId}:brought-forward:${reportFiscalStart}`, company_id: '', type: 'Journal', date: broughtForwardDateAd, date_ad: broughtForwardDateAd,
+      date_bs: from, date_bs_key: makeBsKey(from), invoice_no: 'B/F', is_cash: false, total: 0, cancelled: false, seq: 0,
+      narration: `Calculated profit/loss brought forward before fiscal year ${reportFiscalStart}`,
+    }
+    return {
+      ...baseLedger,
+      opening_balance: round2(baseLedger.opening_balance + retainedBalance),
+      rows: [{
+        voucher: broughtForwardVoucher, date_bs: from, date_bs_key: makeBsKey(from), voucher_type: 'Journal' as const,
+        voucher_no: 'B/F', particulars: 'Balance Brought Forward', narration: broughtForwardVoucher.narration || '', debit: 0, credit: 0,
+        running_balance: round2(baseLedger.opening_balance + retainedBalance), cancelled: false,
+      }, ...baseLedger.rows.map(row => ({ ...row, running_balance: round2(row.running_balance + retainedBalance) }))],
+      closing_balance: round2(baseLedger.closing_balance + retainedBalance),
+    }
+  }, [mode, targetId, retainedAccountId, retainedBalance, baseLedger, reportFiscalStart, from])
   const group = useMemo(() => getGroupReport(mode === 'group' ? targetId : '', accountCategories, rawAccounts, vouchers, from, to, showCancelled), [mode, targetId, accountCategories, rawAccounts, vouchers, from, to, showCancelled])
   const partyByAccount = useMemo(() => new Map(parties.map(party => [party.account_id, party])), [parties])
   const title = mode === 'ledger' ? ledger.account?.name || 'Ledger' : group.category?.name || 'Account Group'
@@ -85,5 +121,8 @@ export function LedgerReportPage() {
 }
 
 function TransactionTable({ rows, onSelect }: { rows: Array<ReturnType<typeof getLedgerRows>['rows'][number] & { account?: { name: string } | null; displayBalance: number }>; onSelect: (voucher: Voucher) => void }) {
-  return <table className="w-full min-w-[1000px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Ledger</th><th className="report-th text-left">Voucher</th><th className="report-th text-left">Particulars</th><th className="report-th text-left">Narration</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Balance</th></tr></thead><tbody>{rows.map((row, index) => <tr key={`${row.voucher.id}-${row.account?.name}-${index}`} onClick={() => onSelect(row.voucher)} className={`cursor-pointer border-t hover:bg-muted/30 ${row.cancelled ? 'opacity-50 line-through' : ''}`}><td className="report-td">{fmtDate(row.date_bs)}</td><td className="report-td font-medium">{row.account?.name}</td><td className="report-td">{row.voucher_type} {row.voucher_no}</td><td className="report-td">{row.particulars}</td><td className="report-td text-muted-foreground">{row.narration || '-'}</td><td className="report-td text-right num">{row.debit ? fmtMoney(row.debit) : '-'}</td><td className="report-td text-right num">{row.credit ? fmtMoney(row.credit) : '-'}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.displayBalance)}</td></tr>)}{!rows.length && <tr><td colSpan={8} className="px-4 py-14 text-center text-muted-foreground">No movements in the selected period.</td></tr>}</tbody></table>
+  return <table className="w-full min-w-[1000px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Date</th><th className="report-th text-left">Ledger</th><th className="report-th text-left">Voucher</th><th className="report-th text-left">Particulars</th><th className="report-th text-left">Narration</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Balance</th></tr></thead><tbody>{rows.map((row, index) => {
+    const isCalculated = !row.voucher.company_id
+    return <tr key={`${row.voucher.id}-${row.account?.name}-${index}`} onClick={() => !isCalculated && onSelect(row.voucher)} className={`${isCalculated ? '' : 'cursor-pointer hover:bg-muted/30'} border-t ${row.cancelled ? 'opacity-50 line-through' : ''}`}><td className="report-td">{fmtDate(row.date_bs)}</td><td className="report-td font-medium">{row.account?.name}</td><td className="report-td">{isCalculated ? 'Calculated' : `${row.voucher_type} ${row.voucher_no}`}</td><td className="report-td">{row.particulars}</td><td className="report-td text-muted-foreground">{row.narration || '-'}</td><td className="report-td text-right num">{row.debit ? fmtMoney(row.debit) : '-'}</td><td className="report-td text-right num">{row.credit ? fmtMoney(row.credit) : '-'}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.displayBalance)}</td></tr>
+  })}{!rows.length && <tr><td colSpan={8} className="px-4 py-14 text-center text-muted-foreground">No movements in the selected period.</td></tr>}</tbody></table>
 }

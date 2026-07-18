@@ -38,12 +38,13 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
     if (!open) return
     setName(category?.name || '')
     setType(kind === 'account' && (category || parentCategory) ? ((category || parentCategory) as AccountCategory).account_type : 'Expense')
-    setParentId(category?.parent_category_id || parentCategory?.id || 'root')
+    setParentId(category?.parent_category_id || parentCategory?.id || (kind === 'item' || category ? 'root' : ''))
     setError('')
   }, [open, category, parentCategory, kind])
 
   const save = async () => {
     if (!name.trim()) return setError('Enter a category name.')
+    if (kind === 'account' && !category && !parentId) return setError('Select a parent account group.')
     setSaving(true)
     try {
       if (kind === 'account') {
@@ -68,8 +69,8 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus disabled={systemCategory} /></div>
-          {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId('root') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
-          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[{ value: 'root', label: 'Top level' }, ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
+          {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId(category ? 'root' : '') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
+          <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} placeholder={kind === 'account' ? 'Select parent account group' : 'Select parent category'} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[...(kind === 'item' || category ? [{ value: 'root', label: 'Top level' }] : []), ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
           {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

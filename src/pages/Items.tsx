@@ -5,6 +5,7 @@ import { cn, fmtDate, fmtMoney } from '@/lib/utils'
 import { todayBs } from '@/lib/nepaliDate'
 import { normalizeSearch } from '@/lib/search'
 import { stockConditionQuantity } from '@/lib/engine'
+import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { buildCategoryTree, categoryPath } from '@/lib/categoryHierarchy'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { ItemForm } from '@/components/forms/OtherForms'
@@ -30,21 +31,42 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
   const [itemId, setItemId] = useState('')
   const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
   const [transferTo, setTransferTo] = useState<'damaged' | 'expired'>('damaged')
+  const [unitMode, setUnitMode] = useState<UnitMode>('main')
   const [qtyDelta, setQtyDelta] = useState('')
   const [rate, setRate] = useState('')
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const selectedItem = items.find(item => item.id === itemId)
   const selectedStock = stock.find(entry => entry.id === itemId)
   const availableSaleable = itemId ? stockConditionQuantity(items, vouchers, itemId, 'saleable') : 0
+  const conversionFactor = unitFactor(selectedItem, unitMode)
+  const selectedUnit = unitName(selectedItem, unitMode)
+  const availableInSelectedUnit = availableSaleable * conversionFactor
+
+  const changeUnitMode = (nextMode: UnitMode) => {
+    const previousFactor = unitFactor(selectedItem, unitMode)
+    const nextFactor = unitFactor(selectedItem, nextMode)
+    if (qtyDelta !== '' && Number.isFinite(Number(qtyDelta))) {
+      const baseQuantity = toBaseQty(Number(qtyDelta), previousFactor)
+      setQtyDelta(String(Number((baseQuantity * nextFactor).toFixed(4))))
+    }
+    if (rate !== '' && Number.isFinite(Number(rate))) {
+      const baseRate = toBaseRate(Number(rate), previousFactor)
+      setRate(String(fromBaseRate(baseRate, nextFactor)))
+    }
+    setUnitMode(nextMode)
+  }
 
   const handleSave = async () => {
     setError('')
     setSaving(true)
     try {
-      await saveStockAdjustment({ item_id: itemId, qty_delta: mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), rate: mode === 'transfer' ? selectedStock?.avg_cost || 0 : Number(rate) || 0, narration: narration.trim(), date_bs: dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined })
-      setDateBs(todayBs()); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      const baseQuantity = toBaseQty(mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), conversionFactor)
+      const baseRate = mode === 'transfer' ? selectedStock?.avg_cost || 0 : toBaseRate(Number(rate) || 0, conversionFactor)
+      await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined })
+      setDateBs(todayBs()); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError((error as Error).message)
@@ -57,8 +79,8 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
       <div className="space-y-4 py-2">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} /></div>
         <div className="space-y-1.5"><Label>Adjustment Type</Label><SearchableSelect value={mode} onValueChange={value => setMode(value as typeof mode)} options={[{ value: 'adjustment', label: 'Quantity Adjustment' }, { value: 'transfer', label: 'Transfer Stock Condition' }]} /></div>
-        <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={setItemId} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
-        {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Rate</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableSaleable} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /><p className="text-xs text-muted-foreground">Available: {availableSaleable.toLocaleString('en-NP', { maximumFractionDigits: 4 })}. Transferred at {fmtMoney(selectedStock?.avg_cost || 0)}.</p></div></>}
+        <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate('') }} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
+        {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div><div className="space-y-1.5"><Label>Rate / {selectedUnit || 'Unit'}</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)] gap-3"><div className="space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableInSelectedUnit} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /></div><div className="space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div></div><p className="text-xs text-muted-foreground">Available: {selectedItem ? formatStockQuantity(availableSaleable, selectedItem) : '0'}. Transferred at {fmtMoney(fromBaseRate(selectedStock?.avg_cost || 0, conversionFactor))} / {selectedUnit || 'unit'}.</p></>}
         <div className="space-y-1.5"><Label>Reason</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Damage, found stock, correction..." /></div>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>

@@ -4,8 +4,8 @@ import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, Trend
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeStockConditionSummary, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, round2 } from '@/lib/engine'
-import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, type AccountReportTreeNode } from '@/lib/reports'
-import { dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
+import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, saveSelectedFiscalYear, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
+import { dashboardFiscalYearOptions, dashboardFiscalYearRange, dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
@@ -217,12 +217,12 @@ function ProfitLossGrandTotal({ amount, className = '' }: { amount: number; clas
 }
 
 export function TrialBalancePage() {
-  const { company, rawAccounts, accountCategories, vouchers } = useAppStore()
-  const fiscalStart = fiscalYearStartBs(company)
+  const { company, rawAccounts, accountCategories, items, vouchers } = useAppStore()
+  const fiscalStart = selectedFiscalYearStartBs(company)
   const [range, setRange] = useState<ReportRange>('fiscal')
   const [from, setFrom] = useState(fiscalStart)
-  const [to, setTo] = useState(todayBs())
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
+  useEffect(() => { if (range === 'fiscal') { setFrom(fiscalStart); setTo(selectedFiscalYearEndBs(company)) } }, [company, fiscalStart, range])
   const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
   const reportFiscalStart = useMemo(() => {
     const monthDay = fiscalStart.slice(5)
@@ -230,11 +230,13 @@ export function TrialBalancePage() {
     return `${from.slice(5) >= monthDay ? fromYear : fromYear - 1}-${monthDay}`
   }, [fiscalStart, from])
   const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
+  const currentAssetsCategoryId = accountCategories.find(category => category.account_type === 'Asset' && category.name === 'Current Assets')?.id
+  const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
   const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
   const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
   const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
-  const openingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, beforeFrom, reportFiscalStart, company?.id || '', retainedCategoryId), [rawAccounts, beforeFrom, reportFiscalStart, company?.id, retainedCategoryId])
-  const closingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, throughTo, reportFiscalStart, company?.id || '', retainedCategoryId), [rawAccounts, throughTo, reportFiscalStart, company?.id, retainedCategoryId])
+  const openingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, beforeFrom, reportFiscalStart, company?.id || '', retainedCategoryId, items, valuationMethod, currentAssetsCategoryId), [rawAccounts, beforeFrom, reportFiscalStart, company?.id, retainedCategoryId, items, valuationMethod, currentAssetsCategoryId])
+  const closingAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, throughTo, reportFiscalStart, company?.id || '', retainedCategoryId, items, valuationMethod, currentAssetsCategoryId), [rawAccounts, throughTo, reportFiscalStart, company?.id, retainedCategoryId, items, valuationMethod, currentAssetsCategoryId])
   const movements = useMemo(() => {
     const byAccount = new Map<string, { debit: number; credit: number }>()
     for (const voucher of periodVouchers) for (const line of voucher.lines || []) {
@@ -282,12 +284,12 @@ export function TrialBalancePage() {
 // ─── Profit & Loss ────────────────────────────────────────────────────────────
 export function ProfitLossPage() {
   const { company, rawAccounts, accountCategories, items, vouchers } = useAppStore()
-  const fiscalStart = fiscalYearStartBs(company)
+  const fiscalStart = selectedFiscalYearStartBs(company)
   const [range, setRange] = useState<ReportRange>('fiscal')
   const [from, setFrom] = useState(fiscalStart)
-  const [to, setTo] = useState(todayBs())
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [expansionCommand, setExpansionCommand] = useState<ExpansionCommand>({ version: 0, expand: false })
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  useEffect(() => { if (range === 'fiscal') { setFrom(fiscalStart); setTo(selectedFiscalYearEndBs(company)) } }, [company, fiscalStart, range])
   const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
   const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
   const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
@@ -369,18 +371,42 @@ export function ProfitLossPage() {
 
 // ─── Balance Sheet ────────────────────────────────────────────────────────────
 export function BalanceSheetPage() {
-  const { company, accounts, accountCategories, closingStockValue } = useAppStore()
-  const csv = closingStockValue()
-  const pnl = useMemo(() => computeProfitAndLoss(accounts, csv), [accounts, csv])
-  const bs = useMemo(() => computeBalanceSheet(accounts, pnl.net_profit, csv), [accounts, pnl.net_profit, csv])
+  const { company, rawAccounts, accountCategories, items, vouchers } = useAppStore()
+  const currentFiscalStart = fiscalYearStartBs(company)
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState(() => Number(selectedFiscalYearStartBs(company).slice(0, 4)))
+  const [asOf, setAsOf] = useState(() => selectedFiscalYearEndBs(company))
+  const fiscalYearOptions = useMemo(() => dashboardFiscalYearOptions(vouchers, currentFiscalStart), [vouchers, currentFiscalStart])
+  useEffect(() => {
+    const year = Number(selectedFiscalYearStartBs(company).slice(0, 4))
+    setSelectedFiscalYear(year)
+    setAsOf(dashboardFiscalYearRange(year, currentFiscalStart).to)
+  }, [company, currentFiscalStart])
+  const fiscalStart = `${selectedFiscalYear}-${currentFiscalStart.slice(5)}`
+  const changeFiscalYear = (value: string) => {
+    const year = Number(value)
+    saveSelectedFiscalYear(company, year)
+    setSelectedFiscalYear(year)
+    setAsOf(dashboardFiscalYearRange(year, currentFiscalStart).to)
+  }
+  const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
+  const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
+  const currentAssetsCategory = accountCategories.find(category => category.account_type === 'Asset' && category.name.trim().toLowerCase() === 'current assets')
+  const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const throughAsOf = useMemo(() => dashboardVouchersThrough(postedVouchers, asOf), [postedVouchers, asOf])
+  const fiscalAccounts = useMemo(() => recomputeFiscalTrialAccounts(rawAccounts, throughAsOf, fiscalStart, company?.id || '', retainedCategoryId, items, valuationMethod, currentAssetsCategory?.id), [rawAccounts, throughAsOf, fiscalStart, company?.id, retainedCategoryId, items, valuationMethod, currentAssetsCategory?.id])
+  const openingStockValue = fiscalAccounts.find(account => account.id === `${company?.id || ''}:opening-stock-report`)?.balance || 0
+  const balanceSheetAccounts = useMemo(() => fiscalAccounts.filter(account => account.id !== `${company?.id || ''}:opening-stock-report`), [fiscalAccounts, company?.id])
+  const closingStock = useMemo(() => recomputeStock(items, throughAsOf, valuationMethod), [items, throughAsOf, valuationMethod])
+  const csv = round2(closingStock.reduce((sum, entry) => sum + entry.value, 0))
+  const pnl = useMemo(() => computeProfitAndLoss(balanceSheetAccounts, round2(csv - openingStockValue)), [balanceSheetAccounts, csv, openingStockValue])
+  const bs = useMemo(() => computeBalanceSheet(balanceSheetAccounts, pnl.net_profit, csv), [balanceSheetAccounts, pnl.net_profit, csv])
   const [expansionCommand, setExpansionCommand] = useState<ExpansionCommand>({ version: 0, expand: false })
   const realAssets = bs.assets.filter(account => !!account.company_id)
-  const currentAssetsCategory = accountCategories.find(category => category.account_type === 'Asset' && category.name.trim().toLowerCase() === 'current assets')
   const displayAssets: Account[] = [...realAssets, {
     id: 'balance-sheet:closing-stock', company_id: '', name: 'Closing Stock', type: 'Asset', group: 'Current Assets',
     is_system: true, is_party: false, opening_balance: 0, balance: csv, category_id: currentAssetsCategory?.id,
   }]
-  const exportCsv = () => downloadCsv('balance-sheet.csv', ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
+  const exportCsv = () => downloadCsv(`balance-sheet-as-of-${asOf}.csv`, ['Section', 'Ledger / Adjustment', 'Category', 'Amount'], [
     ...realAssets.map(account => ['Assets', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
     ...(csv ? [['Assets', 'Stock-in-Hand (Closing)', '', csv]] : []),
     ...bs.liabilities.map(account => ['Liabilities', account.name, categoryPath(accountCategories, account.category_id), account.balance || 0]),
@@ -391,11 +417,11 @@ export function BalanceSheetPage() {
 
   return (
     <div className="report-page ">
-      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} />} />
+      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<div className="flex flex-wrap items-end gap-2"><div className="min-w-32 space-y-1"><Label>Fiscal Year</Label><SearchableSelect value={String(selectedFiscalYear)} onValueChange={changeFiscalYear} options={fiscalYearOptions} searchPlaceholder="Search fiscal year..." className="w-32" /></div><ReportActions onExport={exportCsv} /></div>} />
       <PageContent className="report-content space-y-4">
-        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(todayBs())}</p></div>
+        <div className="report-print-header hidden"><h1>{company?.name || 'KhataERP'}</h1><p>Balance Sheet | As of {fmtDate(asOf)}</p></div>
         <Card className="report-table-card overflow-hidden">
-          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">As of {fmtDate(todayBs())}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b bg-muted/20 px-4 py-2"><div className="min-w-0 flex-1 text-center"><p className="font-serif font-bold text-[#1B2A4A]">{company?.name || 'Our Company'}</p><p className="text-xs text-muted-foreground">As of {fmtDate(asOf)}</p></div><ExpandCollapseControls expanded={expansionCommand.expand} onToggle={() => setExpansionCommand(current => ({ version: current.version + 1, expand: !current.expand }))} /></div>
           <div className="report-print-columns grid grid-cols-1 items-stretch lg:grid-cols-2 print:grid-cols-2">
             <BalanceSheetStatementSide title="Liabilities & Equity" total={bs.total_liabilities + bs.total_equity}>
               <BalanceSheetAccountRows accounts={[...bs.liabilities, ...bs.equity]} categories={accountCategories} emptyLabel="No liability or equity ledgers" command={expansionCommand} />
@@ -493,10 +519,10 @@ export function VatReportPage() {
 // ─── Stock Report ─────────────────────────────────────────────────────────────
 export function StockReportPage() {
   const { company, items, vouchers, itemCategories, saveCompany } = useAppStore()
-  const fiscalStart = fiscalYearStartBs(company)
+  const fiscalStart = selectedFiscalYearStartBs(company)
   const [range, setRange] = useState<ReportRange>('fiscal')
   const [from, setFrom] = useState(fiscalStart)
-  const [to, setTo] = useState(todayBs())
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
   const [showDetails, setShowDetails] = useState(false)
   const [search, setSearch] = useState('')
@@ -504,7 +530,7 @@ export function StockReportPage() {
   const [status, setStatus] = useState<'all' | 'in' | 'low' | 'out'>('all')
   const [methodError, setMethodError] = useState('')
   const method = company?.inventory_valuation_method || 'weighted_average'
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalStart) }, [fiscalStart, range])
+  useEffect(() => { if (range === 'fiscal') { setFrom(fiscalStart); setTo(selectedFiscalYearEndBs(company)) } }, [company, fiscalStart, range])
   const conditionSummaries = useMemo(() => ({
     saleable: computeStockConditionSummary(items, vouchers, 'saleable', method, from, to),
     damaged: computeStockConditionSummary(items, vouchers, 'damaged', method, from, to),

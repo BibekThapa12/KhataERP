@@ -5,8 +5,7 @@ import { bankAccounts } from '@/lib/banks'
 import { downloadCsv } from '@/lib/csv'
 import { resolveSystemAccountId } from '@/lib/engine'
 import { getCashBankBook } from '@/lib/managementReports'
-import { fiscalYearStartBs } from '@/lib/reports'
-import { todayBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
@@ -18,8 +17,8 @@ import { Label } from '@/components/ui/label'
 export function CashBankBookPage() {
   const { company, rawAccounts, accountCategories, vouchers } = useAppStore()
   const [accountId, setAccountId] = useState('all'), [range, setRange] = useState<ReportRange>('fiscal')
-  const [from, setFrom] = useState(() => fiscalYearStartBs(company)), [to, setTo] = useState(todayBs()), [showCancelled, setShowCancelled] = useState(false)
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalYearStartBs(company)) }, [company, range])
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company)), [to, setTo] = useState(() => selectedFiscalYearEndBs(company)), [showCancelled, setShowCancelled] = useState(false)
+  useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   const moneyAccounts = useMemo(() => company ? [rawAccounts.find(account => account.id === resolveSystemAccountId(rawAccounts, company.id, 'cash')), ...bankAccounts(rawAccounts, accountCategories, true)].filter(Boolean) as typeof rawAccounts : [], [company, rawAccounts, accountCategories])
   const report = useMemo(() => company ? getCashBankBook(company.id, accountId === 'all' ? null : accountId, rawAccounts, accountCategories, vouchers, from, to, showCancelled) : { accounts: [], opening: 0, rows: [], total_receipts: 0, total_payments: 0, closing: 0 }, [company,accountId,rawAccounts,accountCategories,vouchers,from,to,showCancelled])
   const csv = () => downloadCsv('cash-bank-book.csv',['Date','Voucher','Account','Activity','Receipts','Payments','Balance'],report.rows.map(row => [row.voucher.date_bs,row.voucher.invoice_no || row.voucher.seq,row.account_names,row.activity,row.receipts,row.payments,row.running_balance]))

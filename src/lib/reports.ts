@@ -2,7 +2,7 @@ import type { Account, AccountCategory, AccountType, Company, DetailedProfitLoss
 import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/categoryHierarchy'
 import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
-import { adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
+import { addDaysToBs, adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { legacySettlementAccountId } from '@/lib/banks'
 
 export interface DaybookRow {
@@ -212,6 +212,31 @@ export function fiscalYearStartBs(company: Company | null) {
   return makeBsKey(current) >= makeBsKey(thisYear)
     ? thisYear
     : `${Number(current.slice(0, 4)) - 1}-${monthDay}`
+}
+
+export const fiscalYearSelectionKey = (companyId?: string) => `khata-fiscal-year:${companyId || 'default'}`
+
+export function selectedFiscalYearStartBs(company: Company | null) {
+  const currentStart = fiscalYearStartBs(company)
+  try {
+    const selectedYear = Number(localStorage.getItem(fiscalYearSelectionKey(company?.id)) || localStorage.getItem(`khata-dashboard-fiscal-year:${company?.id || 'default'}`))
+    return Number.isInteger(selectedYear) && selectedYear > 0
+      ? `${selectedYear}-${currentStart.slice(5)}`
+      : currentStart
+  } catch { return currentStart }
+}
+
+export function selectedFiscalYearEndBs(company: Company | null) {
+  const start = selectedFiscalYearStartBs(company)
+  const nextStart = `${Number(start.slice(0, 4)) + 1}-${start.slice(5)}`
+  const today = todayBs()
+  return makeBsKey(today) >= makeBsKey(start) && makeBsKey(today) < makeBsKey(nextStart)
+    ? today
+    : addDaysToBs(nextStart, -1)
+}
+
+export function saveSelectedFiscalYear(company: Company | null, year: number) {
+  try { localStorage.setItem(fiscalYearSelectionKey(company?.id), String(year)) } catch { /* local storage may be unavailable */ }
 }
 
 export function vouchersInFiscalYear(vouchers: Voucher[], fiscalStart: string) {

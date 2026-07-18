@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
+import { selectedFiscalYearEndBs } from '@/lib/reports'
 import { downloadCsv } from '@/lib/csv'
 import {
   agingBuckets,
@@ -11,7 +12,6 @@ import {
   type OutstandingKind,
   type PartyOutstandingSummary,
 } from '@/lib/managementReports'
-import { todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
@@ -56,7 +56,7 @@ export function ReceivablesPayablesPage() {
   const kind: OutstandingKind = searchParams.get('kind') === 'payable' ? 'payable' : 'receivable'
   const viewParam = searchParams.get('view')
   const view: View = viewParam === 'aging' || viewParam === 'outstanding' ? 'aging' : 'summary'
-  const asOf = searchParams.get('asOf') || todayBs()
+  const asOf = searchParams.get('asOf') || selectedFiscalYearEndBs(company)
   const bucketParam = searchParams.get('bucket')
   const activeBucket = agingBuckets.includes(bucketParam as AgingBucket) ? bucketParam as AgingBucket : null
   const search = searchParams.get('search') || ''

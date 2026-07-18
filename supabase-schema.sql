@@ -176,6 +176,8 @@ create table if not exists companies (
   created_at       timestamptz not null default now()
 );
 
+create unique index if not exists companies_user_id_unique on companies(user_id);
+
 alter table companies add column if not exists owner_email text;
 alter table companies add column if not exists phone text;
 alter table companies add column if not exists vat_enabled boolean not null default true;

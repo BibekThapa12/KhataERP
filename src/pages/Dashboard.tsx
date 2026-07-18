@@ -7,7 +7,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
 import { todayBs } from '@/lib/nepaliDate'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
-import { computeCashFlow, fiscalYearStartBs, getDaybookRows } from '@/lib/reports'
+import { computeCashFlow, fiscalYearStartBs, getDaybookRows, saveSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
 import {
   accountBalance, buildDashboardSeries, dashboardVouchersInRange, dashboardVouchersThrough,
   dashboardFiscalYearOptions, dashboardFiscalYearRange, isPostedDashboardVoucher, topSellingItems,
@@ -26,7 +26,6 @@ import type { Voucher } from '@/types'
 const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
 const CashFlowChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.CashFlowChart })))
 const CHART_MODE_KEY = 'khata-dashboard-chart-mode'
-
 function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details }: {
   label: string
   value: number
@@ -76,7 +75,7 @@ export function Dashboard() {
   const fiscalStart = fiscalYearStartBs(company)
   const currentFiscalYear = Number(fiscalStart.slice(0, 4))
   const [range, setRange] = useState<ReportRange>('fiscal')
-  const [selectedFiscalYear, setSelectedFiscalYear] = useState(currentFiscalYear)
+  const [selectedFiscalYear, setSelectedFiscalYear] = useState(() => Number(selectedFiscalYearStartBs(company).slice(0, 4)))
   const [from, setFrom] = useState(fiscalStart)
   const [to, setTo] = useState(todayBs())
   const [detail, setDetail] = useState<Voucher | null>(null)
@@ -84,7 +83,7 @@ export function Dashboard() {
     try { return localStorage.getItem(CHART_MODE_KEY) !== 'false' } catch { return true }
   })
 
-  useEffect(() => { setSelectedFiscalYear(currentFiscalYear) }, [company?.id, currentFiscalYear])
+  useEffect(() => { setSelectedFiscalYear(Number(selectedFiscalYearStartBs(company).slice(0, 4))) }, [company, currentFiscalYear])
   useEffect(() => {
     if (range !== 'fiscal') return
     const fiscalRange = dashboardFiscalYearRange(selectedFiscalYear, fiscalStart)
@@ -156,7 +155,7 @@ export function Dashboard() {
   return <div>
     <PageHeader title="Dashboard" description="Overview of your business" action={
       <div className="flex w-full items-center gap-2 sm:w-auto">
-        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none"><span className="shrink-0 text-xs font-semibold text-muted-foreground">FY</span><SearchableSelect value={range === 'fiscal' ? String(selectedFiscalYear) : ''} onValueChange={value => { setSelectedFiscalYear(Number(value)); setRange('fiscal') }} options={fiscalYearOptions} placeholder="Fiscal year" searchPlaceholder="Search fiscal year..." className="w-full sm:w-28" /></div>
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none"><span className="shrink-0 text-xs font-semibold text-muted-foreground">FY</span><SearchableSelect value={range === 'fiscal' ? String(selectedFiscalYear) : ''} onValueChange={value => { const nextYear = Number(value); saveSelectedFiscalYear(company, nextYear); setSelectedFiscalYear(nextYear); setRange('fiscal') }} options={fiscalYearOptions} placeholder="Fiscal year" searchPlaceholder="Search fiscal year..." className="w-full sm:w-28" /></div>
         <button type="button" role="switch" aria-checked={chartMode} aria-label="Toggle chart mode" onClick={() => setChartMode(value => !value)} className="flex shrink-0 items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:justify-start">
           <span>Chart Mode</span><span aria-hidden className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`block h-4 w-4 shrink-0 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-4' : 'translate-x-0'}`} /></span>
         </button>

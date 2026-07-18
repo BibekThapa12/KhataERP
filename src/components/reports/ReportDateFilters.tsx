@@ -1,5 +1,5 @@
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
-import { fiscalYearStartBs } from '@/lib/reports'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
@@ -27,8 +27,8 @@ export function ReportDateFilters({ company, range, from, to, onRangeChange, onF
       onFromChange(firstOfCurrentBsMonth())
       onToChange(todayBs())
     } else {
-      onFromChange(fiscalYearStartBs(company))
-      onToChange(todayBs())
+      onFromChange(selectedFiscalYearStartBs(company))
+      onToChange(selectedFiscalYearEndBs(company))
     }
   }
 

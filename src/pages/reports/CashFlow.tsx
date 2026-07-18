@@ -1,11 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ArrowDownToLine, ArrowUpFromLine, ChevronDown, ChevronRight, WalletCards } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { computeCashFlow, fiscalYearStartBs, type CashFlowSection } from '@/lib/reports'
+import { computeCashFlow, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type CashFlowSection } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
-import { todayBs } from '@/lib/nepaliDate'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { ReportActions } from '@/components/reports/ReportActions'
@@ -63,12 +62,14 @@ function CashFlowSectionTable({ section, expanded, onToggle, onVoucherClick }: {
 
 export function CashFlowPage() {
   const { company, rawAccounts, accountCategories, vouchers } = useAppStore()
-  const initialFrom = fiscalYearStartBs(company)
+  const initialFrom = selectedFiscalYearStartBs(company)
   const [range, setRange] = useState<ReportRange>('fiscal')
   const [from, setFrom] = useState(initialFrom)
-  const [to, setTo] = useState(todayBs())
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [expanded, setExpanded] = useState(() => new Set(['operating', 'investing', 'financing']))
   const [selectedVoucher, setSelectedVoucher] = useState<Voucher | null>(null)
+
+  useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
 
   const report = useMemo(() => computeCashFlow(company?.id || '', rawAccounts, accountCategories, vouchers, from, to), [company?.id, rawAccounts, accountCategories, vouchers, from, to])
   const cashAccountNames = report.cash_accounts.map(account => account.name).join(', ') || 'Cash and Bank'

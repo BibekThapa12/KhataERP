@@ -32,6 +32,7 @@ export type SystemAccountKey =
   | 'sales_return'
   | 'purchase_return'
   | 'capital'
+  | 'retained_earnings'
   | 'discount_allowed'
   | 'rent'
   | 'salary'
@@ -65,6 +66,7 @@ export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balan
     base('sales_return', 'Sales Return Account', 'Income', 'Sales Accounts'),
     base('purchase_return', 'Purchase Return Account', 'Expense', 'Purchase Accounts'),
     base('capital', "Owner's Capital", 'Equity', 'Capital Account'),
+    base('retained_earnings', 'Retained Earnings', 'Equity', 'Reserves & Surplus'),
     base('discount_allowed', 'Discount Allowed', 'Expense', 'Indirect Expenses', false),
     base('rent', 'Rent Expense', 'Expense', 'Indirect Expenses', false),
     base('salary', 'Salary Expense', 'Expense', 'Indirect Expenses', false),
@@ -94,7 +96,16 @@ export function recomputeAllBalances(accounts: Account[], vouchers: Voucher[]): 
   return Array.from(byId.values())
 }
 
-export function recomputeFiscalTrialAccounts(accounts: Account[], vouchers: Voucher[], fiscalStartBs: string, companyId: string, retainedCategoryId?: string): Account[] {
+export function recomputeFiscalTrialAccounts(
+  accounts: Account[],
+  vouchers: Voucher[],
+  fiscalStartBs: string,
+  companyId: string,
+  retainedCategoryId?: string,
+  items: Item[] = [],
+  valuationMethod: InventoryValuationMethod = 'weighted_average',
+  currentAssetsCategoryId?: string,
+): Account[] {
   const fiscalStartKey = makeBsKey(fiscalStartBs)
   const priorVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fiscalStartKey)
   const fiscalVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) >= fiscalStartKey)
@@ -105,19 +116,31 @@ export function recomputeFiscalTrialAccounts(accounts: Account[], vouchers: Vouc
   const retainedSignedDebit = round2(priorBalances
     .filter(account => account.type === 'Income' || account.type === 'Expense')
     .reduce((sum, account) => sum + (normalSide(account.type) === 'debit' ? account.balance || 0 : -(account.balance || 0)), 0))
+  const openingStockValue = round2(recomputeStock(items, priorVouchers, valuationMethod)
+    .reduce((sum, entry) => sum + entry.value, 0))
+  // Inventory is valued outside voucher financial lines. Carrying it forward
+  // therefore needs both an asset and the matching prior-period P&L adjustment.
+  const retainedEarnings = round2(-retainedSignedDebit + openingStockValue)
   const result = permanentBalances.map(account => account.type === 'Income' || account.type === 'Expense' ? fiscalBalances.get(account.id)! : account)
 
-  if (Math.abs(retainedSignedDebit) >= 0.005) result.push({
-    id: `${companyId}:retained-earnings-report`,
+  const retainedAccountId = resolveSystemAccountId(accounts, companyId, 'retained_earnings')
+  const retainedIndex = result.findIndex(account => account.id === retainedAccountId)
+  if (retainedIndex >= 0) {
+    result[retainedIndex] = { ...result[retainedIndex], name: 'Retained Earnings', type: 'Equity', group: 'Reserves & Surplus', is_system: true, opening_balance: retainedEarnings, balance: retainedEarnings, category_id: retainedCategoryId || result[retainedIndex].category_id }
+  } else if (Math.abs(retainedEarnings) >= 0.005) result.push({
+    id: `${companyId}:retained-earnings-report`, company_id: '', name: 'Retained Earnings', type: 'Equity', group: 'Reserves & Surplus', is_system: true, is_party: false, opening_balance: retainedEarnings, balance: retainedEarnings, category_id: retainedCategoryId,
+  })
+  if (Math.abs(openingStockValue) >= 0.005) result.push({
+    id: `${companyId}:opening-stock-report`,
     company_id: '',
-    name: 'Retained Earnings (Prior Years)',
-    type: 'Equity',
-    group: 'Reserves & Surplus',
+    name: 'Opening Stock (Previous Fiscal Year Closing)',
+    type: 'Asset',
+    group: 'Current Assets',
     is_system: true,
     is_party: false,
-    opening_balance: -retainedSignedDebit,
-    balance: -retainedSignedDebit,
-    category_id: retainedCategoryId,
+    opening_balance: openingStockValue,
+    balance: openingStockValue,
+    category_id: currentAssetsCategoryId,
   })
   return result
 }
@@ -451,7 +474,7 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
 
 export interface ReturnItemInput {
   id?: string
-  source_invoice_item_id: string
+  source_invoice_item_id?: string
   item_id: string
   item_name?: string
   unit?: string
@@ -465,7 +488,9 @@ export interface ReturnItemInput {
 
 export interface ReturnVoucherParams {
   type: 'Sales Return' | 'Purchase Return'
-  original: Voucher
+  original?: Voucher
+  party_account_id?: string | null
+  vat_rate?: number
   items: ReturnItemInput[]
   settlement_mode: 'party' | 'cash' | 'bank'
   settlement_account_id?: string
@@ -476,9 +501,9 @@ export interface ReturnVoucherParams {
 
 export function buildReturnVoucherData(p: ReturnVoucherParams) {
   const subtotal = round2(p.items.reduce((sum, item) => sum + item.qty * item.rate, 0))
-  const originalSubtotal = p.original.subtotal || (p.original.invoice_items || []).reduce((sum, item) => sum + item.qty * item.rate, 0)
-  const originalDiscount = p.original.discount || 0
-  const vatRate = p.original.vat_rate || 0
+  const originalSubtotal = p.original?.subtotal || (p.original?.invoice_items || []).reduce((sum, item) => sum + item.qty * item.rate, 0) || subtotal
+  const originalDiscount = p.original?.discount || 0
+  const vatRate = p.original ? (p.original.vat_rate || 0) : (p.vat_rate || 0)
   let invoice_items = p.items.map(item => {
     const gross = round2(item.qty * item.rate)
     const discount_amount = originalSubtotal > 0 ? round2(originalDiscount * gross / originalSubtotal) : 0
@@ -486,7 +511,7 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
     const vat_amount = round2(taxable_amount * vatRate / 100)
     return { ...item, discount_amount, taxable_amount, vat_amount }
   })
-  const fullOriginalReturn = (p.original.invoice_items || []).length === invoice_items.length &&
+  const fullOriginalReturn = !!p.original && (p.original.invoice_items || []).length === invoice_items.length &&
     (p.original.invoice_items || []).every(source => {
       const returned = invoice_items.find(item => item.source_invoice_item_id === source.id)
       return returned && Math.abs(returned.qty - source.qty) < 0.0001
@@ -508,7 +533,7 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   }
   const total = round2(taxable + vat_amount)
   const settlementAccount = p.settlement_mode === 'party'
-    ? p.original.party_account_id!
+    ? (p.original?.party_account_id || p.party_account_id)!
     : p.settlement_account_id || sys(p.system_accounts, p.settlement_mode)
   const isSalesReturn = p.type === 'Sales Return'
   const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = isSalesReturn

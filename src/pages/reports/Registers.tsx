@@ -3,8 +3,7 @@ import { Download, Printer } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { downloadCsv } from '@/lib/csv'
 import { getRegister, getTransactionRegister, type TransactionRegisterKind } from '@/lib/managementReports'
-import { fiscalYearStartBs } from '@/lib/reports'
-import { todayBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { cn, fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
@@ -25,11 +24,11 @@ export function RegistersPage() {
   const { company, vouchers, parties, accounts } = useAppStore()
   const [kind, setKind] = useState<RegisterKind>('sales')
   const [range, setRange] = useState<ReportRange>('fiscal')
-  const [from, setFrom] = useState(() => fiscalYearStartBs(company))
-  const [to, setTo] = useState(todayBs())
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [showCancelled, setShowCancelled] = useState(false)
 
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalYearStartBs(company)) }, [company, range])
+  useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
 
   const invoiceReport = useMemo(
     () => kind === 'sales' || kind === 'purchase' ? getRegister(kind, vouchers, parties, from, to, showCancelled) : null,

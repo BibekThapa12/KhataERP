@@ -52,6 +52,7 @@ export const SYSTEM_ACCOUNT_DESTINATIONS: Record<SystemAccountKey, string> = {
   sales_return: 'sales-accounts',
   purchase_return: 'purchase-accounts',
   capital: 'capital',
+  retained_earnings: 'reserves-surplus',
   discount_allowed: 'indirect-expenses',
   rent: 'indirect-expenses',
   salary: 'indirect-expenses',

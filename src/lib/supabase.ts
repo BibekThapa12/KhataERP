@@ -150,7 +150,9 @@ export async function checkSupabaseConnectionStatus() {
 
 // ─── Company ──────────────────────────────────────────────────────────────────
 
-export async function getOrCreateCompany(user_id: string): Promise<Company> {
+const companyInitializationPromises = new Map<string, Promise<Company>>()
+
+async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
   const { data: userData } = await supabase.auth.getUser()
   const { data: companies, error: companyError } = await supabase
     .from('companies')
@@ -234,8 +236,32 @@ export async function getOrCreateCompany(user_id: string): Promise<Company> {
     .insert(company)
     .select()
     .single()
-  if (error) throw error
+  if (error) {
+    // A second browser context may have created the company after our initial
+    // SELECT. The database singleton constraint makes that race harmless.
+    if (error.code === '23505') {
+      const { data: concurrentCompany, error: concurrentError } = await supabase
+        .from('companies')
+        .select('*')
+        .eq('user_id', user_id)
+        .order('created_at', { ascending: true })
+        .limit(1)
+        .single()
+      if (!concurrentError && concurrentCompany) return concurrentCompany
+    }
+    throw error
+  }
   return newCompany
+}
+
+export function getOrCreateCompany(user_id: string): Promise<Company> {
+  const pending = companyInitializationPromises.get(user_id)
+  if (pending) return pending
+
+  const request = getOrCreateCompanyInternal(user_id)
+    .finally(() => companyInitializationPromises.delete(user_id))
+  companyInitializationPromises.set(user_id, request)
+  return request
 }
 
 export async function updateCompany(id: string, updates: Partial<Company>) {

@@ -1,9 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaymentData, buildPurchaseVoucherData, buildReceiptData, buildReturnVoucherData,
-  buildSalesVoucherData, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
+  buildSalesVoucherData, computeBalanceSheet, computeProfitAndLoss, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
 } from './engine'
-import type { Account, Item, Voucher } from '@/types'
+import type { Account, Item, Voucher, VoucherLine } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
 
 const accounts = { cash: 'c:cash', sales: 'c:sales', purchase: 'c:purchase', vat_payable: 'c:vatp', vat_receivable: 'c:vatr' }
@@ -135,6 +135,28 @@ describe('accounting engine integrity', () => {
     expect(purchaseReturn.stock_lines[0]).toMatchObject({ direction: 'out', stock_condition: 'expired' })
   })
 
+  it('builds a balanced manual return without an original bill', () => {
+    const result = buildReturnVoucherData({
+      type: 'Sales Return',
+      party_account_id: 'customer',
+      vat_rate: 13,
+      items: [{ item_id: 'tea', item_name: 'Tea', qty: 2, rate: 100, cost_rate: 60, conversion_factor: 1 }],
+      settlement_mode: 'party',
+      restock_items: true,
+      stock_condition: 'saleable',
+      system_accounts: { sales_return: 'sales-return', vat_payable: 'vat-payable' },
+    })
+
+    expect(result).toMatchObject({ subtotal: 200, discount: 0, vat_rate: 13, vat_amount: 26, total: 226 })
+    expect(result.lines).toEqual([
+      { account_id: 'sales-return', debit: 200, credit: 0 },
+      { account_id: 'vat-payable', debit: 26, credit: 0 },
+      { account_id: 'customer', debit: 0, credit: 226 },
+    ])
+    expect(result.stock_lines[0]).toMatchObject({ item_id: 'tea', qty: 2, rate: 60, direction: 'in' })
+    expect(validateBalanced(result.lines as VoucherLine[]).valid).toBe(true)
+  })
+
   it('resets nominal accounts at fiscal year start and carries prior results into equity', () => {
     const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
     const cash = chart.find(account => account.id === 'c:cash')!
@@ -153,8 +175,58 @@ describe('accounting engine integrity', () => {
 
     expect(balances.find(account => account.id === sales.id)?.balance).toBe(0)
     expect(balances.find(account => account.id === expense.id)?.balance).toBe(20)
-    expect(balances.find(account => account.id === 'c:retained-earnings-report')?.balance).toBe(100)
+    expect(balances.find(account => account.id === 'c:retained_earnings')?.balance).toBe(100)
     expect(computeTrialBalance(balances)).toMatchObject({ total_debit: 100, total_credit: 100, balanced: true })
+  })
+
+  it('carries prior closing inventory into Current Assets and includes it in prior profit', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const cash = chart.find(account => account.id === 'c:cash')!
+    const sales = chart.find(account => account.id === 'c:sales')!
+    const purchase = chart.find(account => account.id === 'c:purchase')!
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 0, opening_rate: 0 } as Item
+    const priorPurchase = { id: 'purchase', company_id: 'c', type: 'Purchase', date_bs: '2082-03-01', date_bs_key: 20820301, seq: 1, total: 100, cancelled: false, lines: [
+      { account_id: purchase.id, debit: 100, credit: 0 },
+      { account_id: cash.id, debit: 0, credit: 100 },
+    ], stock_lines: [{ item_id: item.id, direction: 'in', qty: 10, rate: 10 }] } as Voucher
+    const priorSale = { id: 'sale', company_id: 'c', type: 'Sales', date_bs: '2082-03-15', date_bs_key: 20820315, seq: 2, total: 60, cancelled: false, lines: [
+      { account_id: cash.id, debit: 60, credit: 0 },
+      { account_id: sales.id, debit: 0, credit: 60 },
+    ], stock_lines: [{ item_id: item.id, direction: 'out', qty: 5, rate: 10 }] } as Voucher
+
+    const balances = recomputeFiscalTrialAccounts(chart, [priorPurchase, priorSale], '2082-04-01', 'c', 'retained', [item], 'weighted_average', 'current-assets')
+
+    expect(balances.find(account => account.id === 'c:opening-stock-report')).toMatchObject({
+      name: 'Opening Stock (Previous Fiscal Year Closing)',
+      type: 'Asset',
+      balance: 50,
+      category_id: 'current-assets',
+    })
+    expect(balances.find(account => account.id === 'c:retained_earnings')?.balance).toBe(10)
+    expect(computeTrialBalance(balances)).toMatchObject({ total_debit: 50, total_credit: 50, balanced: true })
+  })
+
+  it('shows prior profit as retained earnings and only current profit in the balance sheet P&L', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const cash = chart.find(account => account.id === 'c:cash')!
+    const sales = chart.find(account => account.id === 'c:sales')!
+    const purchase = chart.find(account => account.id === 'c:purchase')!
+    const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 0, opening_rate: 0 } as Item
+    const vouchers = [
+      { id: 'purchase', company_id: 'c', type: 'Purchase', date_bs: '2082-03-01', date_bs_key: 20820301, seq: 1, total: 100, cancelled: false, lines: [{ account_id: purchase.id, debit: 100, credit: 0 }, { account_id: cash.id, debit: 0, credit: 100 }], stock_lines: [{ item_id: item.id, direction: 'in', qty: 10, rate: 10 }] },
+      { id: 'prior-sale', company_id: 'c', type: 'Sales', date_bs: '2082-03-15', date_bs_key: 20820315, seq: 2, total: 60, cancelled: false, lines: [{ account_id: cash.id, debit: 60, credit: 0 }, { account_id: sales.id, debit: 0, credit: 60 }], stock_lines: [{ item_id: item.id, direction: 'out', qty: 5, rate: 10 }] },
+      { id: 'current-sale', company_id: 'c', type: 'Sales', date_bs: '2082-04-15', date_bs_key: 20820415, seq: 3, total: 60, cancelled: false, lines: [{ account_id: cash.id, debit: 60, credit: 0 }, { account_id: sales.id, debit: 0, credit: 60 }], stock_lines: [{ item_id: item.id, direction: 'out', qty: 2, rate: 10 }] },
+    ] as Voucher[]
+    const fiscalAccounts = recomputeFiscalTrialAccounts(chart, vouchers, '2082-04-01', 'c', 'retained', [item], 'weighted_average', 'current-assets')
+    const openingStock = fiscalAccounts.find(account => account.id === 'c:opening-stock-report')?.balance || 0
+    const reportAccounts = fiscalAccounts.filter(account => account.id !== 'c:opening-stock-report')
+    const closingStock = recomputeStock([item], vouchers)[0].value
+    const currentPnl = computeProfitAndLoss(reportAccounts, closingStock - openingStock)
+    const balanceSheet = computeBalanceSheet(reportAccounts, currentPnl.net_profit, closingStock)
+
+    expect(fiscalAccounts.find(account => account.id === 'c:retained_earnings')).toMatchObject({ name: 'Retained Earnings', balance: 10, category_id: 'retained', is_system: true })
+    expect(currentPnl.net_profit).toBe(40)
+    expect(balanceSheet).toMatchObject({ total_assets: 50, total_equity: 50, balanced: true })
   })
 
   it('builds a stock summary for the selected period with opening and closing balances', () => {

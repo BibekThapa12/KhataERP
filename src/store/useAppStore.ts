@@ -23,6 +23,7 @@ import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
 import { voucherNumberingPeriod, voucherPrefix } from '@/lib/voucherNumbers'
 import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
+import { selectedFiscalYearStartBs } from '@/lib/reports'
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 
@@ -99,7 +100,9 @@ interface AppState {
 
 export interface ReturnSaveParams {
   type: 'Sales Return' | 'Purchase Return'
-  original_voucher_id: string
+  original_voucher_id?: string
+  party_account_id?: string | null
+  vat_rate?: number
   items: ReturnItemInput[]
   settlement_mode: 'party' | 'cash' | 'bank'
   settlement_account_id?: string
@@ -139,7 +142,7 @@ function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: 
 }
 
 function systemAccountsFor(company: Company, accounts: Account[]) {
-  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'sales_return', 'purchase_return', 'capital', 'discount_allowed', 'rent', 'salary', 'electricity']
+  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'sales_return', 'purchase_return', 'capital', 'retained_earnings', 'discount_allowed', 'rent', 'salary', 'electricity']
   return Object.fromEntries(keys.map(key => [key, resolveSystemAccountId(accounts, company.id, key)])) as Record<SystemAccountKey, string>
 }
 
@@ -183,28 +186,45 @@ function settlementRows(allocations: TransactionAllocation[]) {
 }
 
 function systemAccountKeyFromId(companyId: string, accountId: string): SystemAccountKey | null {
-  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'sales_return', 'purchase_return', 'capital', 'discount_allowed', 'rent', 'salary', 'electricity']
+  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'sales_return', 'purchase_return', 'capital', 'retained_earnings', 'discount_allowed', 'rent', 'salary', 'electricity']
   const key = accountId.startsWith(`${companyId}:`) ? accountId.slice(companyId.length + 1) : accountId
   return keys.includes(key as SystemAccountKey) ? key as SystemAccountKey : null
 }
 
-function validateReturnRequest(items: Item[], vouchers: Voucher[], params: ReturnSaveParams, editingId?: string) {
-  const original = vouchers.find(voucher => voucher.id === params.original_voucher_id)
+function validateReturnRequest(company: Company, parties: Party[], items: Item[], vouchers: Voucher[], params: ReturnSaveParams, editingId?: string) {
+  const original = params.original_voucher_id ? vouchers.find(voucher => voucher.id === params.original_voucher_id) : undefined
   const expectedType = params.type === 'Sales Return' ? 'Sales' : 'Purchase'
-  if (!original || original.type !== expectedType || original.cancelled) throw new Error(`Select an active ${expectedType.toLowerCase()} voucher`)
+  const expectedPartyType = params.type === 'Sales Return' ? 'customer' : 'supplier'
+  if (params.original_voucher_id && (!original || original.type !== expectedType || original.cancelled)) throw new Error(`Select an active ${expectedType.toLowerCase()} voucher`)
+  if (original) {
+    const editingReturn = editingId ? vouchers.find(voucher => voucher.id === editingId) : undefined
+    if (editingReturn?.original_voucher_id !== original.id) {
+      const fiscalStart = selectedFiscalYearStartBs(company)
+      const fiscalEndKey = makeBsKey(`${Number(fiscalStart.slice(0, 4)) + 1}-${fiscalStart.slice(5)}`)
+      const originalKey = original.date_bs_key || makeBsKey(original.date_bs)
+      if (originalKey < makeBsKey(fiscalStart) || originalKey >= fiscalEndKey) throw new Error('Returns can only be linked to bills from the current fiscal year')
+    }
+    if (params.party_account_id && original.party_account_id && params.party_account_id !== original.party_account_id) throw new Error('The selected bill belongs to a different party')
+  } else {
+    const party = parties.find(entry => entry.account_id === params.party_account_id && entry.type === expectedPartyType && !entry.is_archived)
+    if (!party) throw new Error(`Select an active ${partyTerminology(expectedPartyType).singular}`)
+  }
   if (!params.return_reason.trim()) throw new Error('Enter a return reason')
-  if (params.settlement_mode === 'party' && !original.party_account_id) throw new Error('A cash invoice cannot be adjusted through a party ledger')
-  if (!params.items.length || params.items.some(item => item.qty <= 0)) throw new Error('Enter at least one return quantity')
+  const partyAccountId = original?.party_account_id || params.party_account_id
+  if (params.settlement_mode === 'party' && !partyAccountId) throw new Error('A cash invoice cannot be adjusted through a party ledger')
+  if (!params.items.length || params.items.some(item => !item.item_id || item.qty <= 0 || item.rate <= 0)) throw new Error('Enter at least one item with a positive quantity and rate')
 
-  for (const item of params.items) {
-    const source = (original.invoice_items || []).find(line => line.id === item.source_invoice_item_id)
-    if (!source || source.item_id !== item.item_id) throw new Error('A selected return line no longer matches the original invoice')
-    const alreadyReturned = vouchers
-      .filter(voucher => voucher.id !== editingId && !voucher.cancelled && voucher.type === params.type && voucher.original_voucher_id === original.id)
-      .flatMap(voucher => voucher.invoice_items || [])
-      .filter(line => line.source_invoice_item_id === item.source_invoice_item_id)
-      .reduce((sum, line) => sum + line.qty, 0)
-    if (item.qty + alreadyReturned > source.qty + 0.0001) throw new Error(`Return quantity for ${item.item_name || item.item_id} exceeds the remaining quantity`)
+  if (original) {
+    for (const item of params.items) {
+      const source = (original.invoice_items || []).find(line => line.id === item.source_invoice_item_id)
+      if (!source || source.item_id !== item.item_id) throw new Error('A selected return line no longer matches the original invoice')
+      const alreadyReturned = vouchers
+        .filter(voucher => voucher.id !== editingId && !voucher.cancelled && voucher.type === params.type && voucher.original_voucher_id === original.id)
+        .flatMap(voucher => voucher.invoice_items || [])
+        .filter(line => line.source_invoice_item_id === item.source_invoice_item_id)
+        .reduce((sum, line) => sum + line.qty, 0)
+      if (item.qty + alreadyReturned > source.qty + 0.0001) throw new Error(`Return quantity for ${item.item_name || item.item_id} exceeds the remaining quantity`)
+    }
   }
 
   if (params.type === 'Purchase Return') {
@@ -481,7 +501,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   addAccountCategory: async ({ name, account_type, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
+    if (!parent_category_id) throw new Error('Select a parent account group')
     const parent = parent_category_id ? get().accountCategories.find(category => category.id === parent_category_id) : undefined
+    if (!parent) throw new Error('Parent account group not found')
     if (parent && parent.account_type !== account_type) throw new Error('Parent category must use the same account type')
     if (parent && categoryDepth(get().accountCategories, parent.id) >= 3) throw new Error('Category hierarchy cannot exceed three levels')
     const category = await insertAccountCategory({ company_id: company.id, name, account_type, parent_category_id, is_system: false, is_archived: false })
@@ -735,12 +757,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveReturnVoucher: async (params) => {
     const { company, vouchers } = get()
     if (!company) throw new Error('No company')
-    const original = validateReturnRequest(get().items, vouchers, params)
+    const original = validateReturnRequest(company, get().parties, get().items, vouchers, params)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories)
     }
-    const data = buildReturnVoucherData({ ...params, original, system_accounts: systemAccountsFor(company, get().rawAccounts) })
+    const partyAccountId = original?.party_account_id || params.party_account_id || null
+    const data = buildReturnVoucherData({ ...params, original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     const seq = await getNextSeq(company.id)
     const invoice_no = await getNextVoucherNo(company.id, params.type, voucherPrefix(company, params.type), company.reset_numbering_fiscal_year, company.fiscal_year_start, params.date_bs)
@@ -748,9 +771,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newVoucher = await insertVoucher({
       voucher: {
         company_id: company.id, type: params.type, seq, invoice_no, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
-        original_voucher_id: original.id, return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
-        settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? original.party_account_id : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
-        party_account_id: original.party_account_id, is_cash: params.settlement_mode === 'cash',
+        original_voucher_id: original?.id || null, return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
+        settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? partyAccountId : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
+        party_account_id: partyAccountId, is_cash: params.settlement_mode === 'cash',
         subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount,
         total: data.total, cancelled: false,
       },
@@ -764,7 +787,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       accounts: recomputeAllBalances(get().rawAccounts, nextVouchers),
       stock: recomputeStock(get().items, nextVouchers, valuationMethod(company)),
     })
-    logAppEvent('return_created', company.id, { voucher_id: newVoucher.id, type: params.type, original_voucher_id: original.id })
+    logAppEvent('return_created', company.id, { voucher_id: newVoucher.id, type: params.type, original_voucher_id: original?.id || null })
   },
 
   // ─── Cancel ─────────────────────────────────────────────────────────────────
@@ -908,20 +931,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing || (existing.type !== 'Sales Return' && existing.type !== 'Purchase Return')) throw new Error('Return voucher not found')
     if (!company) throw new Error('No company')
-    const original = validateReturnRequest(get().items, get().vouchers, params, id)
+    const original = validateReturnRequest(company, get().parties, get().items, get().vouchers, params, id)
     if (params.settlement_mode !== 'party') {
       if (!params.settlement_account_id) throw new Error('Select a settlement account')
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories, true)
     }
-    const data = buildReturnVoucherData({ ...params, original, system_accounts: systemAccountsFor(company, get().rawAccounts) })
+    const partyAccountId = original?.party_account_id || params.party_account_id || null
+    const data = buildReturnVoucherData({ ...params, original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     const updated = await updateVoucher({
       id,
       voucher: {
-        ...voucherDateFields(params.date_bs), numbering_period: voucherNumberingPeriod(company, params.date_bs), original_voucher_id: original.id,
+        ...voucherDateFields(params.date_bs), numbering_period: voucherNumberingPeriod(company, params.date_bs), original_voucher_id: original?.id || null,
         return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
-        settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? original.party_account_id : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
-        party_account_id: original.party_account_id, is_cash: params.settlement_mode === 'cash',
+        settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? partyAccountId : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
+        party_account_id: partyAccountId, is_cash: params.settlement_mode === 'cash',
         subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total,
       },
       lines: data.lines,

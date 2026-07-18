@@ -5,8 +5,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { computeStockLedger } from '@/lib/engine'
 import { categoryPath } from '@/lib/categoryHierarchy'
 import { downloadCsv } from '@/lib/csv'
-import { fiscalYearStartBs } from '@/lib/reports'
-import { todayBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportActions } from '@/components/reports/ReportActions'
@@ -42,8 +41,8 @@ export function StockLedgerPage() {
   const [searchParams, setSearchParams] = useSearchParams()
   const selectedId = searchParams.get('item') || ''
   const [range, setRange] = useState<ReportRange>('fiscal')
-  const [from, setFrom] = useState(() => fiscalYearStartBs(company))
-  const [to, setTo] = useState(todayBs())
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [selectedVoucher, setSelectedVoucher] = useState<Voucher | null>(null)
   const [editingVoucher, setEditingVoucher] = useState<Voucher | null>(null)
   const printableVoucherRef = useRef<HTMLDivElement>(null)
@@ -53,7 +52,7 @@ export function StockLedgerPage() {
   const methodLabel = method === 'fifo' ? 'FIFO' : method === 'lifo' ? 'LIFO' : 'Weighted Average'
   const sortedItems = useMemo(() => [...items].sort((left, right) => Number(left.is_archived) - Number(right.is_archived) || left.name.localeCompare(right.name)), [items])
 
-  useEffect(() => { if (range === 'fiscal') setFrom(fiscalYearStartBs(company)) }, [company, range])
+  useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   useEffect(() => {
     if (sortedItems.some(item => item.id === selectedId) || !sortedItems.length) return
     const first = sortedItems.find(item => !item.is_archived) || sortedItems[0]
