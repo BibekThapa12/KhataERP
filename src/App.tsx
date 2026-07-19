@@ -5,9 +5,12 @@ import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
+import { AppToaster } from '@/components/AppToaster'
 
 const LoginPage = lazy(() => import('@/pages/Login').then(m => ({ default: m.LoginPage })))
-const Dashboard = lazy(() => import('@/pages/Dashboard').then(m => ({ default: m.Dashboard })))
+const ResetPasswordPage = lazy(() => import('@/pages/ResetPassword').then(m => ({ default: m.ResetPasswordPage })))
+const loadDashboard = () => import('@/pages/Dashboard')
+const Dashboard = lazy(() => loadDashboard().then(m => ({ default: m.Dashboard })))
 const SalesPage = lazy(() => import('@/pages/Sales').then(m => ({ default: m.SalesPage })))
 const PurchasePage = lazy(() => import('@/pages/Purchase').then(m => ({ default: m.PurchasePage })))
 const SalesReturnPage = lazy(() => import('@/pages/SalesReturn').then(m => ({ default: m.SalesReturnPage })))
@@ -35,6 +38,7 @@ const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default:
 const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
 const CreateChequePage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.CreateChequePage })))
 const PendingChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.PendingChequesPage })))
+const SettledChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.SettledChequesPage })))
 const ChequeBanksPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeBanksPage })))
 const ChequePartiesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequePartiesPage })))
 const ChequeDetailPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeDetailPage })))
@@ -84,8 +88,11 @@ function FullPageStatus({ message }: { message: string }) {
 
 function ProtectedRoute({ children, authReady }: { children: React.ReactNode; authReady: boolean }) {
   const userId = useAppStore(s => s.userId)
+  const dataReady = useAppStore(s => s.dataReady)
+  const loadError = useAppStore(s => s.error)
   if (!authReady) return <FullPageStatus message="Checking session..." />
   if (!userId) return <Navigate to="/login" replace />
+  if (!dataReady && !loadError) return <FullPageStatus message="Loading company data..." />
   return <>{children}</>
 }
 
@@ -95,19 +102,37 @@ export default function App() {
   const refreshTimer = useRef<number | null>(null)
 
   useEffect(() => {
+    let active = true
     supabase.auth.getSession().then(({ data: { session } }) => {
+      if (!active) return
       const uid = session?.user?.id ?? null
       setUserId(uid)
-      if (uid) loadAll(uid)
+      if (uid && window.location.pathname !== '/reset-password') {
+        void loadDashboard()
+        void loadAll(uid)
+      }
       setAuthReady(true)
     })
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      if (!active || event === 'INITIAL_SESSION') return
       const uid = session?.user?.id ?? null
       setUserId(uid)
-      if (uid) loadAll(uid)
+      // TOKEN_REFRESHED happens periodically in the background. Reloading all
+      // vouchers, masters, stock and optional-module data for it caused the
+      // intermittent dashboard slowdown. Only a real sign-in needs hydration.
+      if (event === 'PASSWORD_RECOVERY') {
+        try { window.sessionStorage.setItem('khataerp:password-recovery', '1') } catch { /* unavailable */ }
+      }
+      if (uid && event === 'SIGNED_IN' && window.location.pathname !== '/reset-password') {
+        void loadDashboard()
+        void loadAll(uid)
+      }
       setAuthReady(true)
     })
-    return () => subscription.unsubscribe()
+    return () => {
+      active = false
+      subscription.unsubscribe()
+    }
   }, [loadAll, setUserId])
 
   useEffect(() => {
@@ -185,10 +210,12 @@ export default function App() {
 
   return (
     <AppErrorBoundary>
+      <AppToaster />
       <BrowserRouter>
         <Suspense fallback={<FullPageStatus message="Loading page..." />}>
         <Routes>
           <Route path="/login" element={!authReady ? <FullPageStatus message="Checking session..." /> : userId ? <Navigate to="/" replace /> : <LoginPage />} />
+          <Route path="/reset-password" element={<ResetPasswordPage />} />
           <Route path="/" element={<ProtectedRoute authReady={authReady}><AppShell /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="sales" element={<SalesPage />} />
@@ -228,6 +255,7 @@ export default function App() {
             <Route path="developer" element={<DeveloperDashboard />} />
             <Route path="cheques/new" element={<ChequeModuleGuard permission="cheque.create" write><CreateChequePage /></ChequeModuleGuard>} />
             <Route path="cheques/pending" element={<ChequeModuleGuard><PendingChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/settled" element={<ChequeModuleGuard><SettledChequesPage /></ChequeModuleGuard>} />
             <Route path="cheques/banks" element={<ChequeModuleGuard permission="cheque.manage_banks" write><ChequeBanksPage /></ChequeModuleGuard>} />
             <Route path="cheques/parties" element={<ChequeModuleGuard permission="cheque.view_parties"><ChequePartiesPage /></ChequeModuleGuard>} />
             <Route path="cheques/:id" element={<ChequeModuleGuard><ChequeDetailPage /></ChequeModuleGuard>} />

@@ -52,3 +52,9 @@ export function filterPendingCheques(cheques:Cheque[], quick:string, today=today
     return rank(a)-rank(b)||a.due_date_bs_key-b.due_date_bs_key
   })
 }
+
+export function filterSettledCheques(cheques: Cheque[], status: ChequeStatus | 'all' = 'all') {
+  const settled = cheques.filter(cheque => cheque.status !== 'pending' && (status === 'all' || cheque.status === status))
+  const settledAt = (cheque: Cheque) => cheque.cleared_at || cheque.bounced_at || cheque.cancelled_at || cheque.updated_at || cheque.created_at || ''
+  return settled.sort((left, right) => settledAt(right).localeCompare(settledAt(left)))
+}

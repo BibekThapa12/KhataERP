@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { lazy, useState, useEffect, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
@@ -13,13 +13,14 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
-import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { publicErrorMessage } from '@/lib/security'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
+
+const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
 interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
 
@@ -345,8 +346,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         </DialogContent>
       </Dialog>
 
-      <PartyForm open={showPartyForm} onClose={() => setShowPartyForm(false)} defaultType={partyType}
-        onCreated={p => { setPartyAccountId(p.account_id); setCreditDays(p.default_credit_days ?? 0); setShowPartyForm(false) }} />
+      {showPartyForm && <LedgerDialog open onClose={() => setShowPartyForm(false)} defaultPartyType={partyType}
+        onCreated={(account, party) => { setPartyAccountId(account.id); setCreditDays(party?.default_credit_days ?? account.credit_days ?? 0); setShowPartyForm(false) }} />}
       <ItemForm open={showItemForm} onClose={() => setShowItemForm(false)}
         onCreated={(item: import('@/types').Item) => {
           if (newItemLineIdx !== null) {

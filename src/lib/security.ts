@@ -1,3 +1,5 @@
+import { notifyError } from '@/lib/notifications'
+
 const SENSITIVE_KEY = /(authorization|cookie|password|passwd|secret|token|api[_-]?key|private[_-]?key|client[_-]?secret|service[_-]?role|connection[_-]?string|email|phone|address|pan[_-]?vat|account[_-]?number|contact[_-]?number|holder[_-]?name|notes?|narration|party[_-]?id|voucher[_-]?id)/i
 
 export function redactSensitiveText(value: string): string {
@@ -53,6 +55,7 @@ export function reportClientError(error: unknown, operation = 'request'): string
 
 export function publicErrorMessage(error: unknown, operation = 'request'): string {
   const correlationId = reportClientError(error, operation)
+  notifyError(`Could not complete ${operation}`, `Reference: ${correlationId}`)
   return `Could not complete ${operation}. Reference: ${correlationId}`
 }
 
@@ -77,6 +80,13 @@ export function publicAuthErrorMessage(error: unknown, operation: 'sign in' | 's
   if (!knownMessage) return publicErrorMessage(error, operation)
   reportClientError(error, operation)
   return knownMessage
+}
+
+export function isInvalidCredentialsError(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const code = 'code' in error ? String((error as { code?: unknown }).code ?? '') : ''
+  const message = 'message' in error ? String((error as { message?: unknown }).message ?? '') : ''
+  return code === 'invalid_credentials' || /invalid login credentials/i.test(message)
 }
 
 // Audit history needs to show what changed, not retain a second copy of the

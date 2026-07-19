@@ -16,6 +16,12 @@ export interface Account {
   is_system: boolean
   is_party: boolean
   opening_balance: number
+  address?: string | null
+  contact_no?: string | null
+  pan_no?: string | null
+  credit_days?: number | null
+  bank_account_no?: string | null
+  bank_branch?: string | null
   category_id?: string
   is_archived?: boolean
   balance: number // computed, not stored in DB
@@ -27,9 +33,9 @@ export interface Party {
   company_id: string
   name: string
   type: PartyType
-  phone?: string
-  pan_vat?: string
-  address?: string
+  phone?: string | null
+  pan_vat?: string | null
+  address?: string | null
   default_credit_days?: number
   account_id: string
   is_archived?: boolean

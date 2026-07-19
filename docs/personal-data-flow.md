@@ -34,14 +34,14 @@ The source does **not** collect date of birth, card/payment credentials, biometr
 - The password exists only in React form state long enough to call `supabase.auth.signInWithPassword` or `supabase.auth.signUp` over HTTPS.
 - Application source never hashes, stores, logs, returns, exports, or writes the password to PostgreSQL. Credential hashing and verification are delegated to managed Supabase Auth; [Supabase documents that it stores salted bcrypt hashes](https://supabase.com/docs/guides/auth/password-security). No application MD5/SHA password code exists.
 - Supabase tokens are never copied into application records or logs. Credential-shaped error text is redacted.
-- Because this is a browser-only SPA, it cannot create an `httpOnly` session cookie. Supabase auth is configured to use `sessionStorage`, not persistent `localStorage`, so the token is scoped to the browser tab/session. A future server/SSR architecture would be required for an httpOnly-cookie session.
+- Because this is a browser-only SPA, it cannot create an `httpOnly` session cookie. Supabase auth offers a user-controlled “Keep me signed in” option: trusted devices retain the rotating refresh token in `localStorage`, while shared devices use tab-scoped `sessionStorage`. A future server/SSR architecture would be required for an httpOnly-cookie session.
 - The app creates no application cookies. Consequently there are no cookie flags to configure in this codebase.
 
 ## Browser memory and storage
 
 - Zustand/React memory holds the authenticated company's records while the app is open.
-- `sessionStorage` holds the Supabase session token; JavaScript can access it, so the existing CSP/input escaping and dependency hygiene remain important XSS controls.
-- `localStorage` holds only non-personal UI preferences: chart visibility, selected fiscal year, and a development-only write-timing flag. Legacy fiscal-year keys containing a company UUID are removed when read.
+- Supabase session tokens are held in `localStorage` only when “Keep me signed in” is selected; otherwise they remain in `sessionStorage`. JavaScript can access either store, so the existing CSP/input escaping and dependency hygiene remain important XSS controls.
+- `localStorage` also holds non-personal UI preferences: session persistence choice, chart visibility, selected fiscal year, and a development-only write-timing flag. Legacy fiscal-year keys containing a company UUID are removed when read.
 - No email, phone, address, PAN/VAT, party name, cheque/account number, narration, or password is intentionally written to localStorage.
 
 ## Response minimization and authorization
@@ -73,7 +73,7 @@ The application cannot erase files the user previously downloaded, printouts, da
 ## Files changed by this audit
 
 - `src/lib/security.ts`: credential/PII redaction and field-name-only audit summaries.
-- `src/lib/supabase.ts`: tab-scoped auth storage, explicit response projections, minimized audits, metadata cleanup, account-deletion client call.
+- `src/lib/supabase.ts`: user-controlled persistent/tab-scoped auth storage, explicit response projections, minimized audits, metadata cleanup, account-deletion client call.
 - `src/lib/writePerformance.ts`: company ID removed from console timing output.
 - `src/pages/Login.tsx`: secret-safe auth error display.
 - `src/pages/Settings.tsx`: non-identifying diagnostics and confirmed account deletion UI.

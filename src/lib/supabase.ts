@@ -38,15 +38,58 @@ try {
   throw new Error('VITE_SUPABASE_URL must be a valid URL')
 }
 
-// A browser-only SPA cannot issue httpOnly cookies. Use tab-scoped storage so
-// auth tokens are not left in persistent localStorage after the browser closes.
-if (typeof window !== 'undefined') {
-  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
-    const key = window.localStorage.key(index)
-    if (key && /^sb-.*-auth-token$/i.test(key)) window.localStorage.removeItem(key)
-  }
+// A browser-only SPA cannot issue an httpOnly session cookie. This adapter
+// allows trusted devices to retain Supabase's rotating refresh token while
+// still offering tab-only sessions for shared computers.
+const REMEMBER_SESSION_KEY = 'khataerp:remember-session'
+
+function rememberSessionEnabled() {
+  if (typeof window === 'undefined') return false
+  try { return window.localStorage.getItem(REMEMBER_SESSION_KEY) !== 'false' } catch { return false }
 }
-const authStorage = typeof window !== 'undefined' ? window.sessionStorage : undefined
+
+const authStorage = typeof window === 'undefined' ? undefined : {
+  getItem(key: string) {
+    try { return window.localStorage.getItem(key) ?? window.sessionStorage.getItem(key) } catch { return null }
+  },
+  setItem(key: string, value: string) {
+    try {
+      const persistent = rememberSessionEnabled()
+      const target = persistent ? window.localStorage : window.sessionStorage
+      const other = persistent ? window.sessionStorage : window.localStorage
+      target.setItem(key, value)
+      other.removeItem(key)
+    } catch { /* storage may be unavailable in privacy mode */ }
+  },
+  removeItem(key: string) {
+    try { window.localStorage.removeItem(key) } catch { /* unavailable */ }
+    try { window.sessionStorage.removeItem(key) } catch { /* unavailable */ }
+  },
+}
+
+export function getRememberSession() {
+  return rememberSessionEnabled()
+}
+
+export function setRememberSession(remember: boolean) {
+  if (typeof window === 'undefined') return
+  try {
+    window.localStorage.setItem(REMEMBER_SESSION_KEY, String(remember))
+    // Migrate an existing session immediately if this setting is changed while
+    // a token already exists. Never duplicate the token across both stores.
+    const source = remember ? window.sessionStorage : window.localStorage
+    const target = remember ? window.localStorage : window.sessionStorage
+    for (let index = source.length - 1; index >= 0; index -= 1) {
+      const key = source.key(index)
+      if (!key || !/^sb-.*-auth-token$/i.test(key)) continue
+      const value = source.getItem(key)
+      if (value) target.setItem(key, value)
+      source.removeItem(key)
+    }
+  } catch { /* storage may be unavailable in privacy mode */ }
+}
+
+if (typeof window !== 'undefined') setRememberSession(rememberSessionEnabled())
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   auth: {
     storage: authStorage,
@@ -58,7 +101,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
 
 const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,created_at'
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
-const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,category_id,is_archived,created_at'
+const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
 const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion,sell_rate,opening_qty,opening_rate,reorder_level,category_id,sku,barcode,vat_applicable,is_archived,created_at'
 const ACCOUNT_CATEGORY_FIELDS = 'id,company_id,name,account_type,parent_category_id,is_system,is_archived,created_at'
@@ -88,8 +131,18 @@ export const supabaseProjectHost = (() => {
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export const getSession = () => supabase.auth.getSession()
-export const signIn = (email: string, password: string, captchaToken: string) =>
-  supabase.auth.signInWithPassword({ email, password, options: { captchaToken } })
+export const signIn = (email: string, password: string) =>
+  supabase.auth.signInWithPassword({ email, password })
+  // Future CAPTCHA: add options: { captchaToken } to this request.
+
+export const requestPasswordReset = (email: string) =>
+  supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: `${window.location.origin}/reset-password`,
+    // Future CAPTCHA: add captchaToken here.
+  })
+
+export const updateRecoveredPassword = (password: string) =>
+  supabase.auth.updateUser({ password })
 
 export interface CompanySignupDetails {
   name: string
@@ -99,12 +152,12 @@ export interface CompanySignupDetails {
   vat_enabled: boolean
 }
 
-export const signUp = (email: string, password: string, company: CompanySignupDetails, captchaToken: string) =>
+export const signUp = (email: string, password: string, company: CompanySignupDetails) =>
   supabase.auth.signUp({
     email,
     password,
     options: {
-      captchaToken,
+      // Future CAPTCHA: add captchaToken here.
       emailRedirectTo: `${window.location.origin}/login`,
       data: {
         company_name: company.name,
@@ -120,8 +173,8 @@ export const signOut = () => supabase.auth.signOut()
 export async function deleteOwnAccount() {
   const { error } = await supabase.rpc('delete_my_account')
   if (error) throw error
-  // The server-side deletion invalidates the identity; clear the tab-scoped
-  // client session immediately without waiting for another auth refresh.
+  // The server-side deletion invalidates the identity; clear local client
+  // session data immediately without waiting for another auth refresh.
   try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* account is already deleted */ }
 }
 
@@ -232,7 +285,10 @@ export async function checkSupabaseConnectionStatus() {
 const companyInitializationPromises = new Map<string, Promise<Company>>()
 
 async function clearSignupCompanyMetadata(metadata: Record<string, unknown>) {
-  if (!Object.keys(metadata).some(key => key.startsWith('company_'))) return
+  // Supabase keeps keys whose value was cleared to null. Treat those as
+  // already cleared so every later login does not perform an unnecessary
+  // blocking auth.updateUser round trip.
+  if (!Object.entries(metadata).some(([key, value]) => key.startsWith('company_') && value !== null && value !== undefined)) return
   await supabase.auth.updateUser({ data: {
     company_name: null,
     company_address: null,
@@ -243,12 +299,14 @@ async function clearSignupCompanyMetadata(metadata: Record<string, unknown>) {
 }
 
 async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
-  const { data: userData } = await supabase.auth.getUser()
-  const { data: companies, error: companyError } = await supabase
-    .from('companies')
-    .select(COMPANY_FIELDS)
-    .eq('user_id', user_id)
-    .order('created_at', { ascending: true })
+  const [{ data: userData }, { data: companies, error: companyError }] = await Promise.all([
+    supabase.auth.getUser(),
+    supabase
+      .from('companies')
+      .select(COMPANY_FIELDS)
+      .eq('user_id', user_id)
+      .order('created_at', { ascending: true }),
+  ])
   if (companyError) throw companyError
 
   const metadata = userData.user?.user_metadata ?? {}
@@ -616,10 +674,20 @@ export async function fetchMasterChangeLogs(company_id: string): Promise<MasterC
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
-  const { data: settlementData, error: settlementError } = await supabase
+  const settlementRequest = supabase
     .from('voucher_settlements')
     .select(VOUCHER_SETTLEMENT_FIELDS)
     .eq('company_id', company_id)
+  const voucherRequest = supabase
+    .from('vouchers')
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
+    .eq('company_id', company_id)
+    .order('date_bs_key', { ascending: false })
+    .order('seq', { ascending: false })
+  const [
+    { data: settlementData, error: settlementError },
+    { data, error },
+  ] = await Promise.all([settlementRequest, voucherRequest])
   const settlements = settlementError && /does not exist|schema cache/i.test(settlementError.message)
     ? []
     : settlementError
@@ -632,15 +700,6 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
     byVoucher.set(settlement.settlement_voucher_id, rows)
   }
   const attachSettlements = (voucher: Voucher) => ({ ...voucher, settlements: byVoucher.get(voucher.id) || [] })
-  const query = supabase
-    .from('vouchers')
-    .select(VOUCHER_WITH_CHILDREN_FIELDS)
-    .eq('company_id', company_id)
-
-  const { data, error } = await query
-    .order('date_bs_key', { ascending: false })
-    .order('seq', { ascending: false })
-
   if (!error) {
     return (data || [])
       .map(v => attachSettlements(normalizeVoucherDates(v) as Voucher))

@@ -223,6 +223,12 @@ create table if not exists accounts (
   is_system        boolean not null default false,
   is_party         boolean not null default false,
   opening_balance  numeric(14,2) not null default 0,
+  address          text,
+  contact_no       text,
+  pan_no           text,
+  credit_days      integer,
+  bank_account_no  text,
+  bank_branch      text,
   created_at       timestamptz not null default now()
 );
 

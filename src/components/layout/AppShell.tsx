@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus
+  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
@@ -96,6 +96,7 @@ const NAV_SECTIONS: {
     items: [
       { to: '/cheques/new', label: 'Create Cheque', Icon: Plus },
       { to: '/cheques/pending', label: 'Pending Cheques', Icon: Clock3 },
+      { to: '/cheques/settled', label: 'Settled Cheques', Icon: CheckCircle2 },
       { to: '/cheques/banks', label: 'Banks', Icon: Landmark },
       { to: '/cheques/parties', label: 'Parties', Icon: Users },
     ],

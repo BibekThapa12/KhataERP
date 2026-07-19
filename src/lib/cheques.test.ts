@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { canTransitionCheque, chequeEntitlement, chequeRelativeState, filterPendingCheques, validateChequeInput } from './cheques'
+import { canTransitionCheque, chequeEntitlement, chequeRelativeState, filterPendingCheques, filterSettledCheques, validateChequeInput } from './cheques'
 import type { Cheque, CompanyModule } from '@/types'
 
 const cheque = (overrides: Partial<Cheque> = {}): Cheque => ({
@@ -32,5 +32,15 @@ describe('received cheque rules', () => {
   it('only allows pending terminal transitions', () => {
     expect(canTransitionCheque('pending','cleared')).toBe(true)
     expect(canTransitionCheque('cleared','bounced')).toBe(false)
+  })
+  it('lists only cleared, bounced, and cancelled cheques', () => {
+    const rows = filterSettledCheques([
+      cheque(),
+      cheque({ id: 'cleared', status: 'cleared', cleared_at: '2026-07-19T10:00:00Z' }),
+      cheque({ id: 'bounced', status: 'bounced', bounced_at: '2026-07-19T11:00:00Z' }),
+      cheque({ id: 'cancelled', status: 'cancelled', cancelled_at: '2026-07-19T09:00:00Z' }),
+    ])
+    expect(rows.map(row => row.id)).toEqual(['bounced', 'cleared', 'cancelled'])
+    expect(filterSettledCheques(rows, 'cleared').map(row => row.id)).toEqual(['cleared'])
   })
 })

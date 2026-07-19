@@ -161,11 +161,12 @@ business rule that every sale must use an item master's suggested price.
   boundary; it can be cleared or bypassed by calling Supabase Auth directly.
 - Exploit: script requests directly against `/auth/v1/token` or
   `/auth/v1/signup` without loading the application.
-- Current protection: hCaptcha tokens are passed to Supabase for sign-in and
-  sign-up. Supabase Auth also supplies server-side endpoint rate limiting.
-- Required deployment fix: verify CAPTCHA enforcement and Auth rate-limit
-  settings in the Supabase Dashboard. The local counter must never be cited as
-  the server-side defense.
+- Current protection: the UI locks for one minute after five confirmed invalid
+  credentials, while Supabase Auth supplies server-side endpoint rate limiting.
+  CAPTCHA integration is retained but temporarily disabled.
+- Required deployment fix: verify Auth rate-limit settings in Supabase. Re-enable
+  CAPTCHA before treating bot resistance as a completed control; the local
+  counter must never be cited as the server-side defense.
 
 ### SEC-11 — Spreadsheet formula injection in CSV exports (High, fixed)
 
@@ -311,7 +312,7 @@ business rule that every sale must use an item master's suggested price.
 
 ### Abuse paths
 
-- Sign-in and signup use hCaptcha. Supabase Auth rate limits are the server-side
+- CAPTCHA is temporarily disabled. Supabase Auth rate limits are the server-side
   control; the browser counter is explicitly supplemental and bypassable.
 - There is no messaging, referral, promo-code, card-payment or server-side file
   upload feature to abuse. Production browser backup import is disabled.

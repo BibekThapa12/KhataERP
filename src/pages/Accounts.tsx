@@ -16,7 +16,6 @@ import { Badge } from '@/components/ui/misc'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
-import { PartyForm } from '@/components/forms/PartyForm'
 import { CategoryDialog, LedgerDialog } from '@/pages/Masters'
 import type { Account, AccountCategory, AccountType, Party } from '@/types'
 
@@ -202,6 +201,6 @@ export function AccountsPage() {
     </PageContent>
     <LedgerDialog open={ledgerOpen} onClose={() => setLedgerOpen(false)} />
     <CategoryDialog kind="account" open={categoryOpen} onClose={() => setCategoryOpen(false)} />
-    <PartyForm open={!!partyFormType} defaultType={partyFormType || undefined} onClose={() => setPartyFormType(null)} />
+    <LedgerDialog open={!!partyFormType} defaultPartyType={partyFormType || undefined} onClose={() => setPartyFormType(null)} />
   </div>
 }

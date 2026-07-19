@@ -4,7 +4,7 @@ import react from '@vitejs/plugin-react'
 
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '')
-  for (const name of ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY', 'VITE_HCAPTCHA_SITE_KEY'] as const) {
+  for (const name of ['VITE_SUPABASE_URL', 'VITE_SUPABASE_ANON_KEY'] as const) {
     const value = env[name]?.trim()
     if (!value || value.startsWith('your-') || value.includes('your-project-id')) {
       throw new Error(`Build refused: missing production-safe ${name}. Configure it in the deployment environment.`)

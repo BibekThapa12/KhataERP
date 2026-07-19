@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
+import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { useSearchParams } from 'react-router-dom'
-import { Plus, Download, Eye, Printer, Search, Share2 } from 'lucide-react'
+import { Plus, Download, Eye, Printer, Search, Share2, ChevronDown, UserRound, Building2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent } from '@/lib/supabase'
 import { downloadCsv } from '@/lib/csv'
@@ -10,7 +11,7 @@ import { todayBs } from '@/lib/nepaliDate'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
-import { PartyForm } from '@/components/forms/PartyForm'
+import { LedgerDialog } from '@/pages/Masters'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -215,7 +216,7 @@ export function PartiesPage() {
   const selectedPartyId = searchParams.get('party')
   const selectedParty = parties.find(party => party.id === selectedPartyId)
   const [tab, setTab] = useState<'customer' | 'supplier'>(selectedParty?.type || 'customer')
-  const [showForm, setShowForm] = useState(false)
+  const [newPartyType, setNewPartyType] = useState<'customer' | 'supplier' | null>(null)
   const [search, setSearch] = useState('')
   const balanceSummary = getPartyBalanceSummary(parties, accounts)
   const normalizedSearch = search.trim().toLowerCase().replace(/\s+/g, ' ')
@@ -263,7 +264,7 @@ export function PartiesPage() {
   return (
     <div>
       <PageHeader title="Parties" description="Sundry Debtors (Customers) and Sundry Creditors (Suppliers)"
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><Button onClick={() => setShowForm(true)}><Plus className="h-4 w-4 mr-1.5" />New Party</Button></div>} />
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><DropdownMenuPrimitive.Root><DropdownMenuPrimitive.Trigger asChild><Button><Plus className="mr-1.5 h-4 w-4" />New Party<ChevronDown className="ml-1.5 h-3.5 w-3.5" /></Button></DropdownMenuPrimitive.Trigger><DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content align="end" sideOffset={5} className="z-[100] min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('customer')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><UserRound className="h-4 w-4" />New Customer</DropdownMenuPrimitive.Item><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('supplier')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><Building2 className="h-4 w-4" />New Supplier</DropdownMenuPrimitive.Item></DropdownMenuPrimitive.Content></DropdownMenuPrimitive.Portal></DropdownMenuPrimitive.Root></div>} />
       <PageContent>
         <Tabs value={tab} onValueChange={value => setTab(value as 'customer' | 'supplier')}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
@@ -282,7 +283,7 @@ export function PartiesPage() {
           </Card>
         </Tabs>
       </PageContent>
-      <PartyForm open={showForm} onClose={() => setShowForm(false)} />
+      <LedgerDialog open={!!newPartyType} defaultPartyType={newPartyType || undefined} onClose={() => setNewPartyType(null)} />
     </div>
   )
 }

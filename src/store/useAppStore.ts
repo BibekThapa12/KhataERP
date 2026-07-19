@@ -27,11 +27,17 @@ import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@
 import { selectedFiscalYearStartBs } from '@/lib/reports'
 import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
 import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } from '@/lib/writePerformance'
-import { publicErrorMessage } from '@/lib/security'
+import { publicErrorMessage, reportClientError } from '@/lib/security'
+import { notifySuccess } from '@/lib/notifications'
 
-const warnNonSensitive = (context: string) => (error: unknown) => { publicErrorMessage(error, context) }
+const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
+
+// Auth initialization, token events, and realtime notifications can arrive
+// together. Share the active request so one company never performs the same
+// full hydration more than once concurrently.
+const companyDataLoadPromises = new Map<string, Promise<void>>()
 
 async function measuredWrite<T>(context: WriteTraceContext, task: (trace: WritePerformanceTrace) => Promise<T>): Promise<T> {
   const trace = beginWriteTrace(context)
@@ -76,6 +82,7 @@ interface AppState {
   chequeBanks: ChequeBank[]
   cheques: Cheque[]
   loading: boolean
+  dataReady: boolean
   error: string | null
 
   // Derived helpers
@@ -94,7 +101,7 @@ interface AppState {
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
   addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean }) => Promise<Item>
-  addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number }) => Promise<Account>
+  addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number; address?: string | null; contact_no?: string | null; pan_no?: string | null; credit_days?: number | null; bank_account_no?: string | null; bank_branch?: string | null }) => Promise<Account>
   addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
   deleteAccountCategory: (id: string) => Promise<void>
@@ -285,7 +292,24 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
 
 export const useAppStore = create<AppState>((set, get) => ({
   userId: null,
-  setUserId: (id) => set({ userId: id }),
+  setUserId: (id) => set(state => state.userId === id ? state : {
+    userId: id,
+    company: null,
+    accounts: [],
+    rawAccounts: [],
+    accountCategories: [],
+    parties: [],
+    items: [],
+    itemCategories: [],
+    stock: [],
+    vouchers: [],
+    companyModules: [],
+    chequePermissions: [],
+    chequeBanks: [],
+    cheques: [],
+    dataReady: false,
+    error: null,
+  }),
   company: null,
   accounts: [],
   rawAccounts: [],
@@ -300,6 +324,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   chequeBanks: [],
   cheques: [],
   loading: false,
+  dataReady: false,
   error: null,
 
   // ─── Derived ────────────────────────────────────────────────────────────────
@@ -320,7 +345,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   closingStockValue: () => get().stock.reduce((s, e) => s + e.value, 0),
 
   // ─── Load All ───────────────────────────────────────────────────────────────
-  loadAll: async (userId) => {
+  loadAll: (userId) => {
+    const pending = companyDataLoadPromises.get(userId)
+    if (pending) return pending
+
+    const request = (async () => {
     set({ loading: true, error: null })
     try {
       const company = await getOrCreateCompany(userId)
@@ -467,6 +496,10 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       const accounts = recomputeAllBalances(rawAccounts, vouchers)
       const stock = recomputeStock(items, vouchers, valuationMethod(company))
+      // Core accounting data is complete at this point. Render it immediately;
+      // optional paid-module data must not hold the dashboard loading state.
+      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, userId, loading: false, dataReady: true })
+
       let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
       try {
         companyModules = await fetchCompanyModules(company.id)
@@ -476,11 +509,21 @@ export const useAppStore = create<AppState>((set, get) => ({
           chequePermissions = loaded[0].length ? loaded[0] : ALL_CHEQUE_PERMISSIONS
           chequeBanks = loaded[1]; cheques = loaded[2]
         }
+        // Ignore a late response when the authenticated company changed.
+        if (get().company?.id === company.id) set({ companyModules, chequePermissions, chequeBanks, cheques })
       } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
-      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, companyModules, chequePermissions, chequeBanks, cheques, userId, loading: false })
     } catch (e: unknown) {
       set({ error: publicErrorMessage(e, 'loading company data'), loading: false })
     }
+    })()
+
+    const trackedRequest = request.finally(() => {
+      if (companyDataLoadPromises.get(userId) === trackedRequest) {
+        companyDataLoadPromises.delete(userId)
+      }
+    })
+    companyDataLoadPromises.set(userId, trackedRequest)
+    return trackedRequest
   },
 
   // ─── Recompute after mutation ────────────────────────────────────────────────
@@ -493,6 +536,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ? recomputeStock(get().items, get().vouchers, valuationMethod(nextCompany))
       : get().stock
     set({ company: nextCompany, stock })
+    notifySuccess('Company settings saved')
   },
   refreshChequeData: async () => {
     const company=get().company; if(!company) return
@@ -522,6 +566,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       is_party: true,
       is_archived: false,
       opening_balance,
+      address: address || null,
+      contact_no: phone || null,
+      pan_no: pan_vat || null,
+      credit_days: default_credit_days,
+      bank_account_no: null,
+      bank_branch: null,
     }
     await trace.measure('party_ledger_insert', () => insertAccount(newAccount), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
     const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
@@ -530,6 +580,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { rawAccounts: updatedRawAccounts, accounts: recomputeAffectedBalances(updatedRawAccounts, get().accounts, vouchers, [accountId]), parties: [...get().parties, newParty] }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Party created', name)
     return newParty
     })
   },
@@ -550,22 +601,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Item created', newItem.name)
     return newItem
     })
   },
 
-  addAccount: async ({ name, type, group, category_id, opening_balance = 0 }) => {
+  addAccount: async ({ name, type, group, category_id, opening_balance = 0, address = null, contact_no = null, pan_no = null, credit_days = null, bank_account_no = null, bank_branch = null }) => {
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
     const category = get().accountCategories.find(entry => entry.id === category_id)
     const partyType = partyTypeForCategory(category)
-    const newAcc = { id: crypto.randomUUID(), company_id: company.id, name, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance }
+    const newAcc = { id: crypto.randomUUID(), company_id: company.id, name, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance, address, contact_no, pan_no, credit_days, bank_account_no, bank_branch }
     await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
-    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
+    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, phone: contact_no, pan_vat: pan_no, address, default_credit_days: credit_days || 0, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
     const accounts = recomputeAffectedBalances(updatedRaw, get().accounts, vouchers, [newAcc.id])
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })
+    notifySuccess('Ledger created', name)
     return { ...newAcc, balance: 0 }
     })
   },
@@ -581,6 +634,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const category = await insertAccountCategory({ company_id: company.id, name, account_type, parent_category_id, is_system: false, is_archived: false })
     set({ accountCategories: [...get().accountCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record account category audit'))
+    notifySuccess('Account group created', category.name)
   },
 
   alterAccountCategory: async (id, updates) => {
@@ -603,6 +657,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rawAccounts = get().rawAccounts.map(account => account.category_id === id && updates.name ? { ...account, group: updates.name } : account)
     set({ accountCategories, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, []) })
     logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record account category audit'))
+    notifySuccess(updates.is_archived === true ? 'Account group archived' : updates.is_archived === false ? 'Account group restored' : 'Account group updated', updates.name || existing.name)
   },
 
   deleteAccountCategory: async (id) => {
@@ -614,6 +669,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await removeAccountCategory(id)
     set({ accountCategories: get().accountCategories.filter(category => category.id !== id) })
     logMasterChange(company.id, 'account_category', id, 'delete', existing, {}).catch(warnNonSensitive('Could not record account category audit'))
+    notifySuccess('Account group deleted', existing.name)
   },
 
   addItemCategory: async ({ name, parent_category_id = null }) => {
@@ -624,6 +680,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const category = await insertItemCategory({ company_id: company.id, name, parent_category_id, is_archived: false })
     set({ itemCategories: [...get().itemCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record item category audit'))
+    notifySuccess('Item category created', category.name)
   },
 
   alterItemCategory: async (id, updates) => {
@@ -642,6 +699,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await updateItemCategory(id, updates)
     set({ itemCategories: get().itemCategories.map(category => category.id === id ? { ...category, ...updates } : category) })
     logMasterChange(company.id, 'item_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record item category audit'))
+    notifySuccess(updates.is_archived === true ? 'Item category archived' : updates.is_archived === false ? 'Item category restored' : 'Item category updated', updates.name || existing.name)
   },
 
   alterAccount: async (id, updates) => {
@@ -655,12 +713,31 @@ export const useAppStore = create<AppState>((set, get) => ({
     const category = get().accountCategories.find(entry => entry.id === categoryId)
     const partyType = partyTypeForCategory(category)
     const existingParty = get().parties.find(party => party.account_id === id)
-    const effectiveUpdates = partyType ? { ...updates, category_id: category!.id, group: category!.name, type: category!.account_type, is_party: true } : updates
+    const effectiveUpdates = partyType
+      ? { ...updates, category_id: category!.id, group: category!.name, type: category!.account_type, is_party: true }
+      : updates
     await trace.measure('account_update', () => updateAccount(id, effectiveUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
-    const newParty = partyType && !existingParty ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: effectiveUpdates.name || existing.name, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
+    const partyDetails = {
+      name: effectiveUpdates.name || existing.name,
+      type: partyType,
+      phone: effectiveUpdates.contact_no === undefined ? existing.contact_no || null : effectiveUpdates.contact_no,
+      pan_vat: effectiveUpdates.pan_no === undefined ? existing.pan_no || null : effectiveUpdates.pan_no,
+      address: effectiveUpdates.address === undefined ? existing.address || null : effectiveUpdates.address,
+      default_credit_days: effectiveUpdates.credit_days === undefined ? existing.credit_days || 0 : effectiveUpdates.credit_days || 0,
+    }
+    const newParty = partyType && !existingParty ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, ...partyDetails, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
+    if (partyType && existingParty) {
+      await trace.measure('linked_party_update', () => updateParty(existingParty.id, partyDetails), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.update' })
+    }
     const rawAccounts = get().rawAccounts.map(account => account.id === id ? { ...account, ...effectiveUpdates } : account)
-    set({ rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [id]), parties: newParty ? [...get().parties, newParty] : get().parties })
+    const parties = newParty
+      ? [...get().parties, newParty]
+      : partyType && existingParty
+        ? get().parties.map(item => item.id === existingParty.id ? { ...item, ...partyDetails, type: partyType } : item)
+        : get().parties
+    set({ rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [id]), parties })
     logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record account audit'))
+    notifySuccess(effectiveUpdates.is_archived === true ? 'Ledger archived' : effectiveUpdates.is_archived === false ? 'Ledger restored' : 'Ledger updated', effectiveUpdates.name || existing.name)
     })
   },
 
@@ -679,6 +756,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       parties: get().parties.filter(party => party.account_id !== id),
     })
     logMasterChange(company.id, 'account', id, 'delete', existing, {}).catch(warnNonSensitive('Could not record account audit'))
+    notifySuccess('Ledger deleted', existing.name)
   },
 
   alterParty: async (id, updates) => {
@@ -692,13 +770,24 @@ export const useAppStore = create<AppState>((set, get) => ({
     const categoryName = terminology.category
     const accountType = terminology.accountType
     const category = get().accountCategories.find(item => item.name === categoryName && item.account_type === accountType)
-    const accountUpdates: Partial<Account> = { name: updates.name || party.name, type: accountType, group: categoryName, category_id: category?.id, is_archived: updates.is_archived }
+    const accountUpdates: Partial<Account> = {
+      name: updates.name || party.name,
+      type: accountType,
+      group: categoryName,
+      category_id: category?.id,
+      is_archived: updates.is_archived,
+      address: updates.address === undefined ? undefined : updates.address || null,
+      contact_no: updates.phone === undefined ? undefined : updates.phone || null,
+      pan_no: updates.pan_vat === undefined ? undefined : updates.pan_vat || null,
+      credit_days: updates.default_credit_days === undefined ? undefined : updates.default_credit_days,
+    }
     await trace.measure('party_master_update', () => updateParty(id, updates), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.update' })
     await trace.measure('party_ledger_update', () => updateAccount(party.account_id, accountUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
     const parties = get().parties.map(item => item.id === id ? { ...item, ...updates } : item)
     const rawAccounts = get().rawAccounts.map(account => account.id === party.account_id ? { ...account, ...accountUpdates } : account)
     set({ parties, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [party.account_id]) })
     logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record party audit'))
+    notifySuccess(updates.is_archived === true ? 'Party archived' : updates.is_archived === false ? 'Party restored' : 'Party updated', updates.name || party.name)
     })
   },
 
@@ -724,6 +813,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const items = get().items.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
     set({ items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [id], valuationMethod(company)) })
     logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record item audit'))
+    notifySuccess(normalizedUpdates.is_archived === true ? 'Item archived' : normalizedUpdates.is_archived === false ? 'Item restored' : 'Item updated', normalizedUpdates.name || existing.name)
     })
   },
 
@@ -753,6 +843,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Sales invoice saved', newVoucher.invoice_no)
     })
   },
 
@@ -780,6 +871,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Purchase invoice saved', newVoucher.invoice_no)
     })
   },
 
@@ -808,6 +900,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Receipt saved', newVoucher.invoice_no)
     return newVoucher
     })
   },
@@ -837,6 +930,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Payment saved', newVoucher.invoice_no)
     })
   },
 
@@ -861,6 +955,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess('Journal voucher saved', newVoucher.invoice_no)
     })
   },
 
@@ -901,6 +996,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers: nextVouchers, ...recomputeVoucherEffects(get(), nextVouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess(params.type === 'Sales Return' ? 'Sales return saved' : 'Purchase return saved', newVoucher.invoice_no)
     })
   },
 
@@ -928,6 +1024,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
     set({ vouchers, accounts, stock })
+    notifySuccess('Sales invoice updated', updated.invoice_no)
     })
   },
 
@@ -953,6 +1050,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
     set({ vouchers, accounts, stock })
+    notifySuccess('Purchase invoice updated', updated.invoice_no)
     })
   },
 
@@ -977,6 +1075,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
+    notifySuccess('Receipt updated', updated.invoice_no)
     })
   },
 
@@ -1012,6 +1111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { vouchers, stock: recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(newVoucher), valuationMethod(company)) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    notifySuccess(transfer_to ? 'Stock transferred' : 'Stock adjustment saved', newVoucher.invoice_no)
     })
   },
 
@@ -1036,6 +1136,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
+    notifySuccess('Payment updated', updated.invoice_no)
     })
   },
 
@@ -1057,6 +1158,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
+    notifySuccess('Journal voucher updated', updated.invoice_no)
     })
   },
 
@@ -1090,6 +1192,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     set({ vouchers, ...recomputeVoucherEffects(get(), vouchers, company, existing, updated) })
+    notifySuccess(params.type === 'Sales Return' ? 'Sales return updated' : 'Purchase return updated', updated.invoice_no)
     })
   },
 
@@ -1105,6 +1208,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, cancelled)
     const stock = recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(existing), valuationMethod(company))
     set({ vouchers, accounts, stock })
+    notifySuccess('Voucher cancelled', existing?.invoice_no)
     })
   },
 

@@ -12,7 +12,7 @@ import { Card } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Badge } from '@/components/ui/misc'
+import { Badge, Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
@@ -20,9 +20,11 @@ import { publicErrorMessage } from '@/lib/security'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { normalizeSearch } from '@/lib/search'
 import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
-import { partyTerminology } from '@/lib/partyTerminology'
+import { partyCategoryForType, partyTerminology } from '@/lib/partyTerminology'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { ledgerDeletionBlockReason } from '@/lib/masterDeletion'
+import { ledgerFieldVisibility, openingBalanceFromStored, openingBalanceToStored, type BalanceType } from '@/lib/ledgerForm'
+import { normalSide } from '@/lib/engine'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -81,52 +83,83 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
   )
 }
 
-export function LedgerDialog({ account, party, defaultCategoryId, open, onClose }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; open: boolean; onClose: () => void }) {
-  const { accountCategories, addAccount, alterAccount, alterParty, vouchers } = useAppStore()
+export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyType, open, onClose, onCreated }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; defaultPartyType?: 'customer' | 'supplier'; open: boolean; onClose: () => void; onCreated?: (account: Account, party?: Party) => void }) {
+  const { accountCategories, addAccount, alterAccount, vouchers } = useAppStore()
   const activeCategories = useMemo(() => accountCategories.filter(category => !category.is_archived), [accountCategories])
   const [name, setName] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [partyType, setPartyType] = useState<'customer' | 'supplier'>('customer')
   const [defaultCreditDays, setDefaultCreditDays] = useState('0')
   const [openingBalance, setOpeningBalance] = useState('0')
+  const [balanceType, setBalanceType] = useState<BalanceType>('Dr')
+  const [address, setAddress] = useState('')
+  const [contactNo, setContactNo] = useState('')
+  const [panNo, setPanNo] = useState('')
+  const [bankAccountNo, setBankAccountNo] = useState('')
+  const [bankBranch, setBankBranch] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const isUsed = !!account && vouchers.some(voucher => voucher.lines?.some(line => line.account_id === account.id))
+  const selectedCategory = activeCategories.find(category => category.id === categoryId)
+  const visibility = useMemo(() => ledgerFieldVisibility(accountCategories, categoryId), [accountCategories, categoryId])
+  const fixedPartyType = defaultPartyType || party?.type
+  const partyMode = !!fixedPartyType
+  const fixedPartyCategory = fixedPartyType ? partyCategoryForType(activeCategories, fixedPartyType) : undefined
 
   useEffect(() => {
     if (!open) return
     setName(account?.name || '')
-    setCategoryId(account?.category_id || defaultCategoryId || activeCategories[0]?.id || '')
-    setPartyType(party?.type || 'customer')
-    setDefaultCreditDays(String(party?.default_credit_days ?? 0))
-    setOpeningBalance(String(account?.opening_balance || 0))
+    setCategoryId(account?.category_id || fixedPartyCategory?.id || (!partyMode ? defaultCategoryId || activeCategories[0]?.id || '' : ''))
+    setPartyType(fixedPartyType || 'customer')
+    setDefaultCreditDays(String(party?.default_credit_days ?? account?.credit_days ?? 0))
+    const selected = account?.type || fixedPartyCategory?.account_type || activeCategories.find(category => category.id === (defaultCategoryId || activeCategories[0]?.id))?.account_type || 'Asset'
+    const opening = openingBalanceFromStored(account?.opening_balance || 0, selected)
+    setOpeningBalance(String(opening.amount))
+    setBalanceType(opening.balanceType)
+    setAddress(account?.address || party?.address || '')
+    setContactNo(account?.contact_no || party?.phone || '')
+    setPanNo(account?.pan_no || party?.pan_vat || '')
+    setBankAccountNo(account?.bank_account_no || '')
+    setBankBranch(account?.bank_branch || '')
     setError('')
-  }, [open, account, party, defaultCategoryId, activeCategories])
+  }, [open, account, party, defaultCategoryId, fixedPartyType, fixedPartyCategory?.id, fixedPartyCategory?.account_type, partyMode, activeCategories])
 
   useEffect(() => {
-    if (!party) return
-    const terms = partyTerminology(partyType)
-    const requiredName = terms.category
-    const requiredType = terms.accountType
-    const category = activeCategories.find(item => item.name === requiredName && item.account_type === requiredType)
-    if (category) setCategoryId(category.id)
-  }, [party, partyType, activeCategories])
+    if (!partyMode) return
+    const effectivePartyType = fixedPartyType || partyType
+    const category = partyCategoryForType(activeCategories, effectivePartyType)
+    if (category) {
+      setCategoryId(category.id)
+      if (!account) setBalanceType(normalSide(category.account_type) === 'debit' ? 'Dr' : 'Cr')
+    }
+  }, [partyMode, fixedPartyType, partyType, activeCategories, account])
 
   const save = async () => {
     const category = activeCategories.find(item => item.id === categoryId)
     if (!name.trim()) return setError('Enter a ledger name.')
-    if (!category) return setError('Select a category.')
+    if (!category) return setError(partyMode ? `${partyTerminology(fixedPartyType || partyType).category} group is unavailable. Restore the protected system group before creating this party.` : 'Select a category.')
+    if (openingBalance.trim() === '' || !Number.isFinite(Number(openingBalance)) || Number(openingBalance) < 0) return setError('Enter a valid opening balance of 0 or more.')
+    const creditDays = Number(defaultCreditDays)
+    if (visibility.showCreditDays && (!Number.isInteger(creditDays) || creditDays < 0 || creditDays > 36500)) return setError('Credit Days must be a whole number from 0 to 36500.')
+    if (contactNo.trim().length > 50) return setError('Contact No. cannot exceed 50 characters.')
+    if (panNo.trim().length > 100) return setError('PAN No. cannot exceed 100 characters.')
+    const storedOpeningBalance = openingBalanceToStored(Number(openingBalance), category.account_type, balanceType)
+    const details = {
+      address: visibility.showContactDetails ? address.trim() || null : null,
+      contact_no: visibility.showContactDetails ? contactNo.trim() || null : null,
+      pan_no: visibility.showContactDetails ? panNo.trim() || null : null,
+      credit_days: visibility.showCreditDays ? creditDays : null,
+      bank_account_no: visibility.showBankDetails ? bankAccountNo.trim() || null : null,
+      bank_branch: visibility.showBankDetails ? bankBranch.trim() || null : null,
+    }
     setSaving(true)
     try {
-      if (party) {
-        const creditDays = Number(defaultCreditDays)
-        if (!Number.isInteger(creditDays) || creditDays < 0) throw new Error('Default Credit Days must be a whole number of 0 or more.')
-        await alterParty(party.id, { name: name.trim(), type: partyType, default_credit_days: creditDays })
-        if (account && Number(openingBalance) !== account.opening_balance) await alterAccount(account.id, { opening_balance: Number(openingBalance) || 0 })
-      } else if (account) {
-        await alterAccount(account.id, { name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: Number(openingBalance) || 0 })
+      if (account) {
+        await alterAccount(account.id, { name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
       } else {
-        await addAccount({ name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: Number(openingBalance) || 0 })
+        const createdAccount = await addAccount({ name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
+        const createdParty = useAppStore.getState().parties.find(candidate => candidate.account_id === createdAccount.id)
+        onCreated?.(createdAccount, createdParty)
       }
       onClose()
     } catch (e: unknown) { setError(publicErrorMessage(e, 'saving ledger')) } finally { setSaving(false) }
@@ -134,16 +167,34 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-md">
+      <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
         <div className="min-w-0 space-y-4 py-2">
-          <div className="space-y-1.5"><Label>Ledger Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
-          {party ? (
-            <><div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div><div className="space-y-1.5"><Label>Default Credit Days</Label><Input type="number" min="0" step="1" value={defaultCreditDays} onChange={event => setDefaultCreditDays(event.target.value)} /><p className="text-xs text-muted-foreground">Used automatically on new credit invoices.</p></div></>
+          <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
+          {party && !defaultPartyType ? (
+            <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
-            <div className="space-y-1.5"><Label>Category</Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled={!!account?.is_system} placeholder="Select category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>
+            <div className="space-y-1.5"><Label>Group / Category <span className="text-destructive">*</span></Label><SearchableSelect value={categoryId} onValueChange={value => { setCategoryId(value); if (!account) { const next = activeCategories.find(category => category.id === value); if (next) setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') } }} disabled={partyMode || !!account?.is_system} placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>
           )}
-          <div className="space-y-1.5"><Label>Opening Balance</Label><Input type="number" step="any" value={openingBalance} onChange={event => setOpeningBalance(event.target.value)} /><p className="text-xs text-muted-foreground">Changes affect all reports. Current voucher movements are not modified.</p></div>
+            {party && !defaultPartyType && <div className="space-y-1.5 sm:col-span-2"><Label>Group / Category <span className="text-destructive">*</span></Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>}
+            <div className="space-y-1.5"><Label>Opening Balance <span className="text-destructive">*</span></Label><Input type="number" min="0" step="any" value={openingBalance} onChange={event => setOpeningBalance(event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Balance Type</Label><SearchableSelect value={balanceType} onValueChange={value => setBalanceType(value as BalanceType)} options={[{ value: 'Dr', label: 'Dr (Debit)' }, { value: 'Cr', label: 'Cr (Credit)' }]} /></div>
+            <p className="text-xs text-muted-foreground sm:col-span-2">Changes affect all reports. Current voucher movements are not modified.</p>
+          </section>
+          {visibility.showContactDetails && <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <h3 className="text-sm font-semibold sm:col-span-2">Contact & Tax Details</h3>
+            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} value={address} onChange={event => setAddress(event.target.value)} placeholder="Business address" /></div>
+            <div className="space-y-1.5"><Label>Contact No.</Label><Input value={contactNo} onChange={event => setContactNo(event.target.value)} placeholder="Phone or mobile number" /></div>
+            <div className="space-y-1.5"><Label>PAN No.</Label><Input value={panNo} onChange={event => setPanNo(event.target.value)} placeholder="PAN / VAT registration number" /></div>
+            {visibility.showCreditDays && <div className="space-y-1.5 sm:max-w-48"><Label>Credit Days</Label><Input type="number" min="0" max="36500" step="1" value={defaultCreditDays} onChange={event => setDefaultCreditDays(event.target.value)} /></div>}
+          </section>}
+          {visibility.showBankDetails && <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
+            <h3 className="text-sm font-semibold sm:col-span-2">Bank Account Details</h3>
+            <div className="space-y-1.5"><Label>Account No.</Label><Input value={bankAccountNo} onChange={event => setBankAccountNo(event.target.value)} placeholder="Preserves leading zeros" /></div>
+            <div className="space-y-1.5"><Label>Branch</Label><Input value={bankBranch} onChange={event => setBankBranch(event.target.value)} /></div>
+          </section>}
+          {selectedCategory && (selectedCategory.account_type === 'Income' || selectedCategory.account_type === 'Expense') && <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">Income and expense ledgers require only the base accounting details.</p>}
           {(account?.is_system || isUsed) && <p className="text-xs text-amber-700">This ledger is protected from account-type changes because it is {account?.is_system ? 'a system ledger' : 'used in vouchers'}.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>

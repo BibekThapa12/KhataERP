@@ -26,13 +26,14 @@ Apply `supabase-system-account-groups-migration.sql` afterwards to seed and prot
 Apply `supabase-retained-earnings-ledger-migration.sql` to create the protected Retained Earnings ledger under Reserves & Surplus.
 Apply `supabase-single-company-per-user-migration.sql` to safely remove unused signup duplicates and enforce one company per login account.
 Apply `supabase-credit-days-migration.sql` to add party credit defaults and invoice due-date snapshots.
+Apply `supabase-ledger-details-migration.sql` to enable conditional contact, tax, credit-term, and bank fields in the unified ledger form.
 Apply `supabase-inventory-valuation-migration.sql` to enable company-wide Weighted Average, FIFO, or LIFO stock valuation.
 Apply `supabase-production-security-migration.sql` before launch so operational error details remain developer-only.
 Apply `supabase-critical-security-hardening-migration.sql` last to enforce protected company fields, suspension at the database boundary, server-calculated voucher integrity, return limits, cheque/receipt linkage, and restricted internal function execution.
 
 ```bash
 cp .env.example .env.local
-# Fill in the Supabase public values and VITE_HCAPTCHA_SITE_KEY.
+# Fill in the Supabase public values. The hCaptcha site key is optional while CAPTCHA is disabled.
 ```
 
 ### 4. Run locally
@@ -65,5 +66,16 @@ npm run build      # output in dist/ — deploy to Vercel, Netlify, Cloudflare P
 - Trial Balance, P&L (with closing-stock adjustment), Balance Sheet, VAT Report, Stock Summary
 - Voucher cancellation with full reversal
 - JSON backup export from Settings
+
+### Password recovery deployment
+
+Add both the production and local recovery URLs to Supabase **Authentication → URL Configuration → Redirect URLs**:
+
+```text
+https://your-domain.example/reset-password
+http://localhost:5173/reset-password
+```
+
+Password-reset requests always show a non-enumerating response. The hCaptcha integration is retained in comments for future re-enablement.
 
 Made with love ❤

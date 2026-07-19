@@ -29,6 +29,15 @@ export function partyTerminology(type: PartyType) {
   return terms[type]
 }
 
+export function partyCategoryForType(categories: AccountCategory[], type: PartyType) {
+  const terminology = partyTerminology(type)
+  const exact = categories.find(category => category.name === terminology.category && category.account_type === terminology.accountType)
+  if (exact) return exact
+  const expectedPrefix = type === 'customer' ? 'sundry debtor' : 'sundry creditor'
+  return categories.find(category => category.account_type === terminology.accountType
+    && category.name.trim().toLowerCase().replace(/\s+/g, ' ').startsWith(expectedPrefix))
+}
+
 export function partyTypeForCategory(category?: Pick<AccountCategory, 'name' | 'account_type'> | null): PartyType | null {
   if (category?.name === 'Sundry Debtors' && category.account_type === 'Asset') return 'customer'
   if (category?.name === 'Sundry Creditors' && category.account_type === 'Liability') return 'supplier'

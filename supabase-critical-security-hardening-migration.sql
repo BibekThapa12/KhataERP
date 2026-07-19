@@ -264,8 +264,16 @@ declare
   expected_discount numeric;
   source_voucher public.vouchers%rowtype;
 begin
-  target_voucher_id := case when tg_op = 'DELETE' then old.voucher_id
-    when tg_table_name = 'vouchers' then new.id else new.voucher_id end;
+  -- The header table has `id`; child tables have `voucher_id`. Branch on the
+  -- table before touching OLD/NEW so PostgreSQL never resolves a field that
+  -- does not exist on that trigger row type.
+  if tg_table_name = 'vouchers' then
+    target_voucher_id := case when tg_op = 'DELETE' then old.id else new.id end;
+  elsif tg_op = 'DELETE' then
+    target_voucher_id := old.voucher_id;
+  else
+    target_voucher_id := new.voucher_id;
+  end if;
 
   select * into voucher_record from public.vouchers where id = target_voucher_id;
   if not found then return null; end if;
