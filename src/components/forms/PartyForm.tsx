@@ -8,6 +8,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import type { Party } from '@/types'
 import { partyTerminology } from '@/lib/partyTerminology'
+import { publicErrorMessage } from '@/lib/security'
 
 interface PartyFormProps {
   open: boolean
@@ -43,7 +44,7 @@ export function PartyForm({ open, onClose, defaultType, onCreated }: PartyFormPr
       onCreated?.(party)
       onClose()
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, 'saving party'))
     } finally {
       setSaving(false)
     }

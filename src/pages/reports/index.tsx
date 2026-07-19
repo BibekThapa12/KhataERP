@@ -10,6 +10,7 @@ import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
 import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity } from '@/lib/units'
+import { publicErrorMessage } from '@/lib/security'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { StatCard } from '@/components/StatCard'
@@ -699,7 +700,7 @@ export function StockReportPage() {
     const next = value as InventoryValuationMethod
     if (next === method || !window.confirm('Changing the valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
     setMethodError('')
-    try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError((error as Error).message) }
+    try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError(publicErrorMessage(error, 'changing valuation method')) }
   }
   const headings = showDetails ? ['Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
   const exportCsv = () => downloadCsv(`${stockCondition}-stock-summary-${from}-to-${to}.csv`, headings, rows.map(row => showDetails

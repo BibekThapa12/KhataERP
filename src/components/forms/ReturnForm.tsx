@@ -16,6 +16,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { publicErrorMessage } from '@/lib/security'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
@@ -204,7 +205,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setError('')
         window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
-    } catch (e: unknown) { setError((e as Error).message) } finally { submissionLock.release(); setSaving(false) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`)) } finally { submissionLock.release(); setSaving(false) }
   }
 
   const party = partyAccountId ? getPartyByAccountId(partyAccountId) : null

@@ -16,6 +16,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
+import { publicErrorMessage } from '@/lib/security'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
@@ -201,7 +202,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
     } finally {
       submissionLock.release()
       setSaving(false)

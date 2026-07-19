@@ -2,25 +2,94 @@ import { createClient } from '@supabase/supabase-js'
 import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import type { WritePerformanceTrace } from '@/lib/writePerformance'
+import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, sanitizeForLogging } from '@/lib/security'
 
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL as string
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY as string
+function requiredPublicEnvironment(name: string, value: string | undefined) {
+  if (!value || value.startsWith('your-') || value.includes('your-project-id')) {
+    throw new Error(`Missing required public environment variable ${name}`)
+  }
+  return value
+}
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey)
+function assertBrowserSafeSupabaseKey(key: string) {
+  if (/^sb_secret_/i.test(key)) throw new Error('VITE_SUPABASE_ANON_KEY must never contain a Supabase secret key')
+  const parts = key.split('.')
+  if (parts.length !== 3) return key
+  try {
+    const encoded = parts[1].replace(/-/g, '+').replace(/_/g, '/')
+    const payload = JSON.parse(atob(encoded.padEnd(Math.ceil(encoded.length / 4) * 4, '='))) as { role?: string }
+    if (payload.role === 'service_role') throw new Error('VITE_SUPABASE_ANON_KEY must never contain the service-role key')
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('service-role')) throw error
+  }
+  return key
+}
+
+const supabaseUrl = requiredPublicEnvironment('VITE_SUPABASE_URL', import.meta.env.VITE_SUPABASE_URL)
+const supabaseAnonKey = assertBrowserSafeSupabaseKey(requiredPublicEnvironment('VITE_SUPABASE_ANON_KEY', import.meta.env.VITE_SUPABASE_ANON_KEY))
+
+try {
+  const parsedSupabaseUrl = new URL(supabaseUrl)
+  if (!import.meta.env.DEV && parsedSupabaseUrl.protocol !== 'https:') {
+    throw new Error('VITE_SUPABASE_URL must use HTTPS in production')
+  }
+} catch (error) {
+  if (error instanceof Error && error.message.includes('must use HTTPS')) throw error
+  throw new Error('VITE_SUPABASE_URL must be a valid URL')
+}
+
+// A browser-only SPA cannot issue httpOnly cookies. Use tab-scoped storage so
+// auth tokens are not left in persistent localStorage after the browser closes.
+if (typeof window !== 'undefined') {
+  for (let index = window.localStorage.length - 1; index >= 0; index -= 1) {
+    const key = window.localStorage.key(index)
+    if (key && /^sb-.*-auth-token$/i.test(key)) window.localStorage.removeItem(key)
+  }
+}
+const authStorage = typeof window !== 'undefined' ? window.sessionStorage : undefined
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+  auth: {
+    storage: authStorage,
+    persistSession: Boolean(authStorage),
+    autoRefreshToken: true,
+    detectSessionInUrl: true,
+  },
+})
+
+const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,created_at'
+const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
+const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,category_id,is_archived,created_at'
+const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
+const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion,sell_rate,opening_qty,opening_rate,reorder_level,category_id,sku,barcode,vat_applicable,is_archived,created_at'
+const ACCOUNT_CATEGORY_FIELDS = 'id,company_id,name,account_type,parent_category_id,is_system,is_archived,created_at'
+const ITEM_CATEGORY_FIELDS = 'id,company_id,name,parent_category_id,is_archived,created_at'
+const MODULE_FIELDS = 'id,key,name,description,default_price,is_active,created_at'
+const COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,price,payment_status,starts_at,expires_at,settings,internal_notes,enabled_by,created_at,updated_at,module:modules(${MODULE_FIELDS})`
+const CLIENT_COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,payment_status,starts_at,expires_at,settings,module:modules(${MODULE_FIELDS})`
+const CHEQUE_BANK_FIELDS = 'id,company_id,ledger_account_id,bank_name,branch_name,account_number,institution_type,source,notes,is_active,created_at,updated_at'
+const CHEQUE_FIELDS = 'id,company_id,cheque_number,bank_id,account_number,party_ledger_id,amount,issue_date,issue_date_bs,issue_date_bs_key,due_date,due_date_bs,due_date_bs_key,notes,status,cleared_at,bounced_at,cancelled_at,status_reason,linked_voucher_id,cleared_to_account_id,created_at,updated_at'
+const CHEQUE_EVENT_FIELDS = 'id,action,created_at'
+const MASTER_CHANGE_FIELDS = 'id,record_type,action,old_values,new_values,created_at'
+const VOUCHER_SETTLEMENT_FIELDS = 'id,company_id,settlement_voucher_id,invoice_voucher_id,party_account_id,amount,created_at'
+const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,seq,created_at'
+const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
+const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
+const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
+const VOUCHER_WITH_CHILDREN_FIELDS = `${VOUCHER_FIELDS},lines:voucher_lines(${VOUCHER_LINE_FIELDS}),stock_lines:stock_lines(${STOCK_LINE_FIELDS}),invoice_items:invoice_items(${INVOICE_ITEM_FIELDS})`
 export const supabaseProjectHost = (() => {
   if (!supabaseUrl) return ''
   try {
     return new URL(supabaseUrl).host
   } catch {
-    return supabaseUrl
+    return ''
   }
 })()
 
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 
 export const getSession = () => supabase.auth.getSession()
-export const signIn = (email: string, password: string) =>
-  supabase.auth.signInWithPassword({ email, password })
+export const signIn = (email: string, password: string, captchaToken: string) =>
+  supabase.auth.signInWithPassword({ email, password, options: { captchaToken } })
 
 export interface CompanySignupDetails {
   name: string
@@ -30,11 +99,12 @@ export interface CompanySignupDetails {
   vat_enabled: boolean
 }
 
-export const signUp = (email: string, password: string, company: CompanySignupDetails) =>
+export const signUp = (email: string, password: string, company: CompanySignupDetails, captchaToken: string) =>
   supabase.auth.signUp({
     email,
     password,
     options: {
+      captchaToken,
       emailRedirectTo: `${window.location.origin}/login`,
       data: {
         company_name: company.name,
@@ -46,6 +116,14 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
     },
   })
 export const signOut = () => supabase.auth.signOut()
+
+export async function deleteOwnAccount() {
+  const { error } = await supabase.rpc('delete_my_account')
+  if (error) throw error
+  // The server-side deletion invalidates the identity; clear the tab-scoped
+  // client session immediately without waiting for another auth refresh.
+  try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* account is already deleted */ }
+}
 
 export async function isDeveloperAdmin(): Promise<boolean> {
   const { data: { user } } = await supabase.auth.getUser()
@@ -62,17 +140,17 @@ export async function isDeveloperAdmin(): Promise<boolean> {
 export async function logAppEvent(event_type: string, company_id?: string | null, metadata: Record<string, unknown> = {}) {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user || !company_id) return
-  await supabase.from('app_events').insert({ event_type, company_id, user_id: user.id, metadata })
+  await supabase.from('app_events').insert({ event_type, company_id, user_id: user.id, metadata: sanitizeForLogging(metadata) })
 }
 
 export function logAppError(company_id: string | undefined | null, error: unknown, context: Record<string, unknown> = {}) {
-  const message = error instanceof Error ? error.message : String(error)
-  const stack = error instanceof Error ? error.stack : undefined
+  const message = redactSensitiveText(error instanceof Error ? error.message : String(error))
+  const stack = error instanceof Error && error.stack ? redactSensitiveText(error.stack) : undefined
   logAppEvent('frontend_error', company_id, {
     message,
     stack,
     path: typeof window !== 'undefined' ? window.location.pathname : undefined,
-    ...context,
+    ...(sanitizeForLogging(context) as Record<string, unknown>),
   })
 }
 
@@ -93,7 +171,7 @@ export async function fetchDeveloperSchemaStatus(): Promise<{
     return {
       available: false,
       items: [],
-      error: error.message,
+      error: publicErrorMessage(error, 'checking database schema'),
     }
   }
   return {
@@ -132,19 +210,19 @@ export async function checkSupabaseConnectionStatus() {
 
   const { error: authError } = await supabase.auth.getSession()
   status.auth = authError ? 'error' : 'ok'
-  if (authError) messages.push(authError.message)
+  if (authError) messages.push(publicErrorMessage(authError, 'checking authentication'))
 
   const { error: dbError } = await supabase
     .from('companies')
     .select('id', { count: 'exact', head: true })
   status.database = dbError ? 'error' : 'ok'
-  if (dbError) messages.push(`companies: ${dbError.message}`)
+  if (dbError) messages.push(publicErrorMessage(dbError, 'checking company storage'))
 
   const { error: eventError } = await supabase
     .from('app_events')
     .select('id', { count: 'exact', head: true })
   status.event_log = eventError ? 'error' : 'ok'
-  if (eventError) messages.push(`app_events: ${eventError.message}`)
+  if (eventError) messages.push(publicErrorMessage(eventError, 'checking event storage'))
 
   return status
 }
@@ -153,11 +231,22 @@ export async function checkSupabaseConnectionStatus() {
 
 const companyInitializationPromises = new Map<string, Promise<Company>>()
 
+async function clearSignupCompanyMetadata(metadata: Record<string, unknown>) {
+  if (!Object.keys(metadata).some(key => key.startsWith('company_'))) return
+  await supabase.auth.updateUser({ data: {
+    company_name: null,
+    company_address: null,
+    company_pan_vat: null,
+    company_phone: null,
+    company_vat_enabled: null,
+  } })
+}
+
 async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
   const { data: userData } = await supabase.auth.getUser()
   const { data: companies, error: companyError } = await supabase
     .from('companies')
-    .select('*')
+    .select(COMPANY_FIELDS)
     .eq('user_id', user_id)
     .order('created_at', { ascending: true })
   if (companyError) throw companyError
@@ -208,8 +297,10 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
 
     if (Object.keys(updates).length) {
       await updateCompany(selected.id, updates)
+      await clearSignupCompanyMetadata(metadata)
       return { ...selected, ...updates }
     }
+    await clearSignupCompanyMetadata(metadata)
     return selected
   }
 
@@ -235,7 +326,7 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
   const { data: newCompany, error } = await supabase
     .from('companies')
     .insert(company)
-    .select()
+    .select(COMPANY_FIELDS)
     .single()
   if (error) {
     // A second browser context may have created the company after our initial
@@ -243,15 +334,19 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     if (error.code === '23505') {
       const { data: concurrentCompany, error: concurrentError } = await supabase
         .from('companies')
-        .select('*')
+        .select(COMPANY_FIELDS)
         .eq('user_id', user_id)
         .order('created_at', { ascending: true })
         .limit(1)
         .single()
-      if (!concurrentError && concurrentCompany) return concurrentCompany
+      if (!concurrentError && concurrentCompany) {
+        await clearSignupCompanyMetadata(metadata)
+        return concurrentCompany
+      }
     }
     throw error
   }
+  await clearSignupCompanyMetadata(metadata)
   return newCompany
 }
 
@@ -266,47 +361,20 @@ export function getOrCreateCompany(user_id: string): Promise<Company> {
 }
 
 export async function updateCompany(id: string, updates: Partial<Company>) {
-  const nextUpdates: Record<string, unknown> = { ...updates }
-  const skippedColumns: string[] = []
-
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const { error } = await supabase.from('companies').update(nextUpdates).eq('id', id)
-    if (!error) {
-      if (skippedColumns.length) {
-        console.warn(`Skipped missing companies columns while saving: ${skippedColumns.join(', ')}`)
-      }
-      return
-    }
-
-    const message = error.message || ''
-    const missingColumn =
-      /Could not find the '([^']+)' column/.exec(message)?.[1] ||
-      /column companies\.([a-zA-Z0-9_]+) does not exist/.exec(message)?.[1]
-
-    if (!missingColumn || !(missingColumn in nextUpdates)) throw error
-
-    delete nextUpdates[missingColumn]
-    skippedColumns.push(missingColumn)
-  }
-
-  throw new Error('Could not save company details because too many Supabase columns are missing.')
+  const { error } = await supabase.from('companies').update(updates).eq('id', id)
+  if (error) throw error
 }
 
 export async function fetchDeveloperDashboardData() {
   const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes, modulesRes, companyModulesRes] = await Promise.all([
-    supabase.from('companies').select('*').order('created_at', { ascending: false }),
-    supabase.from('accounts').select('*'),
-    supabase.from('parties').select('*'),
-    supabase.from('items').select('*'),
-    supabase.from('vouchers').select(`
-      *,
-      lines:voucher_lines(*),
-      stock_lines:stock_lines(*),
-      invoice_items:invoice_items(*)
-    `).order('date_bs_key', { ascending: false }),
-    supabase.from('app_events').select('*').order('created_at', { ascending: false }).limit(1000),
-    supabase.from('modules').select('*').order('name'),
-    supabase.from('company_modules').select('*,module:modules(*)'),
+    supabase.from('companies').select(DEVELOPER_COMPANY_FIELDS).order('created_at', { ascending: false }),
+    supabase.from('accounts').select(ACCOUNT_FIELDS),
+    supabase.from('parties').select(PARTY_FIELDS),
+    supabase.from('items').select(ITEM_FIELDS),
+    supabase.from('vouchers').select(VOUCHER_WITH_CHILDREN_FIELDS).order('date_bs_key', { ascending: false }),
+    supabase.from('app_events').select('id,company_id,user_id,event_type,metadata,created_at').order('created_at', { ascending: false }).limit(1000),
+    supabase.from('modules').select(MODULE_FIELDS).order('name'),
+    supabase.from('company_modules').select(COMPANY_MODULE_FIELDS),
   ])
 
   for (const res of [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes]) {
@@ -336,15 +404,15 @@ export async function deleteDeveloperCompany(id: string) {
 }
 
 export async function fetchModuleCatalogue(): Promise<AppModule[]> {
-  const {data,error}=await supabase.from('modules').select('*').order('name'); if(error) throw error; return (data||[]) as AppModule[]
+  const {data,error}=await supabase.from('modules').select(MODULE_FIELDS).order('name'); if(error) throw error; return (data||[]) as AppModule[]
 }
 export async function fetchCompanyModules(company_id?:string): Promise<CompanyModule[]> {
-  let query=supabase.from('company_modules').select('*,module:modules(*)'); if(company_id) query=query.eq('company_id',company_id)
+  let query=supabase.from('company_modules').select(CLIENT_COMPANY_MODULE_FIELDS); if(company_id) query=query.eq('company_id',company_id)
   const {data,error}=await query; if(error) throw error; return (data||[]) as CompanyModule[]
 }
 export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_id:string;module_id:string}) {
-  const {data:old}=await supabase.from('company_modules').select('*').eq('company_id',value.company_id).eq('module_id',value.module_id).maybeSingle()
-  const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('company_modules').upsert({...value,enabled_by:user?.id,updated_at:new Date().toISOString()},{onConflict:'company_id,module_id'}).select('*,module:modules(*)').single(); if(error) throw error
+  const {data:old}=await supabase.from('company_modules').select(COMPANY_MODULE_FIELDS).eq('company_id',value.company_id).eq('module_id',value.module_id).maybeSingle()
+  const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('company_modules').upsert({...value,enabled_by:user?.id,updated_at:new Date().toISOString()},{onConflict:'company_id,module_id'}).select(COMPANY_MODULE_FIELDS).single(); if(error) throw error
   const changedFields:string[]=[]
   if(!old||old.is_enabled!==data.is_enabled)changedFields.push('is_enabled')
   if(!old||old.status!==data.status)changedFields.push('status')
@@ -360,14 +428,14 @@ export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_
 export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
   const {data,error}=await supabase.from('company_user_permissions').select('permission').eq('company_id',company_id); if(error) throw error; return (data||[]).map(row=>row.permission as ChequePermission)
 }
-export async function fetchChequeBanks(company_id:string):Promise<ChequeBank[]> { const {data,error}=await supabase.from('cheque_banks').select('*').eq('company_id',company_id).order('bank_name'); if(error) throw error; return (data||[]) as ChequeBank[] }
-export async function fetchCheques(company_id:string):Promise<Cheque[]> { const {data,error}=await supabase.from('cheques').select('*').eq('company_id',company_id).order('due_date_bs_key'); if(error) throw error; return (data||[]) as Cheque[] }
-export async function fetchChequeEvents(company_id:string,cheque_id?:string):Promise<ChequeEvent[]> { let query=supabase.from('cheque_events').select('*').eq('company_id',company_id).order('created_at',{ascending:false}); if(cheque_id) query=query.eq('cheque_id',cheque_id); const {data,error}=await query; if(error) throw error; return (data||[]) as ChequeEvent[] }
-export async function createChequeBank(value:Omit<ChequeBank,'id'|'created_at'|'updated_at'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheque_banks').insert({...value,created_by:user?.id,updated_by:user?.id}).select().single(); if(error) throw error; await logChequeEvent(value.company_id,'bank_created',undefined,data.id,{},data); return data as ChequeBank }
-export async function updateChequeBank(id:string,company_id:string,updates:Partial<ChequeBank>,old:ChequeBank) { const {data,error}=await supabase.from('cheque_banks').update({...updates,updated_at:new Date().toISOString()}).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.is_active===false?'bank_archived':'bank_updated',undefined,id,old,data); return data as ChequeBank }
-export async function createCheque(value:Omit<Cheque,'id'|'created_at'|'updated_at'|'status'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheques').insert({...value,status:'pending',created_by:user?.id,updated_by:user?.id}).select().single(); if(error) throw error; await logChequeEvent(value.company_id,'cheque_created',data.id,undefined,{},data); return data as Cheque }
-export async function updateCheque(id:string,company_id:string,updates:Partial<Cheque>,old:Cheque) { const {data,error}=await supabase.from('cheques').update(updates).eq('id',id).eq('company_id',company_id).select().single(); if(error) throw error; await logChequeEvent(company_id,updates.status?`cheque_${updates.status}`:'cheque_updated',id,undefined,old,data); return data as Cheque }
-export async function logChequeEvents(company_id:string,events:{action:string;cheque_id?:string;bank_id?:string;old_values?:unknown;new_values?:unknown}[]) { if(!events.length)return; const {data:{user}}=await supabase.auth.getUser(); if(!user)return; const {error}=await supabase.from('cheque_events').insert(events.map(event=>({company_id,action:event.action,cheque_id:event.cheque_id,bank_id:event.bank_id,old_values:event.old_values||{},new_values:event.new_values||{},actor_id:user.id}))); if(error)throw error }
+export async function fetchChequeBanks(company_id:string):Promise<ChequeBank[]> { const {data,error}=await supabase.from('cheque_banks').select(CHEQUE_BANK_FIELDS).eq('company_id',company_id).order('bank_name'); if(error) throw error; return (data||[]) as ChequeBank[] }
+export async function fetchCheques(company_id:string):Promise<Cheque[]> { const {data,error}=await supabase.from('cheques').select(CHEQUE_FIELDS).eq('company_id',company_id).order('due_date_bs_key'); if(error) throw error; return (data||[]) as Cheque[] }
+export async function fetchChequeEvents(company_id:string,cheque_id?:string):Promise<ChequeEvent[]> { let query=supabase.from('cheque_events').select(CHEQUE_EVENT_FIELDS).eq('company_id',company_id).order('created_at',{ascending:false}); if(cheque_id) query=query.eq('cheque_id',cheque_id); const {data,error}=await query; if(error) throw error; return (data||[]) as ChequeEvent[] }
+export async function createChequeBank(value:Omit<ChequeBank,'id'|'created_at'|'updated_at'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheque_banks').insert({...value,created_by:user?.id,updated_by:user?.id}).select(CHEQUE_BANK_FIELDS).single(); if(error) throw error; await logChequeEvent(value.company_id,'bank_created',undefined,data.id,{},data); return data as ChequeBank }
+export async function updateChequeBank(id:string,company_id:string,updates:Partial<ChequeBank>,old:ChequeBank) { const {data,error}=await supabase.from('cheque_banks').update({...updates,updated_at:new Date().toISOString()}).eq('id',id).eq('company_id',company_id).select(CHEQUE_BANK_FIELDS).single(); if(error) throw error; await logChequeEvent(company_id,updates.is_active===false?'bank_archived':'bank_updated',undefined,id,old,data); return data as ChequeBank }
+export async function createCheque(value:Omit<Cheque,'id'|'created_at'|'updated_at'|'status'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheques').insert({...value,status:'pending',created_by:user?.id,updated_by:user?.id}).select(CHEQUE_FIELDS).single(); if(error) throw error; await logChequeEvent(value.company_id,'cheque_created',data.id,undefined,{},data); return data as Cheque }
+export async function updateCheque(id:string,company_id:string,updates:Partial<Cheque>,old:Cheque) { const {data,error}=await supabase.from('cheques').update(updates).eq('id',id).eq('company_id',company_id).select(CHEQUE_FIELDS).single(); if(error) throw error; await logChequeEvent(company_id,updates.status?`cheque_${updates.status}`:'cheque_updated',id,undefined,old,data); return data as Cheque }
+export async function logChequeEvents(company_id:string,events:{action:string;cheque_id?:string;bank_id?:string;old_values?:unknown;new_values?:unknown}[]) { if(!events.length)return; const {data:{user}}=await supabase.auth.getUser(); if(!user)return; const {error}=await supabase.from('cheque_events').insert(events.map(event=>({company_id,action:event.action,cheque_id:event.cheque_id,bank_id:event.bank_id,old_values:auditFieldMarkers(event.old_values),new_values:auditFieldMarkers(event.new_values),actor_id:user.id}))); if(error)throw error }
 export async function logChequeEvent(company_id:string,action:string,cheque_id?:string,bank_id?:string,old_values:unknown={},new_values:unknown={}) { await logChequeEvents(company_id,[{action,cheque_id,bank_id,old_values,new_values}]) }
 
 // ─── Accounts ────────────────────────────────────────────────────────────────
@@ -375,7 +443,7 @@ export async function logChequeEvent(company_id:string,action:string,cheque_id?:
 export async function fetchAccounts(company_id: string): Promise<Account[]> {
   const { data, error } = await supabase
     .from('accounts')
-    .select('*')
+    .select(ACCOUNT_FIELDS)
     .eq('company_id', company_id)
     .order('name')
   if (error) throw error
@@ -390,7 +458,7 @@ export async function insertAccounts(accounts: Omit<Account, 'balance' | 'create
 }
 
 export async function insertAccount(account: Omit<Account, 'balance' | 'created_at'>) {
-  const { data, error } = await supabase.from('accounts').insert(account).select().single()
+  const { data, error } = await supabase.from('accounts').insert(account).select(ACCOUNT_FIELDS).single()
   if (error) throw error
   return data
 }
@@ -417,20 +485,20 @@ export async function deleteAccount(id: string) {
 }
 
 export async function fetchAccountCategories(company_id: string): Promise<AccountCategory[]> {
-  const { data, error } = await supabase.from('account_categories').select('*').eq('company_id', company_id).order('name')
+  const { data, error } = await supabase.from('account_categories').select(ACCOUNT_CATEGORY_FIELDS).eq('company_id', company_id).order('name')
   if (error) throw error
   return data || []
 }
 
 export async function insertAccountCategory(category: Omit<AccountCategory, 'id' | 'created_at'>): Promise<AccountCategory> {
-  const { data, error } = await supabase.from('account_categories').upsert(category, { onConflict: 'company_id,name,account_type' }).select().single()
+  const { data, error } = await supabase.from('account_categories').upsert(category, { onConflict: 'company_id,name,account_type' }).select(ACCOUNT_CATEGORY_FIELDS).single()
   if (error) throw error
   return data
 }
 
 export async function insertAccountCategories(categories: Omit<AccountCategory, 'id' | 'created_at'>[]): Promise<AccountCategory[]> {
   if (!categories.length) return []
-  const { data, error } = await supabase.from('account_categories').upsert(categories, { onConflict: 'company_id,name,account_type' }).select()
+  const { data, error } = await supabase.from('account_categories').upsert(categories, { onConflict: 'company_id,name,account_type' }).select(ACCOUNT_CATEGORY_FIELDS)
   if (error) throw error
   return data || []
 }
@@ -454,7 +522,7 @@ export async function deleteAccountCategory(id: string) {
 export async function fetchParties(company_id: string): Promise<Party[]> {
   const { data, error } = await supabase
     .from('parties')
-    .select('*')
+    .select(PARTY_FIELDS)
     .eq('company_id', company_id)
     .order('name')
   if (error) throw error
@@ -462,14 +530,14 @@ export async function fetchParties(company_id: string): Promise<Party[]> {
 }
 
 export async function insertParty(party: Omit<Party, 'id' | 'created_at' | 'account'>) {
-  const { data, error } = await supabase.from('parties').insert(party).select().single()
+  const { data, error } = await supabase.from('parties').insert(party).select(PARTY_FIELDS).single()
   if (error) throw error
   return data as Party
 }
 
 export async function insertParties(parties: Omit<Party, 'id' | 'created_at' | 'account'>[]): Promise<Party[]> {
   if (!parties.length) return []
-  const { data, error } = await supabase.from('parties').insert(parties).select()
+  const { data, error } = await supabase.from('parties').insert(parties).select(PARTY_FIELDS)
   if (error) throw error
   return (data || []) as Party[]
 }
@@ -484,7 +552,7 @@ export async function updateParty(id: string, updates: Partial<Party>) {
 export async function fetchItems(company_id: string): Promise<Item[]> {
   const { data, error } = await supabase
     .from('items')
-    .select('*')
+    .select(ITEM_FIELDS)
     .eq('company_id', company_id)
     .order('name')
   if (error) throw error
@@ -492,7 +560,7 @@ export async function fetchItems(company_id: string): Promise<Item[]> {
 }
 
 export async function insertItem(item: Omit<Item, 'id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'>) {
-  const { data, error } = await supabase.from('items').insert(item).select().single()
+  const { data, error } = await supabase.from('items').insert(item).select(ITEM_FIELDS).single()
   if (error) throw error
   return data as Item
 }
@@ -509,13 +577,13 @@ export async function updateItemsByIds(ids: string[], updates: Partial<Item>) {
 }
 
 export async function fetchItemCategories(company_id: string): Promise<ItemCategory[]> {
-  const { data, error } = await supabase.from('item_categories').select('*').eq('company_id', company_id).order('name')
+  const { data, error } = await supabase.from('item_categories').select(ITEM_CATEGORY_FIELDS).eq('company_id', company_id).order('name')
   if (error) throw error
   return data || []
 }
 
 export async function insertItemCategory(category: Omit<ItemCategory, 'id' | 'created_at'>): Promise<ItemCategory> {
-  const { data, error } = await supabase.from('item_categories').upsert(category, { onConflict: 'company_id,name' }).select().single()
+  const { data, error } = await supabase.from('item_categories').upsert(category, { onConflict: 'company_id,name' }).select(ITEM_CATEGORY_FIELDS).single()
   if (error) throw error
   return data
 }
@@ -527,12 +595,20 @@ export async function updateItemCategory(id: string, updates: Partial<ItemCatego
 
 export async function logMasterChange(company_id: string, record_type: string, record_id: string, action: string, old_values: Record<string, unknown>, new_values: Record<string, unknown>) {
   const { data: { user } } = await supabase.auth.getUser()
-  const { error } = await supabase.from('master_change_logs').insert({ company_id, user_id: user?.id, record_type, record_id, action, old_values, new_values })
+  const { error } = await supabase.from('master_change_logs').insert({
+    company_id,
+    user_id: user?.id,
+    record_type,
+    record_id,
+    action,
+    old_values: auditFieldMarkers(old_values),
+    new_values: auditFieldMarkers(new_values),
+  })
   if (error) throw error
 }
 
 export async function fetchMasterChangeLogs(company_id: string): Promise<MasterChangeLog[]> {
-  const { data, error } = await supabase.from('master_change_logs').select('*').eq('company_id', company_id).order('created_at', { ascending: false }).limit(200)
+  const { data, error } = await supabase.from('master_change_logs').select(MASTER_CHANGE_FIELDS).eq('company_id', company_id).order('created_at', { ascending: false }).limit(200)
   if (error) throw error
   return data || []
 }
@@ -542,7 +618,7 @@ export async function fetchMasterChangeLogs(company_id: string): Promise<MasterC
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
   const { data: settlementData, error: settlementError } = await supabase
     .from('voucher_settlements')
-    .select('*')
+    .select(VOUCHER_SETTLEMENT_FIELDS)
     .eq('company_id', company_id)
   const settlements = settlementError && /does not exist|schema cache/i.test(settlementError.message)
     ? []
@@ -558,12 +634,7 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
   const attachSettlements = (voucher: Voucher) => ({ ...voucher, settlements: byVoucher.get(voucher.id) || [] })
   const query = supabase
     .from('vouchers')
-    .select(`
-      *,
-      lines:voucher_lines(*),
-      stock_lines:stock_lines(*),
-      invoice_items:invoice_items(*)
-    `)
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
     .eq('company_id', company_id)
 
   const { data, error } = await query
@@ -578,12 +649,7 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
 
   const { data: legacyData, error: legacyError } = await supabase
     .from('vouchers')
-    .select(`
-      *,
-      lines:voucher_lines(*),
-      stock_lines:stock_lines(*),
-      invoice_items:invoice_items(*)
-    `)
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
     .eq('company_id', company_id)
     .order('date', { ascending: false })
     .order('seq', { ascending: false })

@@ -11,6 +11,7 @@ import {
   type DeveloperSchemaStatusItem,
 } from '@/lib/supabase'
 import { fmtDate } from '@/lib/utils'
+import { publicErrorMessage } from '@/lib/security'
 import { recomputeStock } from '@/lib/engine'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { StatCard } from '@/components/StatCard'
@@ -228,7 +229,7 @@ function CompanyModulesDialog({company,modules,entitlements,open,onClose,onSaved
   const [price,setPrice]=useState(String(existing?.price??module?.default_price??0)), [starts,setStarts]=useState(existing?.starts_at||''), [expires,setExpires]=useState(existing?.expires_at||'')
   const [notes,setNotes]=useState(existing?.internal_notes||''), [settings,setSettings]=useState(JSON.stringify(existing?.settings||{},null,2)), [saving,setSaving]=useState(false), [error,setError]=useState('')
   useEffect(()=>{ if(!open)return; setEnabled(existing?.is_enabled||false);setStatus(existing?.status||'disabled');setBilling(existing?.billing_type||'included');setPayment(existing?.payment_status||'pending');setPrice(String(existing?.price??module?.default_price??0));setStarts(existing?.starts_at||'');setExpires(existing?.expires_at||'');setNotes(existing?.internal_notes||'');setSettings(JSON.stringify(existing?.settings||{},null,2));setError('') },[open,existing,module])
-  const save=async()=>{ if(!module)return; setSaving(true);setError('');try{await upsertCompanyModule({company_id:company.id,module_id:module.id,is_enabled:enabled,status:status as CompanyModule['status'],billing_type:billing as CompanyModule['billing_type'],payment_status:payment as CompanyModule['payment_status'],price:Number(price)||0,starts_at:starts||null,expires_at:expires||null,internal_notes:notes,settings:settings.trim()?JSON.parse(settings):{}});onSaved();onClose()}catch(e){setError((e as Error).message)}finally{setSaving(false)} }
+  const save=async()=>{ if(!module)return; setSaving(true);setError('');try{await upsertCompanyModule({company_id:company.id,module_id:module.id,is_enabled:enabled,status:status as CompanyModule['status'],billing_type:billing as CompanyModule['billing_type'],payment_status:payment as CompanyModule['payment_status'],price:Number(price)||0,starts_at:starts||null,expires_at:expires||null,internal_notes:notes,settings:settings.trim()?JSON.parse(settings):{}});onSaved();onClose()}catch(e){setError(publicErrorMessage(e,'saving module'))}finally{setSaving(false)} }
   return <Dialog open={open} onOpenChange={value=>!value&&onClose()}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{company.name} · Modules</DialogTitle></DialogHeader>{!module?<p className="text-sm text-destructive">Run the Cheque Management migration to create the module catalogue.</p>:<div className="grid gap-3 sm:grid-cols-2"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={e=>{setEnabled(e.target.checked);if(e.target.checked&&status==='disabled')setStatus('active')}}/>Enable Cheque Management</label><div/><div><Label>Status</Label><SearchableSelect value={status} onValueChange={value=>setStatus(value as CompanyModule['status'])} options={['active','trial','grace_period','read_only','disabled'].map(value=>({value,label:value.replaceAll('_',' ')}))}/></div><div><Label>Payment</Label><SearchableSelect value={payment} onValueChange={value=>setPayment(value as CompanyModule['payment_status'])} options={['paid','pending','overdue','waived','cancelled'].map(value=>({value,label:value}))}/></div><div><Label>Billing</Label><SearchableSelect value={billing} onValueChange={value=>setBilling(value as CompanyModule['billing_type'])} options={['included','monthly','yearly','one_time','custom'].map(value=>({value,label:value.replaceAll('_',' ')}))}/></div><div><Label>Price</Label><Input type="number" min="0" value={price} onChange={e=>setPrice(e.target.value)}/></div><div><Label>Starts</Label><Input type="date" value={starts} onChange={e=>setStarts(e.target.value)}/></div><div><Label>Expires</Label><Input type="date" value={expires} onChange={e=>setExpires(e.target.value)}/></div><div className="sm:col-span-2"><Label>Module settings (JSON)</Label><Textarea rows={5} value={settings} onChange={e=>setSettings(e.target.value)}/></div><div className="sm:col-span-2"><Label>Internal notes</Label><Textarea rows={2} value={notes} onChange={e=>setNotes(e.target.value)}/></div>{error&&<p className="sm:col-span-2 text-sm text-destructive">{error}</p>}</div>}<DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={!module||saving} onClick={save}>{saving?'Saving…':'Save Module'}</Button></DialogFooter></DialogContent></Dialog>
 }
 
@@ -261,7 +262,7 @@ export function DeveloperDashboard() {
       setSchemaStatus(schema)
       setLastSync(new Date().toLocaleString())
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, 'saving company support settings'))
     }
   }
 

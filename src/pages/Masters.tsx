@@ -16,6 +16,7 @@ import { Badge } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
+import { publicErrorMessage } from '@/lib/security'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { normalizeSearch } from '@/lib/search'
 import { buildCategoryTree, categoryDepth, categoryDescendantIds, categoryOptionLabel, categoryPath, flattenCategoryTree, subtreeHeight, type CategoryTreeNode } from '@/lib/categoryHierarchy'
@@ -53,7 +54,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
       } else if (category) await alterItemCategory(category.id, { name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
       else await addItemCategory({ name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
       onClose()
-    } catch (e: unknown) { setError((e as Error).message) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving category')) } finally { setSaving(false) }
   }
 
   const allCategories = kind === 'account' ? accountCategories : itemCategories
@@ -128,7 +129,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, open, onClose 
         await addAccount({ name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: Number(openingBalance) || 0 })
       }
       onClose()
-    } catch (e: unknown) { setError((e as Error).message) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving ledger')) } finally { setSaving(false) }
   }
 
   return (
@@ -184,7 +185,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       const openingFactor = openingUnitMode === 'alternate' && altUnit ? altFactor : 1
       await alterItem(item.id, { name: form.name.trim(), category_id: form.category_id || undefined, unit: form.unit.trim(), alternate_unit: altUnit || null, alternate_conversion: altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: form.reorder_level === '' ? null : Number(form.reorder_level), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable })
       onClose()
-    } catch (e: unknown) { setError((e as Error).message) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving item')) } finally { setSaving(false) }
   }
 
   return (
@@ -233,7 +234,7 @@ export function MastersPage() {
 
   useEffect(() => {
     if (tab !== 'history' || !company) return
-    fetchMasterChangeLogs(company.id).then(logs => { setChangeLogs(logs); setHistoryError('') }).catch(error => setHistoryError(error.message))
+    fetchMasterChangeLogs(company.id).then(logs => { setChangeLogs(logs); setHistoryError('') }).catch(error => setHistoryError(publicErrorMessage(error, 'loading change history')))
   }, [tab, company])
 
   const openLedger = (account?: Account) => { setEditingAccount(account || null); setLedgerOpen(true) }
@@ -245,7 +246,7 @@ export function MastersPage() {
   const removeLedger = async (account: Account) => {
     if (!window.confirm(`Delete ledger "${account.name}" permanently? This cannot be undone.`)) return
     setActionError('')
-    try { await deleteAccount(account.id) } catch (error: unknown) { setActionError((error as Error).message) }
+    try { await deleteAccount(account.id) } catch (error: unknown) { setActionError(publicErrorMessage(error, 'deleting ledger')) }
   }
 
   return (
@@ -313,13 +314,13 @@ function CategoryActions({ row, onAddChild, onEdit, onArchive, onDelete, onError
   const canAddChild = row.depth < 3 && !category.is_archived
   const deleteBlocked = system ? 'System-created account groups cannot be deleted.' : row.totalCount > 0 ? 'Delete every ledger in this group and its subgroups first.' : row.children.length > 0 ? 'Delete child account groups first.' : null
   const runArchive = async () => {
-    try { await onArchive(category) } catch (error: unknown) { onError((error as Error).message) }
+    try { await onArchive(category) } catch (error: unknown) { onError(publicErrorMessage(error, 'archiving category')) }
   }
   const runDelete = async () => {
     if (!onDelete) return
     if (deleteBlocked) { onError(deleteBlocked); return }
     if (!window.confirm(`Delete account group "${category.name}" permanently? This cannot be undone.`)) return
-    try { await onDelete(category) } catch (error: unknown) { onError((error as Error).message) }
+    try { await onDelete(category) } catch (error: unknown) { onError(publicErrorMessage(error, 'deleting category')) }
   }
 
   return <DropdownMenuPrimitive.Root>

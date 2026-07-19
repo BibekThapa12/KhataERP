@@ -16,6 +16,7 @@ import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { Badge, Textarea } from '@/components/ui/misc'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { publicErrorMessage } from '@/lib/security'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
@@ -72,7 +73,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
       setDateBs(todayBs()); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
-      setError((error as Error).message)
+      setError(publicErrorMessage(error, 'saving stock adjustment'))
     } finally { submissionLock.release(); setSaving(false) }
   }
 

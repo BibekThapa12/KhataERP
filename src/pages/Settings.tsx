@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
-import { Download } from 'lucide-react'
+import { Download, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
+import { deleteOwnAccount, logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
 import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, parseBsDate } from '@/lib/nepaliDate'
 import { todayISO } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -13,6 +13,8 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { InventoryValuationMethod } from '@/types'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 
 export function SettingsPage() {
   const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError } = useAppStore()
@@ -38,6 +40,9 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [restoreMessage, setRestoreMessage] = useState('')
+  const [deleteConfirmation, setDeleteConfirmation] = useState('')
+  const [deletingAccount, setDeletingAccount] = useState(false)
+  const [deleteError, setDeleteError] = useState('')
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
 
   useEffect(() => {
@@ -68,6 +73,10 @@ export function SettingsPage() {
       setSaveError('Enter fiscal year start in YYYY-MM-DD BS format.')
       return
     }
+    if (!isSafePublicImageUrl(logoUrl.trim())) {
+      setSaveError('Company logo must be a valid HTTPS image URL without embedded credentials.')
+      return
+    }
     if (valuationMethod !== (company?.inventory_valuation_method || 'weighted_average') && !window.confirm('Changing the inventory valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
     setSaving(true)
     try {
@@ -94,7 +103,7 @@ export function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e: unknown) {
-      setSaveError((e as Error).message)
+      setSaveError(publicErrorMessage(e, 'saving settings'))
     } finally {
       setSaving(false)
     }
@@ -138,6 +147,15 @@ export function SettingsPage() {
 
   const handleRestore = async (file: File | undefined) => {
     if (!file || !userId || !company) return
+    if (import.meta.env.PROD) {
+      setRestoreMessage('Browser-based restore is disabled in production because a complete accounting backup must be restored atomically by an administrator.')
+      return
+    }
+    const fileError = backupFileValidationError(file)
+    if (fileError) {
+      setRestoreMessage(fileError)
+      return
+    }
     setRestoreMessage('Reading backup...')
     try {
       const text = await file.text()
@@ -216,7 +234,21 @@ export function SettingsPage() {
       logAppEvent('restore_backup', company.id, { vouchers: Array.isArray(backup.vouchers) ? backup.vouchers.length : 0 })
       setRestoreMessage('Backup restored.')
     } catch (e: unknown) {
-      setRestoreMessage((e as Error).message)
+      setRestoreMessage(publicErrorMessage(e, 'restoring backup'))
+    }
+  }
+
+  const handleDeleteAccount = async (event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault()
+    if (deleteConfirmation !== 'DELETE' || deletingAccount) return
+    setDeletingAccount(true)
+    setDeleteError('')
+    try {
+      await deleteOwnAccount()
+      window.location.replace('/login')
+    } catch (error: unknown) {
+      setDeleteError(publicErrorMessage(error, 'deleting account'))
+      setDeletingAccount(false)
     }
   }
 
@@ -228,11 +260,8 @@ export function SettingsPage() {
           <CardHeader><CardTitle className="text-base">Account Diagnostic</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-xs text-muted-foreground">
             <p>Supabase project: <span className="font-mono text-foreground">{supabaseProjectHost || 'Not configured'}</span></p>
-            <p>Logged-in user id: <span className="font-mono text-foreground">{userId || 'Not loaded'}</span></p>
-            <p>Loaded company id: <span className="font-mono text-foreground">{company?.id || 'Not loaded'}</span></p>
-            <p>Loaded company user id: <span className="font-mono text-foreground">{company?.user_id || 'Not loaded'}</span></p>
-            <p>Loaded company name: <span className="font-semibold text-foreground">{company?.name || 'Not loaded'}</span></p>
-            <p>Owner email: <span className="font-mono text-foreground">{company?.owner_email || 'Not set'}</span></p>
+            <p>Authentication: <span className="font-semibold text-foreground">{userId ? 'Signed in' : 'Not loaded'}</span></p>
+            <p>Company data: <span className="font-semibold text-foreground">{company ? 'Loaded' : 'Not loaded'}</span></p>
             {loadError && <p className="text-destructive">Load error: <span className="font-mono">{loadError}</span></p>}
           </CardContent>
         </Card>
@@ -360,9 +389,38 @@ export function SettingsPage() {
             </Button>
             <div className="space-y-1.5">
               <Label>Restore backup</Label>
-              <Input type="file" accept="application/json,.json" onChange={e => handleRestore(e.target.files?.[0])} />
+              <Input type="file" accept="application/json,.json" disabled={import.meta.env.PROD} onChange={e => handleRestore(e.target.files?.[0])} />
+              {import.meta.env.PROD && <p className="text-xs text-muted-foreground">Production restores require an atomic, administrator-controlled database restore.</p>}
               {restoreMessage && <p className="text-xs text-muted-foreground">{restoreMessage}</p>}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card className="border-destructive/40">
+          <CardHeader><CardTitle className="text-base text-destructive">Delete Account</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-xs text-muted-foreground">
+              Permanently deletes your login, company profile, parties, accounts, items, vouchers, cheque records, and audit data. Export a backup first if required.
+            </p>
+            <AlertDialog onOpenChange={open => { if (!open) { setDeleteConfirmation(''); setDeleteError('') } }}>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive"><Trash2 className="mr-2 h-4 w-4" />Delete my account</Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Permanently delete this account?</AlertDialogTitle>
+                  <AlertDialogDescription>This cannot be undone. Type DELETE to confirm.</AlertDialogDescription>
+                </AlertDialogHeader>
+                <Input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} placeholder="DELETE" autoComplete="off" />
+                {deleteError && <p className="text-xs text-destructive">{deleteError}</p>}
+                <AlertDialogFooter>
+                  <AlertDialogCancel disabled={deletingAccount}>Cancel</AlertDialogCancel>
+                  <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleteConfirmation !== 'DELETE' || deletingAccount} onClick={handleDeleteAccount}>
+                    {deletingAccount ? 'Deleting…' : 'Delete permanently'}
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           </CardContent>
         </Card>
       </PageContent>

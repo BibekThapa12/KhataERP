@@ -221,7 +221,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
           <main class="sheet">
             <section class="top">
               <div>
-                ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
+                ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" referrerpolicy="no-referrer" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
                 <h1>${esc(company?.name || 'KhataERP')}</h1>
                 <p class="muted">${esc(company?.address || '')}</p>
                 <p class="muted">${company?.pan_vat ? `PAN/VAT: ${esc(company.pan_vat)}` : ''} ${company?.phone ? ` | Phone: ${esc(company.phone)}` : ''}</p>
@@ -265,7 +265,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
     `
     const win = window.open('', '_blank', 'width=800,height=900')
     if (!win) return
-    logAppEvent('print_voucher', company?.id, { voucher_id: voucher.id, type: voucher.type, print_format: company?.print_format || 'A5' })
+    logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
     win.document.close()
     win.focus()

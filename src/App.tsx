@@ -4,6 +4,7 @@ import { logAppError, supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
+import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
 
 const LoginPage = lazy(() => import('@/pages/Login').then(m => ({ default: m.LoginPage })))
 const Dashboard = lazy(() => import('@/pages/Dashboard').then(m => ({ default: m.Dashboard })))
@@ -40,12 +41,18 @@ const ChequeDetailPage = lazy(() => import('@/pages/cheques/ChequeManagement').t
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
-  { error: Error | null }
+  { error: Error | null; correlationId: string | null }
 > {
-  state: { error: Error | null } = { error: null }
+  state: { error: Error | null; correlationId: string | null } = { error: null, correlationId: null }
 
   static getDerivedStateFromError(error: Error) {
-    return { error }
+    return { error, correlationId: createCorrelationId() }
+  }
+
+  componentDidCatch(error: Error) {
+    window.dispatchEvent(new CustomEvent<ClientErrorReport>('khataerp:client-error', {
+      detail: { error, correlationId: this.state.correlationId || createCorrelationId(), operation: 'page rendering' },
+    }))
   }
 
   render() {
@@ -57,9 +64,7 @@ class AppErrorBoundary extends Component<
             <p className="mt-2 text-sm text-muted-foreground">
               The app hit a runtime error while opening this page.
             </p>
-            <pre className="mt-4 overflow-auto rounded bg-muted p-3 text-xs text-foreground">
-              {this.state.error.message}
-            </pre>
+            <p className="mt-4 rounded bg-muted p-3 font-mono text-xs text-foreground">Reference: {this.state.correlationId}</p>
           </div>
         </div>
       )
@@ -162,6 +167,20 @@ export default function App() {
       window.removeEventListener('error', handleError)
       window.removeEventListener('unhandledrejection', handleRejection)
     }
+  }, [company?.id])
+
+  useEffect(() => {
+    const handleReportedError = (event: Event) => {
+      const detail = (event as CustomEvent<ClientErrorReport>).detail
+      if (!detail) return
+      logAppError(company?.id, detail.error, {
+        source: 'handled_client_error',
+        operation: detail.operation,
+        correlation_id: detail.correlationId,
+      })
+    }
+    window.addEventListener('khataerp:client-error', handleReportedError)
+    return () => window.removeEventListener('khataerp:client-error', handleReportedError)
   }, [company?.id])
 
   return (

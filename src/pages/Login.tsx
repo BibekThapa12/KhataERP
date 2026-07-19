@@ -1,12 +1,17 @@
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import HCaptcha from '@hcaptcha/react-hcaptcha'
 import { signIn, signUp } from '@/lib/supabase'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { publicAuthErrorMessage } from '@/lib/security'
+import { consumeBrowserAuthAttempt } from '@/lib/authRateLimit'
 
 export function LoginPage() {
+  const captchaRef = useRef<HCaptcha>(null)
+  const captchaSiteKey = import.meta.env.VITE_HCAPTCHA_SITE_KEY
   const [mode, setMode] = useState<'login' | 'signup'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -18,15 +23,27 @@ export function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
+  const [captchaToken, setCaptchaToken] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    setLoading(true)
     setError('')
     setSuccess('')
+    if (!captchaToken) {
+      setError('Complete the CAPTCHA challenge before continuing.')
+      return
+    }
+    const action = mode === 'login' ? 'login' : 'signup'
+    const rateLimit = consumeBrowserAuthAttempt(action)
+    if (!rateLimit.allowed) {
+      setLoading(false)
+      setError(`Too many attempts. Try again in ${rateLimit.retryAfterSeconds} seconds.`)
+      return
+    }
+    setLoading(true)
     try {
       if (mode === 'login') {
-        const { error } = await signIn(email, password)
+        const { error } = await signIn(email, password, captchaToken)
         if (error) throw error
       } else {
         const { error } = await signUp(email, password, {
@@ -35,14 +52,16 @@ export function LoginPage() {
           pan_vat: panVat.trim(),
           phone: phone.trim(),
           vat_enabled: vatEnabled,
-        })
+        }, captchaToken)
         if (error) throw error
         setSuccess('Account created! Check your email to confirm, then sign in.')
         setMode('login')
       }
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicAuthErrorMessage(e, mode === 'login' ? 'sign in' : 'sign up'))
     } finally {
+      captchaRef.current?.resetCaptcha()
+      setCaptchaToken(null)
       setLoading(false)
     }
   }
@@ -51,6 +70,8 @@ export function LoginPage() {
     setMode(m => m === 'login' ? 'signup' : 'login')
     setError('')
     setSuccess('')
+    captchaRef.current?.resetCaptcha()
+    setCaptchaToken(null)
   }
 
   return (
@@ -114,9 +135,21 @@ export function LoginPage() {
                   </label>
                 </>
               )}
+              <div className="flex min-h-[78px] justify-center overflow-hidden" aria-label="CAPTCHA verification">
+                <HCaptcha
+                  ref={captchaRef}
+                  sitekey={captchaSiteKey}
+                  onVerify={setCaptchaToken}
+                  onExpire={() => setCaptchaToken(null)}
+                  onError={() => {
+                    setCaptchaToken(null)
+                    setError('CAPTCHA could not load. Refresh the challenge and try again.')
+                  }}
+                />
+              </div>
               {error && <p className="text-sm text-destructive">{error}</p>}
               {success && <p className="text-sm text-forest">{success}</p>}
-              <Button type="submit" className="w-full" disabled={loading}>
+              <Button type="submit" className="w-full" disabled={loading || !captchaToken}>
                 {loading ? 'Please wait...' : mode === 'login' ? 'Sign in' : 'Create account'}
               </Button>
               <button

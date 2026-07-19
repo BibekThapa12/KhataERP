@@ -611,8 +611,7 @@ create policy "voucher_settlements_developer_select" on voucher_settlements
 create policy "app_events_own_insert" on app_events
   for insert with check (company_id = my_company_id() and user_id = auth.uid());
 
-create policy "app_events_own_select" on app_events
-  for select using (company_id = my_company_id());
+drop policy if exists "app_events_own_select" on app_events;
 
 create policy "app_events_developer_select" on app_events
   for select using (is_developer_admin());

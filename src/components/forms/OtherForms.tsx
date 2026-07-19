@@ -16,6 +16,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { Textarea } from '@/components/ui/misc'
+import { publicErrorMessage } from '@/lib/security'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
@@ -71,7 +72,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, 'saving item'))
     } finally { submissionLock.release(); setSaving(false) }
   }
 
@@ -216,7 +217,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         window.requestAnimationFrame(() => moneyAccountTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
     } finally { submissionLock.release(); setSaving(false) }
   }
 
@@ -352,7 +353,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         window.requestAnimationFrame(() => firstAccountTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
-      setError((e as Error).message)
+      setError(publicErrorMessage(e, 'saving journal voucher'))
     } finally { submissionLock.release(); setSaving(false) }
   }
 

@@ -41,7 +41,8 @@ function timestamp() {
 function report(sample: WritePerformanceSample) {
   // Intentionally structured and payload-free. Do not add names, amounts,
   // narration, account numbers, or other business data to these samples.
-  console.info('[KhataERP write performance]', sample)
+  const { companyId: _companyId, ...nonIdentifyingSample } = sample
+  console.info('[KhataERP write performance]', nonIdentifyingSample)
 }
 
 export class WritePerformanceTrace {

@@ -228,13 +228,19 @@ export function AppShell() {
     navigate('/login')
   }
 
-  if (company?.suspended && !developerAdmin) {
+  const trialExpired = company?.plan_status === 'trial' && !!company.trial_ends_at
+    && new Date(`${company.trial_ends_at}T23:59:59`).getTime() < Date.now()
+  const planInactive = company?.plan_status === 'expired' || trialExpired
+
+  if ((company?.suspended || planInactive) && !developerAdmin) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-sm">
-          <h1 className="font-serif text-2xl font-bold text-foreground">Account suspended</h1>
+          <h1 className="font-serif text-2xl font-bold text-foreground">{company?.suspended ? 'Account suspended' : 'Plan inactive'}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This company is temporarily suspended. Please contact KhataERP support to continue using the app.
+            {company?.suspended
+              ? 'This company is temporarily suspended. Please contact KhataERP support to continue using the app.'
+              : 'This company trial or subscription has ended. Please contact KhataERP support to continue using the app.'}
           </p>
           <Button onClick={handleSignOut} className="mt-5">
             Sign out

@@ -27,6 +27,9 @@ import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@
 import { selectedFiscalYearStartBs } from '@/lib/reports'
 import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
 import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } from '@/lib/writePerformance'
+import { publicErrorMessage } from '@/lib/security'
+
+const warnNonSensitive = (context: string) => (error: unknown) => { publicErrorMessage(error, context) }
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 
@@ -473,10 +476,10 @@ export const useAppStore = create<AppState>((set, get) => ({
           chequePermissions = loaded[0].length ? loaded[0] : ALL_CHEQUE_PERMISSIONS
           chequeBanks = loaded[1]; cheques = loaded[2]
         }
-      } catch (moduleError) { console.warn('Optional module data unavailable', moduleError) }
+      } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
       set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, companyModules, chequePermissions, chequeBanks, cheques, userId, loading: false })
     } catch (e: unknown) {
-      set({ error: (e as Error).message, loading: false })
+      set({ error: publicErrorMessage(e, 'loading company data'), loading: false })
     }
   },
 
@@ -577,7 +580,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (parent && categoryDepth(get().accountCategories, parent.id) >= 3) throw new Error('Category hierarchy cannot exceed three levels')
     const category = await insertAccountCategory({ company_id: company.id, name, account_type, parent_category_id, is_system: false, is_archived: false })
     set({ accountCategories: [...get().accountCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
-    logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(console.warn)
+    logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record account category audit'))
   },
 
   alterAccountCategory: async (id, updates) => {
@@ -599,7 +602,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const accountCategories = get().accountCategories.map(category => category.id === id ? { ...category, ...updates } : category)
     const rawAccounts = get().rawAccounts.map(account => account.category_id === id && updates.name ? { ...account, group: updates.name } : account)
     set({ accountCategories, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, []) })
-    logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record account category audit'))
   },
 
   deleteAccountCategory: async (id) => {
@@ -610,7 +613,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (blocked) throw new Error(blocked)
     await removeAccountCategory(id)
     set({ accountCategories: get().accountCategories.filter(category => category.id !== id) })
-    logMasterChange(company.id, 'account_category', id, 'delete', existing, {}).catch(console.warn)
+    logMasterChange(company.id, 'account_category', id, 'delete', existing, {}).catch(warnNonSensitive('Could not record account category audit'))
   },
 
   addItemCategory: async ({ name, parent_category_id = null }) => {
@@ -620,7 +623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (parent && categoryDepth(get().itemCategories, parent.id) >= 3) throw new Error('Category hierarchy cannot exceed three levels')
     const category = await insertItemCategory({ company_id: company.id, name, parent_category_id, is_archived: false })
     set({ itemCategories: [...get().itemCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
-    logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(console.warn)
+    logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record item category audit'))
   },
 
   alterItemCategory: async (id, updates) => {
@@ -638,7 +641,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     await updateItemCategory(id, updates)
     set({ itemCategories: get().itemCategories.map(category => category.id === id ? { ...category, ...updates } : category) })
-    logMasterChange(company.id, 'item_category', id, 'update', existing, updates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'item_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record item category audit'))
   },
 
   alterAccount: async (id, updates) => {
@@ -657,7 +660,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newParty = partyType && !existingParty ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: effectiveUpdates.name || existing.name, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const rawAccounts = get().rawAccounts.map(account => account.id === id ? { ...account, ...effectiveUpdates } : account)
     set({ rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [id]), parties: newParty ? [...get().parties, newParty] : get().parties })
-    logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record account audit'))
     })
   },
 
@@ -675,7 +678,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       accounts: get().accounts.filter(account => account.id !== id),
       parties: get().parties.filter(party => party.account_id !== id),
     })
-    logMasterChange(company.id, 'account', id, 'delete', existing, {}).catch(console.warn)
+    logMasterChange(company.id, 'account', id, 'delete', existing, {}).catch(warnNonSensitive('Could not record account audit'))
   },
 
   alterParty: async (id, updates) => {
@@ -695,7 +698,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const parties = get().parties.map(item => item.id === id ? { ...item, ...updates } : item)
     const rawAccounts = get().rawAccounts.map(account => account.id === party.account_id ? { ...account, ...accountUpdates } : account)
     set({ parties, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [party.account_id]) })
-    logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record party audit'))
     })
   },
 
@@ -720,7 +723,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await trace.measure('item_update', () => updateItem(id, normalizedUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:items.update' })
     const items = get().items.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
     set({ items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [id], valuationMethod(company)) })
-    logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(console.warn)
+    logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record item audit'))
     })
   },
 

@@ -12,6 +12,19 @@ dist
 dist-ssr
 *.local
 
+# Environment files may contain credentials. Keep only the sanitized template.
+.env
+.env.*
+!.env.example
+
+# Private certificates and credential bundles
+*.pem
+*.key
+*.p12
+*.pfx
+credentials.json
+secrets.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

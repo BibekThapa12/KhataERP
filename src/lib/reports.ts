@@ -214,12 +214,16 @@ export function fiscalYearStartBs(company: Company | null) {
     : `${Number(current.slice(0, 4)) - 1}-${monthDay}`
 }
 
-export const fiscalYearSelectionKey = (companyId?: string) => `khata-fiscal-year:${companyId || 'default'}`
+export const fiscalYearSelectionKey = (_companyId?: string) => 'khata-fiscal-year'
 
 export function selectedFiscalYearStartBs(company: Company | null) {
   const currentStart = fiscalYearStartBs(company)
   try {
-    const selectedYear = Number(localStorage.getItem(fiscalYearSelectionKey(company?.id)) || localStorage.getItem(`khata-dashboard-fiscal-year:${company?.id || 'default'}`))
+    const legacyKey = `khata-fiscal-year:${company?.id || 'default'}`
+    const legacyDashboardKey = `khata-dashboard-fiscal-year:${company?.id || 'default'}`
+    const selectedYear = Number(localStorage.getItem(fiscalYearSelectionKey()) || localStorage.getItem(legacyKey) || localStorage.getItem(legacyDashboardKey))
+    localStorage.removeItem(legacyKey)
+    localStorage.removeItem(legacyDashboardKey)
     return Number.isInteger(selectedYear) && selectedYear > 0
       ? `${selectedYear}-${currentStart.slice(5)}`
       : currentStart
@@ -236,7 +240,8 @@ export function selectedFiscalYearEndBs(company: Company | null) {
 }
 
 export function saveSelectedFiscalYear(company: Company | null, year: number) {
-  try { localStorage.setItem(fiscalYearSelectionKey(company?.id), String(year)) } catch { /* local storage may be unavailable */ }
+  void company
+  try { localStorage.setItem(fiscalYearSelectionKey(), String(year)) } catch { /* local storage may be unavailable */ }
 }
 
 export function vouchersInFiscalYear(vouchers: Voucher[], fiscalStart: string) {

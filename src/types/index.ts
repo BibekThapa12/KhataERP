@@ -200,10 +200,10 @@ export interface ItemCategory {
 
 export interface MasterChangeLog {
   id: string
-  company_id: string
+  company_id?: string
   user_id?: string
   record_type: string
-  record_id: string
+  record_id?: string
   action: string
   old_values: Record<string, unknown>
   new_values: Record<string, unknown>
@@ -231,7 +231,7 @@ export interface Cheque {
   notes?:string; status:ChequeStatus; cleared_at?:string; bounced_at?:string; cancelled_at?:string; status_reason?:string;
   linked_voucher_id?:string; cleared_to_account_id?:string; created_by?:string; updated_by?:string; created_at?:string; updated_at?:string;
 }
-export interface ChequeEvent { id:string; company_id:string; cheque_id?:string; bank_id?:string; action:string; old_values:Record<string,unknown>; new_values:Record<string,unknown>; actor_id?:string; created_at:string }
+export interface ChequeEvent { id:string; company_id?:string; cheque_id?:string; bank_id?:string; action:string; old_values?:Record<string,unknown>; new_values?:Record<string,unknown>; actor_id?:string; created_at:string }
 
 // ─── Report Types ─────────────────────────────────────────────────────────────
 
