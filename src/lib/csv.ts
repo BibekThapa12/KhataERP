@@ -1,5 +1,5 @@
-export function downloadCsv(filename: string, headers: string[], rows: Array<Array<string | number | null | undefined>>) {
-  const escape = (value: string | number | null | undefined) => {
+export function downloadCsv(filename: string, headers: string[], rows: readonly (readonly unknown[])[]) {
+  const escape = (value: unknown) => {
     const text = value == null ? '' : String(value)
     return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text
   }
