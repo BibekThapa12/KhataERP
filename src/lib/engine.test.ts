@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaymentData, buildPurchaseVoucherData, buildReceiptData, buildReturnVoucherData,
-  buildSalesVoucherData, computeBalanceSheet, computeProfitAndLoss, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
+  applyVoucherBalanceDelta, buildSalesVoucherData, computeBalanceSheet, computeProfitAndLoss, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAffectedBalances, recomputeAffectedStock, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
 } from './engine'
 import type { Account, Item, Voucher, VoucherLine } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
@@ -35,6 +35,30 @@ describe('accounting engine integrity', () => {
     const balances = recomputeAllBalances(chart, [voucher])
     expect(balances.find(account => account.id === inputVat.id)?.balance).toBe(-130)
     expect(balances.find(account => account.id === outputVat.id)?.balance).toBe(200)
+  })
+
+  it('recomputes affected ledgers with the same result as a full replay', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const current = recomputeAllBalances(chart, [])
+    const voucher = { id: 'sale', company_id: 'c', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, seq: 1, total: 100, cancelled: false, lines: [
+      { account_id: 'c:cash', debit: 100, credit: 0 },
+      { account_id: 'c:sales', debit: 0, credit: 100 },
+    ] } as Voucher
+    expect(recomputeAffectedBalances(chart, current, [voucher], ['c:cash', 'c:sales']))
+      .toEqual(recomputeAllBalances(chart, [voucher]))
+  })
+
+  it('applies create, edit, and cancellation balance deltas without replaying history', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const created = { id: 'sale', company_id: 'c', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, seq: 1, total: 100, cancelled: false, lines: [
+      { account_id: 'c:cash', debit: 100, credit: 0 }, { account_id: 'c:sales', debit: 0, credit: 100 },
+    ] } as Voucher
+    const edited = { ...created, total: 150, lines: [
+      { account_id: 'c:cash', debit: 150, credit: 0 }, { account_id: 'c:sales', debit: 0, credit: 150 },
+    ] }
+    const afterEdit = applyVoucherBalanceDelta(applyVoucherBalanceDelta(chart, undefined, created), created, edited)
+    expect(afterEdit).toEqual(recomputeAllBalances(chart, [edited]))
+    expect(applyVoucherBalanceDelta(afterEdit, edited, { ...edited, cancelled: true })).toEqual(recomputeAllBalances(chart, []))
   })
 
   it('posts multiple ledger allocations against one settlement account', () => {
@@ -82,6 +106,16 @@ describe('accounting engine integrity', () => {
     const withSalesReturn = [...purchasesAndSale, voucher('return', 3, 'Sales Return', 'in', 2, 0, 'sale')]
     expect(recomputeStock([item], withSalesReturn, 'fifo')[0]).toMatchObject({ qty: 17, value: 270 })
     expect(recomputeStock([item], withSalesReturn, 'lifo')[0]).toMatchObject({ qty: 17, value: 240 })
+  })
+
+  it('replays affected stock only while preserving exact FIFO results', () => {
+    const tea = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 10 } as Item
+    const coffee = { ...tea, id: 'coffee', name: 'Coffee', opening_rate: 30 }
+    const purchase = { id: 'purchase', company_id: 'c', type: 'Purchase', date_bs: '2083-01-01', date_bs_key: 20830101, seq: 1, total: 0, cancelled: false, stock_lines: [{ item_id: 'tea', direction: 'in', qty: 10, rate: 20 }] } as Voucher
+    const current = recomputeStock([tea, coffee], [], 'fifo')
+    const affected = recomputeAffectedStock([tea, coffee], current, [purchase], ['tea'], 'fifo')
+    expect(affected).toEqual(recomputeStock([tea, coffee], [purchase], 'fifo'))
+    expect(affected.find(entry => entry.id === 'coffee')).toEqual(current.find(entry => entry.id === 'coffee'))
   })
 
   it('builds a period stock ledger with valuation-cost movements and running balances', () => {
@@ -206,6 +240,43 @@ describe('accounting engine integrity', () => {
     expect(computeTrialBalance(balances)).toMatchObject({ total_debit: 50, total_credit: 50, balanced: true })
   })
 
+  it('does not create retained earnings from undated item opening stock', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const item = { id: 'opening-item', company_id: 'c', name: 'Opening Item', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 1800 } as Item
+
+    const balances = recomputeFiscalTrialAccounts(chart, [], '2082-04-01', 'c', 'retained', [item], 'weighted_average', 'current-assets')
+
+    expect(balances.find(account => account.id === 'c:retained_earnings')?.balance).toBe(0)
+    expect(balances.find(account => account.id === 'c:opening-stock-report')).toMatchObject({
+      balance: 18000,
+      category_id: 'current-assets',
+    })
+  })
+
+  it('uses only the immediately previous fiscal year for retained earnings', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const cash = chart.find(account => account.id === 'c:cash')!
+    const sales = chart.find(account => account.id === 'c:sales')!
+    const olderSale = { id: 'older-sale', company_id: 'c', type: 'Journal', date_bs: '2080-05-01', date_bs_key: 20800501, seq: 1, total: 500, cancelled: false, lines: [
+      { account_id: cash.id, debit: 500, credit: 0 },
+      { account_id: sales.id, debit: 0, credit: 500 },
+    ] } as Voucher
+
+    const balances = recomputeFiscalTrialAccounts(chart, [olderSale], '2082-04-01', 'c')
+
+    expect(balances.find(account => account.id === 'c:retained_earnings')?.balance).toBe(0)
+  })
+
+  it('ignores nominal master openings when calculating retained earnings', () => {
+    const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
+    const expense = chart.find(account => account.id === 'c:rent')!
+    expense.opening_balance = 18000
+
+    const balances = recomputeFiscalTrialAccounts(chart, [], '2082-04-01', 'c')
+
+    expect(balances.find(account => account.id === 'c:retained_earnings')?.balance).toBe(0)
+  })
+
   it('shows prior profit as retained earnings and only current profit in the balance sheet P&L', () => {
     const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
     const cash = chart.find(account => account.id === 'c:cash')!
@@ -269,5 +340,19 @@ describe('accounting engine integrity', () => {
     expect(fromBaseRate(600, 6)).toBe(100)
     expect(formatStockQuantity(2.5, item)).toBe('2.5 cs (15 pcs)')
     expect(formatStockQuantity(4, item)).toBe('4 cs (24 pcs)')
+  })
+
+  it.each([1, 10, 50, 100])('builds and validates a %i-line sales payload within the client budget', lineCount => {
+    const started = performance.now()
+    const result = buildSalesVoucherData({
+      party_account_id: null,
+      is_cash: true,
+      items: Array.from({ length: lineCount }, (_, index) => ({ item_id: `item-${index}`, qty: index + 1, rate: 10 })),
+      vat_rate: 13,
+      system_accounts: accounts,
+    })
+    expect(result.invoice_items).toHaveLength(lineCount)
+    expect(validateBalanced(result.lines).valid).toBe(true)
+    expect(performance.now() - started).toBeLessThan(500)
   })
 })

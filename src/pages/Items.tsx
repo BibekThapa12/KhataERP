@@ -21,6 +21,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import type { Item, ItemCategory, StockCondition } from '@/types'
+import { SubmissionLock } from '@/lib/submissionLock'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 
@@ -38,6 +39,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const submissionLock = useRef(new SubmissionLock()).current
   const selectedItem = items.find(item => item.id === itemId)
   const selectedStock = stock.find(entry => entry.id === itemId)
   const availableSaleable = itemId ? stockConditionQuantity(items, vouchers, itemId, 'saleable') : 0
@@ -60,6 +62,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
   }
 
   const handleSave = async () => {
+    if (!submissionLock.tryAcquire()) return
     setError('')
     setSaving(true)
     try {
@@ -70,7 +73,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
       window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError((error as Error).message)
-    } finally { setSaving(false) }
+    } finally { submissionLock.release(); setSaving(false) }
   }
 
   return <Dialog open={open} onOpenChange={value => !value && onClose()}>

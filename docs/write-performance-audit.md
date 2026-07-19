@@ -141,3 +141,174 @@ Expected request count after applying the migration:
 
 - Create: 1 posting RPC (previous baseline: 6 requests for a typical invoice).
 - Edit: 1 replacement RPC (previous baseline: 8 requests for a typical invoice with settlements).
+
+## Phase 5 write-query optimization
+
+The captured `pg_stat_statements` workload did not show a database query slow
+enough to explain the user-visible delay. Normal accounting inserts averaged
+about 1–10 ms. The multi-second browser timings were dominated by network
+round trips, which Phase 4 removes. For that reason Phase 5 deliberately avoids
+adding broad indexes for every possible account, item, party, status, and date
+combination.
+
+Changes made:
+
+- Fiscal-year voucher-number allocation now filters by
+  `(company_id, type, numbering_period)`, matching the leading columns of the
+  existing `vouchers_company_type_period_invoice_no_unique` index. It no longer
+  filters numbering through a separate BS-date range when the numbering period
+  is already known.
+- `my_company_id()` is now a stable, search-path-pinned security-definer lookup
+  over the existing unique `companies(user_id)` index. It still derives the
+  company exclusively from `auth.uid()`.
+- Write RLS policies wrap `my_company_id()` and `auth.uid()` in scalar subqueries
+  so PostgreSQL can evaluate them as init-plans once per statement instead of
+  repeating membership work for each row of a bulk voucher insert.
+- Added only `accounts(category_id)`, because account-group rename writes use
+  that exact predicate and the same index supports category foreign-key deletion
+  checks. No extra voucher-line, invoice-item, status, creator, or date indexes
+  were added without a measured need.
+- Existing indexes already cover company sequence allocation, voucher-number
+  uniqueness, voucher child replacement/return queries, balance validation,
+  stock item/condition lookup, original invoice items, and settlements.
+- `supabase-write-performance-diagnostics.sql` now includes read-only
+  `EXPLAIN (ANALYZE, BUFFERS)` plans, index size/use statistics, and an audit of
+  foreign keys without leading-column indexes. A sequential scan on a tiny
+  table is not automatically considered a problem.
+
+Apply `supabase-write-query-optimization-migration.sql` after Phase 4. The
+updated Phase 4 migration is idempotent and should be rerun once if an older
+copy was already installed, so the voucher-number query uses the existing
+numbering-period index.
+
+## Phase 6 trigger review
+
+| Table / trigger | Frequency | Database work | Decision |
+| --- | --- | --- | --- |
+| `voucher_lines_balance_guard` | Deferred, once per changed row | Re-sums debit and credit for the affected voucher through `idx_vlines_voucher` | Preserved. It repeats for multi-line writes, but measured voucher-line inserts remain low-cost. Converting it to an immediate statement trigger would break valid multi-statement SQL; bypassing it inside the RPC would weaken direct-write protection. |
+| `validate_voucher_settlement_trigger` | Before every settlement row | Two voucher PK lookups and one account PK lookup | Preserved. The RPC bulk write still needs this protection for direct SQL/API writes outside the RPC. All lookups use primary keys. |
+| Account/item hierarchy guards | Before each affected category row | Parent PK walks plus recursive descendant lookup | Preserved. Parent-category indexes already cover descendant traversal and category writes are infrequent. |
+| `account_category_system_guard` | Before each system-category update/delete | Field comparisons; company PK existence check only for delete | Preserved; no balance recalculation or recursive writes. |
+| Company system-group and retained-ledger seed triggers | After each new company | Both previously called system-group seeding, causing duplicate upserts | Consolidated into one ordered trigger: system groups, then retained earnings. The standalone retained-ledger repair helper remains self-contained. |
+| `cheque_bank_guard` | Before each bank row | Case-insensitive duplicate-bank lookup and optional account PK lookup | Preserved and backed by `(company_id, lower(bank_name))`. Clean databases receive a unique concurrency guard; databases containing legacy duplicate names receive a non-unique lookup index without changing cheque data. |
+| `cheque_touch_guard` | Before each cheque row | Bank, party, entitlement/settings, optional clearing-ledger, and permission checks | Preserved. These enforce module access and status transitions; existing PK/unique entitlement indexes cover the lookups. |
+| Cheque-bank entitlement seed | After entitlement insert/enable update | One set-based insert of the Nepal bank catalogue | Preserved; it is set-based and runs only when entitlement is enabled. |
+
+There are no balance-maintenance triggers on vouchers, stock movements,
+inventory balances, party balances, account balances, or audit logs. Account,
+party, and inventory balances remain derived by the existing application replay
+engine, so no hidden full-table balance UPDATE is executed during posting.
+
+No reviewed trigger writes back into its own source table recursively. The
+company bootstrap writes categories/accounts only, and cheque/category guards
+are validation-only. The Phase 4 advisory lock is scoped by company and only
+serializes voucher-number allocation for the same tenant.
+
+## Phase 7 RLS review
+
+- Core write policies continue to require `company_id = my_company_id()`.
+- Child voucher tables continue to require an indexed parent-voucher `EXISTS`.
+- `my_company_id()` still derives the tenant solely from `auth.uid()` through
+  the unique `companies(user_id)` index.
+- Owner, developer, module-entitlement, cheque-permission, and `auth.uid()`
+  checks are wrapped as scalar init-plans where their inputs are constant for
+  the statement. This avoids repeating stable permission queries for every row.
+- Cheque policies still require all three layers: selected company, active
+  module entitlement, and the appropriate user permission.
+- Developer policies remain separate permissive policies and still require
+  `is_developer_admin()`.
+- No service-role key, company name, or hard-coded company identifier is used.
+- Existing unique indexes cover module key, company/module entitlement, and
+  company/user/permission lookups. No additional RLS support index was needed.
+
+Apply `supabase-trigger-rls-optimization-migration.sql` after the Phase 5 and
+Cheque Management migrations. The expanded diagnostics file reports trigger
+orientation/frequency, function timing, effective policy definitions, and live
+lock waits.
+
+## Phases 8 and 9: affected balance and stock updates
+
+- Database writes do not maintain denormalized account, party, inventory,
+  dashboard, trial-balance, receivable/payable, or P&L totals. Those reports
+  continue to derive from posted voucher entries, so no historical report is
+  rebuilt or persisted during a save.
+- The Zustand post-save path no longer calls full account and inventory replay
+  for every voucher. It extracts account and item IDs from the new voucher and,
+  for edits, unions them with IDs from the previous version so removed lines are
+  also corrected.
+- Voucher create/edit/cancel applies the exact new movement minus the previous
+  movement directly to affected ledger cache rows. Account-master/opening
+  changes replay only that ledger. Both paths retain the existing normal
+  debit/credit rules.
+- Inventory replay is limited to affected items. It remains chronological over
+  that item's complete history; this intentionally preserves backdated entries,
+  negative-stock limits, weighted average, FIFO/LIFO layers, purchase returns,
+  and original-issue cost restoration for sales returns. A naive value delta is
+  not used.
+- New/updated party ledgers, accounts, and items now recompute only their own
+  cache rows. Account-group renames update presentation fields without replaying
+  balances, and safe ledger deletion removes only that cache row.
+- Full inventory replay remains only on initial company load and when the
+  company valuation method changes, because the latter legitimately affects
+  every item.
+
+## Phase 10: compact returned data
+
+- `save_voucher_atomic` still returns the saved voucher header because the UI
+  inserts it into the local voucher cache without a refetch.
+- Child collections now return explicit UI-required fields instead of complete
+  table rows. Invoice-item IDs remain present because later returns reference
+  the original invoice-item row.
+- Voucher creation/editing therefore needs one response and no follow-up fetch;
+  cancellation already returns no record payload.
+- Rerun `supabase-atomic-voucher-posting-migration.sql` once after deploying
+  this client update so the compact response projection is installed.
+
+## Phase 11: targeted cache refresh
+
+- The application uses Zustand rather than React Query/TanStack Query; no
+  global query invalidation or query-cache clearing was found.
+- Voucher saves replace/add one voucher plus only affected account and stock
+  cache rows. Report components remain memoized derivations and are not fetched
+  from the database after a save.
+- Cheque and issuing-bank mutations now merge the single returned record into
+  their respective Zustand collection instead of refetching both complete
+  cheque and bank lists.
+- Required writes and local cache updates remain awaited. No unrelated report,
+  dashboard, master-list, or module refresh extends the form's saving state.
+
+## Phases 12-16: submission, audit, concurrency, and failure safety
+
+- Sales, purchase, return, receipt, payment, journal, stock-adjustment, item,
+  and cheque submission handlers now use an immediate ref-backed
+  `SubmissionLock`. This closes the interval before React applies the disabled
+  button state. Transaction mutations are not launched from effects, and React
+  Strict Mode therefore cannot repeat them.
+- Every new atomic voucher request carries a UUID idempotency key. A partial
+  unique `(company_id, idempotency_key)` index and the company posting lock make
+  an identical retry return the original voucher without inserting children or
+  a second audit event.
+- Creates and edits take one short transaction-scoped advisory lock per company
+  after payload/company/account/item validation. This serializes only posting,
+  numbering, and stock availability for the same tenant; different companies
+  remain independent. Voucher edits additionally lock only their header row.
+- Voucher numbers still use the existing format and fiscal-year scope. `MAX +
+  1` is now protected by the tenant-scoped transaction lock and the existing
+  unique voucher-number index, so concurrent allocation cannot duplicate a
+  number.
+- A set-based stock availability check runs after child insertion and before
+  commit. Because all same-company postings use the same lock, concurrent sales,
+  returns, or adjustments cannot both consume the same available quantity.
+- The posting RPC keeps exactly one summarized `app_events` record inside the
+  same transaction. Module configuration now records one event per save with a
+  compact changed-field list instead of several duplicate full snapshots.
+- The RPC tracks its current stage. On failure PostgreSQL preserves the original
+  user-facing message and SQLSTATE while adding `save_voucher_atomic stage=...`
+  to error details. Any failure still rolls back header, ledger lines, stock,
+  invoice items, settlements, and audit together.
+- Unit coverage includes accounting balance/VAT/stock behavior, affected-cache
+  equivalence, duplicate submission locking, and payload sizes of 1, 10, 50,
+  and 100 lines. RLS, rollback, permission, and true concurrent-session tests
+  must be run against staging Supabase; browser-only tests cannot prove database
+  isolation. The diagnostics file now reports RPC timing, idempotency-index
+  installation, duplicate voucher audit events, and live lock waits.

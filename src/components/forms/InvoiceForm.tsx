@@ -17,6 +17,7 @@ import { PartyForm } from './PartyForm'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
+import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
 
 interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
@@ -51,6 +52,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
   const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const pendingLineFocus = useRef<number | null>(null)
+  const submissionLock = useRef(new SubmissionLock()).current
 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyTerms = partyTerminology(partyType)
@@ -171,6 +173,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       }
     }
 
+    if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
       const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, discount, narration: narration.trim(), date_bs: dateBs }
@@ -200,6 +203,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     } catch (e: unknown) {
       setError((e as Error).message)
     } finally {
+      submissionLock.release()
       setSaving(false)
     }
   }

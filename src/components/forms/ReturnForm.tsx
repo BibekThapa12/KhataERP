@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
+import { SubmissionLock } from '@/lib/submissionLock'
 
 interface ReturnFormProps {
   type: 'Sales Return' | 'Purchase Return'
@@ -50,6 +51,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const [manualVatRate, setManualVatRate] = useState(vatEnabled ? 13 : 0)
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const submissionLock = useRef(new SubmissionLock()).current
   const [error, setError] = useState('')
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
 
@@ -182,6 +184,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     if (settlementMode !== 'party' && !settlementAccountId) return setError('Select a settlement account.')
     const returnItems: ReturnItemInput[] = selectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
     const params: ReturnSaveParams = { type, original_voucher_id: original?.id, party_account_id: original?.party_account_id || partyAccountId, vat_rate: original ? original.vat_rate : manualVatRate, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? (original?.party_account_id || partyAccountId) : settlementAccountId, restock_items: true, stock_condition: stockCondition, return_reason: reason.trim(), date_bs: dateBs }
+    if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params)
@@ -201,7 +204,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setError('')
         window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
-    } catch (e: unknown) { setError((e as Error).message) } finally { setSaving(false) }
+    } catch (e: unknown) { setError((e as Error).message) } finally { submissionLock.release(); setSaving(false) }
   }
 
   const party = partyAccountId ? getPartyByAccountId(partyAccountId) : null

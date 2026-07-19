@@ -107,20 +107,38 @@ export function recomputeFiscalTrialAccounts(
   currentAssetsCategoryId?: string,
 ): Account[] {
   const fiscalStartKey = makeBsKey(fiscalStartBs)
-  const priorVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fiscalStartKey)
+  const [fiscalYearText, fiscalMonth, fiscalDay] = fiscalStartBs.split('-')
+  const previousFiscalStartBs = `${Number(fiscalYearText) - 1}-${fiscalMonth}-${fiscalDay}`
+  const previousFiscalStartKey = makeBsKey(previousFiscalStartBs)
+  const priorVouchers = vouchers.filter(voucher => {
+    const key = voucher.date_bs_key || makeBsKey(voucher.date_bs)
+    return key >= previousFiscalStartKey && key < fiscalStartKey
+  })
+  const vouchersBeforePreviousFiscal = vouchers.filter(voucher =>
+    (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < previousFiscalStartKey,
+  )
+  const vouchersBeforeFiscal = vouchers.filter(voucher =>
+    (voucher.date_bs_key || makeBsKey(voucher.date_bs)) < fiscalStartKey,
+  )
   const fiscalVouchers = vouchers.filter(voucher => (voucher.date_bs_key || makeBsKey(voucher.date_bs)) >= fiscalStartKey)
   const permanentBalances = recomputeAllBalances(accounts, vouchers)
   const nominalAccounts = accounts.map(account => account.type === 'Income' || account.type === 'Expense' ? { ...account, opening_balance: 0, balance: 0 } : account)
   const fiscalBalances = new Map(recomputeAllBalances(nominalAccounts, fiscalVouchers).map(account => [account.id, account]))
-  const priorBalances = recomputeAllBalances(accounts, priorVouchers)
+  // Retained Earnings represents only the immediately preceding fiscal year's
+  // result. Nominal master openings and activity from older fiscal years must
+  // never leak into this calculation.
+  const priorBalances = recomputeAllBalances(nominalAccounts, priorVouchers)
   const retainedSignedDebit = round2(priorBalances
     .filter(account => account.type === 'Income' || account.type === 'Expense')
     .reduce((sum, account) => sum + (normalSide(account.type) === 'debit' ? account.balance || 0 : -(account.balance || 0)), 0))
-  const openingStockValue = round2(recomputeStock(items, priorVouchers, valuationMethod)
+  const openingStockValue = round2(recomputeStock(items, vouchersBeforeFiscal, valuationMethod)
     .reduce((sum, entry) => sum + entry.value, 0))
-  // Inventory is valued outside voucher financial lines. Carrying it forward
-  // therefore needs both an asset and the matching prior-period P&L adjustment.
-  const retainedEarnings = round2(-retainedSignedDebit + openingStockValue)
+  const previousFiscalOpeningStockValue = round2(recomputeStock(items, vouchersBeforePreviousFiscal, valuationMethod)
+    .reduce((sum, entry) => sum + entry.value, 0))
+  // Stock masters are undated, so the same initial stock exists at both fiscal
+  // boundaries and cancels out. Only the previous fiscal year's change in
+  // inventory contributes to its profit or loss.
+  const retainedEarnings = round2(-retainedSignedDebit + openingStockValue - previousFiscalOpeningStockValue)
   const result = permanentBalances.map(account => account.type === 'Income' || account.type === 'Expense' ? fiscalBalances.get(account.id)! : account)
 
   const retainedAccountId = resolveSystemAccountId(accounts, companyId, 'retained_earnings')
@@ -143,6 +161,59 @@ export function recomputeFiscalTrialAccounts(
     category_id: currentAssetsCategoryId,
   })
   return result
+}
+
+/**
+ * Replays only ledgers touched by a mutation and merges them into the existing
+ * computed account cache. Voucher order and normal-side rules remain exactly
+ * the same as a full replay; unrelated ledgers are not rebuilt.
+ */
+export function recomputeAffectedBalances(
+  accounts: Account[],
+  currentAccounts: Account[],
+  vouchers: Voucher[],
+  affectedAccountIds: Iterable<string>,
+): Account[] {
+  const affected = new Set(affectedAccountIds)
+  const currentById = new Map(currentAccounts.map(account => [account.id, account]))
+  const recalculated = new Map(
+    recomputeAllBalances(accounts.filter(account => affected.has(account.id)), vouchers)
+      .map(account => [account.id, account]),
+  )
+
+  return accounts.map(account => {
+    const next = recalculated.get(account.id)
+    if (next) return next
+    const current = currentById.get(account.id)
+    return current ? { ...current, ...account, balance: current.balance } : { ...account, balance: account.opening_balance || 0 }
+  })
+}
+
+/** Apply the exact old/new voucher movement to the computed account cache. */
+export function applyVoucherBalanceDelta(
+  accounts: Account[],
+  previousVoucher?: Voucher,
+  nextVoucher?: Voucher,
+): Account[] {
+  const accountById = new Map(accounts.map(account => [account.id, account]))
+  const deltas = new Map<string, number>()
+  const collect = (voucher: Voucher | undefined, multiplier: number) => {
+    if (!voucher || voucher.cancelled) return
+    for (const line of voucher.lines || []) {
+      const account = accountById.get(line.account_id)
+      if (!account) continue
+      const movement = normalSide(account.type) === 'debit'
+        ? (line.debit || 0) - (line.credit || 0)
+        : (line.credit || 0) - (line.debit || 0)
+      deltas.set(account.id, round2((deltas.get(account.id) || 0) + multiplier * movement))
+    }
+  }
+  collect(previousVoucher, -1)
+  collect(nextVoucher, 1)
+  if (!deltas.size) return accounts
+  return accounts.map(account => deltas.has(account.id)
+    ? { ...account, balance: round2(account.balance + (deltas.get(account.id) || 0)) }
+    : account)
 }
 
 const roundQty = (n: number) => Math.round((Number(n) + Number.EPSILON) * 10_000) / 10_000
@@ -374,6 +445,36 @@ export function recomputeStock(items: Item[], vouchers: Voucher[], method: Inven
   return items.map(item => {
     const row = summary.get(item.id)
     return { id: item.id, name: item.name, unit: item.unit, qty: row?.closing_qty || 0, avg_cost: row?.closing_rate || 0, value: row?.closing_value || 0 }
+  })
+}
+
+/**
+ * Inventory costing remains a chronological replay (required for backdated
+ * FIFO/LIFO/weighted-average accuracy), but only for items touched by the
+ * mutation. Unrelated stock cache rows are preserved.
+ */
+export function recomputeAffectedStock(
+  items: Item[],
+  currentStock: StockEntry[],
+  vouchers: Voucher[],
+  affectedItemIds: Iterable<string>,
+  method: InventoryValuationMethod = 'weighted_average',
+): StockEntry[] {
+  const affected = new Set(affectedItemIds)
+  const currentById = new Map(currentStock.map(entry => [entry.id, entry]))
+  const relevantVouchers = vouchers.filter(voucher =>
+    (voucher.stock_lines || []).some(line => affected.has(line.item_id)),
+  )
+  const recalculated = new Map(
+    recomputeStock(items.filter(item => affected.has(item.id)), relevantVouchers, method)
+      .map(entry => [entry.id, entry]),
+  )
+
+  return items.map(item => {
+    const next = recalculated.get(item.id)
+    if (next) return next
+    const current = currentById.get(item.id)
+    return current ? { ...current, name: item.name, unit: item.unit } : { id: item.id, name: item.name, unit: item.unit, qty: 0, avg_cost: 0, value: 0 }
   })
 }
 

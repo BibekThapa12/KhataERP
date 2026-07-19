@@ -3,6 +3,44 @@
 -- voucher-settlement migrations. Safe to run repeatedly.
 begin;
 
+alter table public.vouchers add column if not exists idempotency_key uuid;
+create unique index if not exists vouchers_company_idempotency_unique
+  on public.vouchers(company_id, idempotency_key)
+  where idempotency_key is not null;
+
+create or replace function public.voucher_atomic_response(target_voucher_id uuid)
+returns jsonb
+language sql
+stable
+security invoker
+set search_path = public
+as $$
+  select to_jsonb(voucher) || jsonb_build_object(
+    'lines', coalesce((select jsonb_agg(jsonb_build_object(
+      'account_id', line.account_id, 'debit', line.debit, 'credit', line.credit
+    )) from public.voucher_lines line where line.voucher_id = voucher.id), '[]'::jsonb),
+    'stock_lines', coalesce((select jsonb_agg(jsonb_build_object(
+      'item_id', line.item_id, 'qty', line.qty, 'rate', line.rate,
+      'direction', line.direction, 'stock_condition', line.stock_condition,
+      'is_transfer', line.is_transfer
+    )) from public.stock_lines line where line.voucher_id = voucher.id), '[]'::jsonb),
+    'invoice_items', coalesce((select jsonb_agg(jsonb_build_object(
+      'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate,
+      'source_invoice_item_id', item.source_invoice_item_id,
+      'item_name', item.item_name, 'unit', item.unit, 'entry_unit', item.entry_unit,
+      'conversion_factor', item.conversion_factor, 'base_qty', item.base_qty,
+      'discount_amount', item.discount_amount, 'taxable_amount', item.taxable_amount,
+      'vat_amount', item.vat_amount, 'cost_rate', item.cost_rate
+    )) from public.invoice_items item where item.voucher_id = voucher.id), '[]'::jsonb),
+    'settlements', coalesce((select jsonb_agg(jsonb_build_object(
+      'invoice_voucher_id', settlement.invoice_voucher_id,
+      'party_account_id', settlement.party_account_id, 'amount', settlement.amount
+    )) from public.voucher_settlements settlement where settlement.settlement_voucher_id = voucher.id), '[]'::jsonb)
+  )
+  from public.vouchers voucher
+  where voucher.id = target_voucher_id;
+$$;
+
 create or replace function public.save_voucher_atomic(
   p_voucher jsonb,
   p_lines jsonb default '[]'::jsonb,
@@ -32,6 +70,12 @@ declare
   debit_total numeric(14,2);
   credit_total numeric(14,2);
   result jsonb;
+  requested_idempotency uuid;
+  posting_stage text := 'payload_validation';
+  original_message text;
+  original_detail text;
+  original_hint text;
+  original_state text;
 begin
   if p_voucher is null or jsonb_typeof(p_voucher) <> 'object' then
     raise exception 'Voucher payload must be an object';
@@ -55,8 +99,9 @@ begin
   if p_voucher_id is null then
     target_company := nullif(p_voucher->>'company_id', '')::uuid;
     target_type := nullif(p_voucher->>'type', '');
+    requested_idempotency := nullif(p_voucher->>'idempotency_key', '')::uuid;
   else
-    select * into saved from public.vouchers where id = p_voucher_id for update;
+    select * into saved from public.vouchers where id = p_voucher_id;
     if not found then raise exception 'Voucher not found'; end if;
     target_company := saved.company_id;
     target_type := saved.type;
@@ -102,14 +147,27 @@ begin
     where item.id is null
   ) then raise exception 'Every voucher item must belong to the voucher company'; end if;
 
+  -- Every posting for one company uses the same short transaction-scoped lock.
+  -- This protects numbering, idempotency, and the stock availability check
+  -- without blocking writes for other tenants.
+  posting_stage := 'company_write_lock';
+  perform pg_advisory_xact_lock(hashtextextended(target_company::text, 0));
+
   if p_voucher_id is null then
     if target_type is null or p_invoice_prefix is null then
       raise exception 'Voucher type and numbering prefix are required';
     end if;
 
-    -- Serializes numbering only within this company. The lock is released on
-    -- commit/rollback, so concurrent companies remain independent.
-    perform pg_advisory_xact_lock(hashtextextended(target_company::text, 0));
+    if requested_idempotency is not null then
+      select * into saved from public.vouchers voucher
+      where voucher.company_id = target_company
+        and voucher.idempotency_key = requested_idempotency;
+      if found then
+        return public.voucher_atomic_response(saved.id);
+      end if;
+    end if;
+
+    posting_stage := 'voucher_number_generation';
     select coalesce(max(voucher.seq), 0) + 1 into next_seq
     from public.vouchers voucher where voucher.company_id = target_company;
 
@@ -121,18 +179,18 @@ begin
       and substring(voucher.invoice_no from '([0-9]+)$') is not null
       and (
         not p_reset_numbering
-        or (p_period_start_key is not null and p_next_period_start_key is not null
-          and voucher.date_bs_key >= p_period_start_key
-          and voucher.date_bs_key < p_next_period_start_key)
+        or voucher.numbering_period = coalesce(nullif(p_voucher->>'numbering_period', ''), 'all')
       );
     generated_number := p_invoice_prefix || lpad((highest_number + 1)::text, 4, '0');
 
+    posting_stage := 'voucher_header_insert';
     insert into public.vouchers (
       company_id, type, date, date_ad, date_bs, date_bs_key, invoice_no,
       numbering_period, credit_days, due_date_ad, due_date_bs, due_date_bs_key,
       narration, original_voucher_id, return_reason, settlement_mode,
       settlement_account_id, restock_items, party_account_id, is_cash,
-      subtotal, discount, vat_rate, vat_amount, total, cancelled, seq
+      subtotal, discount, vat_rate, vat_amount, total, cancelled, seq,
+      idempotency_key
     ) values (
       target_company, target_type,
       (p_voucher->>'date')::date, (p_voucher->>'date_ad')::date,
@@ -147,9 +205,14 @@ begin
       coalesce((p_voucher->>'is_cash')::boolean, false), nullif(p_voucher->>'subtotal', '')::numeric,
       nullif(p_voucher->>'discount', '')::numeric, nullif(p_voucher->>'vat_rate', '')::numeric,
       nullif(p_voucher->>'vat_amount', '')::numeric, coalesce((p_voucher->>'total')::numeric, 0),
-      coalesce((p_voucher->>'cancelled')::boolean, false), next_seq
+      coalesce((p_voucher->>'cancelled')::boolean, false), next_seq,
+      requested_idempotency
     ) returning * into saved;
   else
+    posting_stage := 'voucher_header_lock';
+    select * into saved from public.vouchers where id = p_voucher_id for update;
+    if not found or saved.company_id is distinct from target_company then raise exception 'Voucher not found'; end if;
+    posting_stage := 'voucher_header_update';
     update public.vouchers voucher set
       date = case when p_voucher ? 'date' then (p_voucher->>'date')::date else voucher.date end,
       date_ad = case when p_voucher ? 'date_ad' then (p_voucher->>'date_ad')::date else voucher.date_ad end,
@@ -177,23 +240,53 @@ begin
     where voucher.id = p_voucher_id and voucher.company_id = target_company
     returning * into saved;
 
+    posting_stage := 'existing_children_replace';
     delete from public.voucher_settlements where settlement_voucher_id = saved.id;
     delete from public.invoice_items where voucher_id = saved.id;
     delete from public.stock_lines where voucher_id = saved.id;
     delete from public.voucher_lines where voucher_id = saved.id;
   end if;
 
+  posting_stage := 'voucher_lines_insert';
   insert into public.voucher_lines (voucher_id, account_id, debit, credit)
   select saved.id, line.account_id, coalesce(line.debit, 0), coalesce(line.credit, 0)
   from jsonb_to_recordset(coalesce(p_lines, '[]'::jsonb))
     as line(account_id text, debit numeric, credit numeric);
 
+  posting_stage := 'stock_movements_insert';
   insert into public.stock_lines (voucher_id, item_id, qty, rate, direction, stock_condition, is_transfer)
   select saved.id, line.item_id, line.qty, line.rate, line.direction,
          coalesce(line.stock_condition, 'saleable'), coalesce(line.is_transfer, false)
   from jsonb_to_recordset(coalesce(p_stock_lines, '[]'::jsonb))
     as line(item_id uuid, qty numeric, rate numeric, direction text, stock_condition text, is_transfer boolean);
 
+  posting_stage := 'stock_validation';
+  if exists (
+    with affected as (
+      select distinct line.item_id, coalesce(line.stock_condition, 'saleable') as stock_condition
+      from jsonb_to_recordset(coalesce(p_stock_lines, '[]'::jsonb))
+        as line(item_id uuid, stock_condition text)
+    )
+    select 1
+    from affected
+    join public.items item on item.id = affected.item_id and item.company_id = target_company
+    left join public.stock_lines stock_line
+      on stock_line.item_id = affected.item_id
+     and coalesce(stock_line.stock_condition, 'saleable') = affected.stock_condition
+    left join public.vouchers voucher
+      on voucher.id = stock_line.voucher_id
+     and voucher.company_id = target_company
+     and not voucher.cancelled
+    group by affected.item_id, affected.stock_condition, item.opening_qty
+    having (case when affected.stock_condition = 'saleable' then coalesce(item.opening_qty, 0) else 0 end)
+      + coalesce(sum(case when voucher.id is not null and stock_line.direction = 'in' then stock_line.qty
+                          when voucher.id is not null and stock_line.direction = 'out' then -stock_line.qty
+                          else 0 end), 0) < -0.0001
+  ) then
+    raise exception 'Insufficient stock for this transaction';
+  end if;
+
+  posting_stage := 'invoice_items_insert';
   insert into public.invoice_items (
     voucher_id, item_id, qty, rate, source_invoice_item_id, item_name, unit,
     entry_unit, conversion_factor, base_qty, discount_amount, taxable_amount,
@@ -209,6 +302,7 @@ begin
     vat_amount numeric, cost_rate numeric
   );
 
+  posting_stage := 'settlements_insert';
   insert into public.voucher_settlements (
     company_id, settlement_voucher_id, invoice_voucher_id, party_account_id, amount
   )
@@ -217,6 +311,7 @@ begin
   from jsonb_to_recordset(coalesce(p_settlements, '[]'::jsonb))
     as settlement(invoice_voucher_id uuid, party_account_id text, amount numeric);
 
+  posting_stage := 'audit_event_insert';
   insert into public.app_events (company_id, user_id, event_type, metadata)
   values (
     target_company, auth.uid(),
@@ -229,18 +324,27 @@ begin
     )
   );
 
-  select to_jsonb(saved) || jsonb_build_object(
-    'lines', coalesce((select jsonb_agg(to_jsonb(line)) from public.voucher_lines line where line.voucher_id = saved.id), '[]'::jsonb),
-    'stock_lines', coalesce((select jsonb_agg(to_jsonb(line)) from public.stock_lines line where line.voucher_id = saved.id), '[]'::jsonb),
-    'invoice_items', coalesce((select jsonb_agg(to_jsonb(item)) from public.invoice_items item where item.voucher_id = saved.id), '[]'::jsonb),
-    'settlements', coalesce((select jsonb_agg(to_jsonb(settlement)) from public.voucher_settlements settlement where settlement.settlement_voucher_id = saved.id), '[]'::jsonb)
-  ) into result;
+  posting_stage := 'response_build';
+  result := public.voucher_atomic_response(saved.id);
   return result;
+exception when others then
+  get stacked diagnostics
+    original_message = message_text,
+    original_detail = pg_exception_detail,
+    original_hint = pg_exception_hint,
+    original_state = returned_sqlstate;
+  raise using
+    message = original_message,
+    detail = concat_ws('; ', nullif(original_detail, ''), 'save_voucher_atomic stage=' || posting_stage),
+    hint = coalesce(original_hint, ''),
+    errcode = original_state;
 end;
 $$;
 
 revoke all on function public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb) from public;
 grant execute on function public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb) to authenticated;
+revoke all on function public.voucher_atomic_response(uuid) from public;
+grant execute on function public.voucher_atomic_response(uuid) to authenticated;
 
 commit;
 notify pgrst, 'reload schema';

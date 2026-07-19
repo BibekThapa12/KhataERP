@@ -19,6 +19,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
+import { SubmissionLock } from '@/lib/submissionLock'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
@@ -48,6 +49,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const [vatApplicable, setVatApplicable] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const submissionLock = useRef(new SubmissionLock()).current
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
@@ -62,6 +64,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
     if (unitError) { setError(unitError); return }
     if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
     const factor = openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
+    if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
       const item = await addItem({ name: name.trim(), unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: toBaseQty(openingQty, factor), opening_rate: toBaseRate(openingRate, factor), reorder_level: reorderLevel ? Number(reorderLevel) : undefined, category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable })
@@ -69,7 +72,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
       onClose()
     } catch (e: unknown) {
       setError((e as Error).message)
-    } finally { setSaving(false) }
+    } finally { submissionLock.release(); setSaving(false) }
   }
 
   return (
@@ -154,6 +157,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const submissionLock = useRef(new SubmissionLock()).current
 
   useEffect(() => {
     if (open && voucher) {
@@ -191,6 +195,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
     if (validAllocations.some(allocation => round2(allocation.invoice_allocations.reduce((sum, row) => sum + row.amount, 0)) > allocation.amount)) { setError('Invoice allocations cannot exceed the ledger amount.'); return }
+    if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
       if (isReceipt) {
@@ -212,7 +217,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       }
     } catch (e: unknown) {
       setError((e as Error).message)
-    } finally { setSaving(false) }
+    } finally { submissionLock.release(); setSaving(false) }
   }
 
   return (
@@ -294,6 +299,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const submissionLock = useRef(new SubmissionLock()).current
 
   useEffect(() => {
     if (open && voucher) {
@@ -330,6 +336,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     const validLines = jLines.filter(l => l.account_id && (l.debit > 0 || l.credit > 0))
     if (validLines.length < 2) { setError('Add at least two lines.'); return }
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
+    if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
       const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs }
@@ -346,7 +353,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       }
     } catch (e: unknown) {
       setError((e as Error).message)
-    } finally { setSaving(false) }
+    } finally { submissionLock.release(); setSaving(false) }
   }
 
   return (

@@ -345,14 +345,16 @@ export async function fetchCompanyModules(company_id?:string): Promise<CompanyMo
 export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_id:string;module_id:string}) {
   const {data:old}=await supabase.from('company_modules').select('*').eq('company_id',value.company_id).eq('module_id',value.module_id).maybeSingle()
   const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('company_modules').upsert({...value,enabled_by:user?.id,updated_at:new Date().toISOString()},{onConflict:'company_id,module_id'}).select('*,module:modules(*)').single(); if(error) throw error
-  const actions:string[]=[]
-  if(!old||old.is_enabled!==data.is_enabled)actions.push(data.is_enabled?'module_enabled':'module_disabled')
-  if(old&&old.status!==data.status)actions.push('module_status_changed')
-  if(old&&old.payment_status!==data.payment_status)actions.push('module_payment_status_changed')
-  if(old&&(old.starts_at!==data.starts_at||old.expires_at!==data.expires_at))actions.push('module_dates_changed')
-  if(old&&Number(old.price)!==Number(data.price))actions.push('module_price_changed')
-  if(old&&JSON.stringify(old.settings)!==JSON.stringify(data.settings))actions.push('module_settings_changed')
-  await logChequeEvents(value.company_id, (actions.length ? actions : ['module_updated']).map(action => ({ action, old_values: old || {}, new_values: data })))
+  const changedFields:string[]=[]
+  if(!old||old.is_enabled!==data.is_enabled)changedFields.push('is_enabled')
+  if(!old||old.status!==data.status)changedFields.push('status')
+  if(!old||old.payment_status!==data.payment_status)changedFields.push('payment_status')
+  if(!old||old.starts_at!==data.starts_at||old.expires_at!==data.expires_at)changedFields.push('dates')
+  if(!old||Number(old.price)!==Number(data.price))changedFields.push('price')
+  if(!old||JSON.stringify(old.settings)!==JSON.stringify(data.settings))changedFields.push('settings')
+  const snapshot=(entry:CompanyModule|null)=>entry?{is_enabled:entry.is_enabled,status:entry.status,billing_type:entry.billing_type,price:entry.price,payment_status:entry.payment_status,starts_at:entry.starts_at,expires_at:entry.expires_at}:{}
+  const action=!old||old.is_enabled!==data.is_enabled?(data.is_enabled?'module_enabled':'module_disabled'):'module_updated'
+  await logChequeEvent(value.company_id,action,undefined,undefined,snapshot(old as CompanyModule|null),{...snapshot(data as CompanyModule),changed_fields:changedFields})
   return data as CompanyModule
 }
 export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
@@ -627,6 +629,23 @@ export interface AtomicVoucherAudit {
   metadata?: Record<string, unknown>
 }
 
+const voucherIdempotencyKeys = new Map<string, string>()
+
+function voucherRequestFingerprint(
+  voucher: InsertVoucherPayload['voucher'],
+  lines: UpdateVoucherPayload['lines'],
+  stockLines?: UpdateVoucherPayload['stock_lines'],
+  invoiceItems?: UpdateVoucherPayload['invoice_items'],
+  settlements?: UpdateVoucherPayload['settlements'],
+) {
+  const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration].join('|')
+  const ledger = lines.map(line => `${line.account_id}:${line.debit}:${line.credit}`).join(',')
+  const stock = (stockLines || []).map(line => `${line.item_id}:${line.direction}:${line.qty}:${line.rate}:${line.stock_condition || 'saleable'}`).join(',')
+  const items = (invoiceItems || []).map(item => `${item.item_id}:${item.qty}:${item.rate}:${item.source_invoice_item_id || ''}`).join(',')
+  const allocations = (settlements || []).map(row => `${row.invoice_voucher_id}:${row.party_account_id}:${row.amount}`).join(',')
+  return `${header}|${ledger}|${stock}|${items}|${allocations}`
+}
+
 function atomicVoucherRequest(
   voucher: InsertVoucherPayload['voucher'] | UpdateVoucherPayload['voucher'],
   lines: UpdateVoucherPayload['lines'],
@@ -636,9 +655,10 @@ function atomicVoucherRequest(
   id: string | null,
   numbering?: AtomicVoucherNumbering,
   audit?: AtomicVoucherAudit,
+  idempotencyKey?: string,
 ) {
   return supabase.rpc('save_voucher_atomic', {
-    p_voucher: voucher,
+    p_voucher: idempotencyKey ? { ...voucher, idempotency_key: idempotencyKey } : voucher,
     p_lines: lines,
     p_stock_lines: stockLines || [],
     p_invoice_items: invoiceItems || [],
@@ -654,11 +674,22 @@ function atomicVoucherRequest(
 }
 
 export async function insertVoucher({ voucher, lines, stock_lines, invoice_items, settlements, numbering, audit, trace }: InsertVoucherPayload): Promise<Voucher> {
-  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit)
+  // Keep one key for every attempt/retry of this request. The database returns
+  // the original result if the request reached it but the response was lost.
+  const fingerprint = voucherRequestFingerprint(voucher, lines, stock_lines, invoice_items, settlements)
+  const idempotencyKey = voucherIdempotencyKeys.get(fingerprint) || crypto.randomUUID()
+  voucherIdempotencyKeys.set(fingerprint, idempotencyKey)
+  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit, idempotencyKey)
   const { data, error } = trace
     ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_atomic' })
     : await request()
-  if (error) throw error
+  if (error) {
+      globalThis.setTimeout(() => {
+      if (voucherIdempotencyKeys.get(fingerprint) === idempotencyKey) voucherIdempotencyKeys.delete(fingerprint)
+    }, 5 * 60 * 1000)
+    throw error
+  }
+  voucherIdempotencyKeys.delete(fingerprint)
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 

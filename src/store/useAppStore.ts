@@ -11,7 +11,7 @@ import {
   fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
 } from '@/lib/supabase'
 import {
-  defaultChartOfAccounts, recomputeAllBalances, recomputeStock,
+  applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
   buildReturnVoucherData, resolveSystemAccountId, round2, stockConditionQuantity, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
 } from '@/lib/engine'
@@ -144,6 +144,26 @@ function voucherDateFields(date_bs: string) {
 
 function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
   return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
+}
+
+function affectedItemIds(...vouchers: Array<Voucher | undefined>) {
+  return new Set(vouchers.flatMap(voucher => [
+    ...(voucher?.stock_lines || []).map(line => line.item_id),
+    ...(voucher?.invoice_items || []).map(item => item.item_id),
+  ]))
+}
+
+function recomputeVoucherEffects(
+  state: Pick<AppState, 'accounts' | 'items' | 'stock'>,
+  vouchers: Voucher[],
+  company: Company,
+  previousVoucher: Voucher | undefined,
+  nextVoucher: Voucher,
+) {
+  return {
+    accounts: applyVoucherBalanceDelta(state.accounts, previousVoucher, nextVoucher),
+    stock: recomputeAffectedStock(state.items, state.stock, vouchers, affectedItemIds(previousVoucher, nextVoucher), valuationMethod(company)),
+  }
 }
 
 function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: StockEntry[], isSales: boolean) {
@@ -479,7 +499,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // ─── Masters ────────────────────────────────────────────────────────────────
   addParty: async ({ name, type, phone, pan_vat, address, default_credit_days = 0, opening_balance = 0 }) => {
-    const { company, rawAccounts, items, vouchers } = get()
+    const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
     const accountId = crypto.randomUUID()
@@ -502,9 +522,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     await trace.measure('party_ledger_insert', () => insertAccount(newAccount), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
     const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
-    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
+    const nextState = trace.sync('affected_ledger_recompute', () => {
       const updatedRawAccounts = [...rawAccounts, { ...newAccount, balance: 0 }]
-      return { rawAccounts: updatedRawAccounts, accounts: recomputeAllBalances(updatedRawAccounts, vouchers), stock: recomputeStock(items, vouchers, valuationMethod(company)), parties: [...get().parties, newParty] }
+      return { rawAccounts: updatedRawAccounts, accounts: recomputeAffectedBalances(updatedRawAccounts, get().accounts, vouchers, [accountId]), parties: [...get().parties, newParty] }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newParty
@@ -524,7 +544,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
     const nextState = trace.sync('client_stock_recompute', () => {
       const items = [...get().items, newItem]
-      return { items, stock: recomputeStock(items, get().vouchers, valuationMethod(company)) }
+      return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newItem
@@ -541,7 +561,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
     const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
-    const accounts = recomputeAllBalances(updatedRaw, vouchers)
+    const accounts = recomputeAffectedBalances(updatedRaw, get().accounts, vouchers, [newAcc.id])
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })
     return { ...newAcc, balance: 0 }
     })
@@ -578,7 +598,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await updateAccountCategory(id, updates)
     const accountCategories = get().accountCategories.map(category => category.id === id ? { ...category, ...updates } : category)
     const rawAccounts = get().rawAccounts.map(account => account.category_id === id && updates.name ? { ...account, group: updates.name } : account)
-    set({ accountCategories, rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers) })
+    set({ accountCategories, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, []) })
     logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(console.warn)
   },
 
@@ -636,7 +656,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await trace.measure('account_update', () => updateAccount(id, effectiveUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
     const newParty = partyType && !existingParty ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: effectiveUpdates.name || existing.name, type: partyType, account_id: id, is_archived: !!effectiveUpdates.is_archived }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const rawAccounts = get().rawAccounts.map(account => account.id === id ? { ...account, ...effectiveUpdates } : account)
-    set({ rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers), parties: newParty ? [...get().parties, newParty] : get().parties })
+    set({ rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [id]), parties: newParty ? [...get().parties, newParty] : get().parties })
     logMasterChange(company.id, 'account', id, effectiveUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, effectiveUpdates as Record<string, unknown>).catch(console.warn)
     })
   },
@@ -652,7 +672,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const rawAccounts = get().rawAccounts.filter(account => account.id !== id)
     set({
       rawAccounts,
-      accounts: recomputeAllBalances(rawAccounts, get().vouchers),
+      accounts: get().accounts.filter(account => account.id !== id),
       parties: get().parties.filter(party => party.account_id !== id),
     })
     logMasterChange(company.id, 'account', id, 'delete', existing, {}).catch(console.warn)
@@ -674,7 +694,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     await trace.measure('party_ledger_update', () => updateAccount(party.account_id, accountUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
     const parties = get().parties.map(item => item.id === id ? { ...item, ...updates } : item)
     const rawAccounts = get().rawAccounts.map(account => account.id === party.account_id ? { ...account, ...accountUpdates } : account)
-    set({ parties, rawAccounts, accounts: recomputeAllBalances(rawAccounts, get().vouchers) })
+    set({ parties, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [party.account_id]) })
     logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(console.warn)
     })
   },
@@ -699,7 +719,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     await trace.measure('item_update', () => updateItem(id, normalizedUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:items.update' })
     const items = get().items.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
-    set({ items, stock: recomputeStock(items, get().vouchers, valuationMethod(company)) })
+    set({ items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [id], valuationMethod(company)) })
     logMasterChange(company.id, 'item', id, normalizedUpdates.is_archived !== undefined ? 'archive_status' : 'update', existing, normalizedUpdates as Record<string, unknown>).catch(console.warn)
     })
   },
@@ -727,7 +747,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_and_stock_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+      return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -754,7 +774,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_and_stock_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+      return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -782,7 +802,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     return newVoucher
@@ -811,7 +831,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -835,7 +855,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers) }
+      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -875,7 +895,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_balance_and_stock_recompute', () => {
       const nextVouchers = [newVoucher, ...vouchers]
-      return { vouchers: nextVouchers, accounts: recomputeAllBalances(get().rawAccounts, nextVouchers), stock: recomputeStock(get().items, nextVouchers, valuationMethod(company)) }
+      return { vouchers: nextVouchers, ...recomputeVoucherEffects(get(), nextVouchers, company, undefined, newVoucher) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -903,8 +923,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
+    const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
     set({ vouchers, accounts, stock })
     })
   },
@@ -929,8 +948,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(company))
+    const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
     set({ vouchers, accounts, stock })
     })
   },
@@ -954,7 +972,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
     })
   },
@@ -988,7 +1006,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const nextState = trace.sync('client_stock_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, stock: recomputeStock(get().items, vouchers, valuationMethod(company)) }
+      return { vouchers, stock: recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(newVoucher), valuationMethod(company)) }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     })
@@ -1013,7 +1031,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
     })
   },
@@ -1034,7 +1052,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
+    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
     })
   },
@@ -1068,7 +1086,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    set({ vouchers, accounts: recomputeAllBalances(get().rawAccounts, vouchers), stock: recomputeStock(get().items, vouchers, valuationMethod(company)) })
+    set({ vouchers, ...recomputeVoucherEffects(get(), vouchers, company, existing, updated) })
     })
   },
 
@@ -1078,9 +1096,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'cancel_voucher', companyId: company.id, recordType: 'Voucher', lineItems: 0 }, async trace => {
     await cancelVoucher(id, trace)
-    const vouchers = get().vouchers.map(v => v.id === id ? { ...v, cancelled: true } : v)
-    const accounts = recomputeAllBalances(get().rawAccounts, vouchers)
-    const stock = recomputeStock(get().items, vouchers, valuationMethod(get().company))
+    const existing = get().vouchers.find(voucher => voucher.id === id)
+    const cancelled = existing ? { ...existing, cancelled: true } : undefined
+    const vouchers = get().vouchers.map(v => v.id === id ? cancelled! : v)
+    const accounts = applyVoucherBalanceDelta(get().accounts, existing, cancelled)
+    const stock = recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(existing), valuationMethod(company))
     set({ vouchers, accounts, stock })
     })
   },
