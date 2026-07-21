@@ -29,7 +29,22 @@ export function sanitizeForLogging(value: unknown, depth = 0): unknown {
 }
 
 export function safeErrorMessage(error: unknown): string {
-  return redactSensitiveText(error instanceof Error ? error.message : String(error))
+  if (error instanceof Error) return redactSensitiveText(error.message)
+  if (typeof error === 'string') return redactSensitiveText(error)
+  if (error && typeof error === 'object') {
+    const record = error as Record<string, unknown>
+    const candidate = record.message ?? record.error_description ?? record.error ?? record.details
+    if (typeof candidate === 'string' && candidate.trim()) return redactSensitiveText(candidate)
+    if (typeof record.code === 'string' && record.code.trim()) return `Request failed with code ${redactSensitiveText(record.code)}`
+    return 'Request failed with a structured error response.'
+  }
+  return redactSensitiveText(String(error))
+}
+
+export function safeErrorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== 'object') return undefined
+  const code = (error as Record<string, unknown>).code
+  return typeof code === 'string' && /^[A-Za-z0-9_.-]{1,80}$/.test(code) ? code : undefined
 }
 
 export interface ClientErrorReport {

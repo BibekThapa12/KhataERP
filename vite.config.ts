@@ -25,6 +25,9 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [react()],
     resolve: {
+      // UI libraries must share the application's React dispatcher. This also
+      // protects development hot reload from loading a second React runtime.
+      dedupe: ['react', 'react-dom'],
       alias: {
         '@': path.resolve(__dirname, './src'),
       },

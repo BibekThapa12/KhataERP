@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import type { WritePerformanceTrace } from '@/lib/writePerformance'
-import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, sanitizeForLogging } from '@/lib/security'
+import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
 
 function requiredPublicEnvironment(name: string, value: string | undefined) {
   if (!value || value.startsWith('your-') || value.includes('your-project-id')) {
@@ -197,10 +197,12 @@ export async function logAppEvent(event_type: string, company_id?: string | null
 }
 
 export function logAppError(company_id: string | undefined | null, error: unknown, context: Record<string, unknown> = {}) {
-  const message = redactSensitiveText(error instanceof Error ? error.message : String(error))
+  const message = safeErrorMessage(error)
+  const code = safeErrorCode(error)
   const stack = error instanceof Error && error.stack ? redactSensitiveText(error.stack) : undefined
   logAppEvent('frontend_error', company_id, {
     message,
+    code,
     stack,
     path: typeof window !== 'undefined' ? window.location.pathname : undefined,
     ...(sanitizeForLogging(context) as Record<string, unknown>),
@@ -459,6 +461,14 @@ export async function updateDeveloperCompany(id: string, updates: Partial<Compan
 export async function deleteDeveloperCompany(id: string) {
   const { error } = await supabase.from('companies').delete().eq('id', id)
   if (error) throw error
+}
+
+export async function clearDeveloperErrorLogs(companyId?: string): Promise<number> {
+  const { data, error } = await supabase.rpc('clear_frontend_error_logs', {
+    target_company_id: companyId || null,
+  })
+  if (error) throw error
+  return Number(data || 0)
 }
 
 export async function fetchModuleCatalogue(): Promise<AppModule[]> {

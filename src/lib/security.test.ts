@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { auditFieldMarkers, backupFileValidationError, isSafePublicImageUrl, publicAuthErrorMessage, publicErrorMessage, redactSensitiveText, safeErrorMessage, sanitizeForLogging } from './security'
+import { auditFieldMarkers, backupFileValidationError, isSafePublicImageUrl, publicAuthErrorMessage, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from './security'
 
 describe('secret-safe logging', () => {
   it('redacts credential-shaped text and sensitive object fields', () => {
@@ -12,6 +12,17 @@ describe('secret-safe logging', () => {
   it('redacts credential URLs and error messages', () => {
     expect(redactSensitiveText('postgresql://user:pass@example.test/db')).toBe('postgresql://[REDACTED]')
     expect(safeErrorMessage(new Error('password=hunter2'))).toBe('password=[REDACTED]')
+  })
+
+  it('extracts useful details from structured database errors', () => {
+    const error = { code: '42703', message: `record "old" has no field "voucher_id"` }
+    expect(safeErrorMessage(error)).toBe(`record "old" has no field "voucher_id"`)
+    expect(safeErrorCode(error)).toBe('42703')
+  })
+
+  it('does not serialize arbitrary structured errors as object text', () => {
+    expect(safeErrorMessage({ unexpected: true })).toBe('Request failed with a structured error response.')
+    expect(safeErrorCode({ code: 'unsafe code with spaces' })).toBeUndefined()
   })
 
   it('retains only changed field names in audit snapshots', () => {

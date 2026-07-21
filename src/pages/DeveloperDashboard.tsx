@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Activity, AlertTriangle, Building2, Database, ShieldCheck, Users } from 'lucide-react'
+import { Activity, AlertTriangle, Building2, Database, ShieldCheck, Trash2, Users } from 'lucide-react'
 import {
   checkSupabaseConnectionStatus,
+  clearDeveloperErrorLogs,
   deleteDeveloperCompany,
   fetchDeveloperDashboardData,
   fetchDeveloperSchemaStatus,
@@ -249,6 +250,7 @@ export function DeveloperDashboard() {
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [lastSync, setLastSync] = useState('')
+  const [clearingErrors, setClearingErrors] = useState(false)
   const [supabaseStatus, setSupabaseStatus] = useState<SupabaseStatus | null>(null)
   const [schemaStatus, setSchemaStatus] = useState<{
     available: boolean
@@ -277,6 +279,23 @@ export function DeveloperDashboard() {
   }
 
   useEffect(() => { load() }, [])
+
+  const clearErrors = async () => {
+    if (!window.confirm('Clear all recorded frontend errors? Other audit and activity events will be preserved.')) return
+    setClearingErrors(true)
+    try {
+      const count = await clearDeveloperErrorLogs()
+      setData(current => current ? {
+        ...current,
+        events: current.events.filter(event => event.event_type !== 'frontend_error'),
+      } : current)
+      notifySuccess('Error log cleared', `${count} error record${count === 1 ? '' : 's'} removed`)
+    } catch (clearError) {
+      publicErrorMessage(clearError, 'clearing error logs')
+    } finally {
+      setClearingErrors(false)
+    }
+  }
 
   const metrics = useMemo(() => {
     const companies = data?.companies || []
@@ -448,7 +467,13 @@ export function DeveloperDashboard() {
           </Card>
 
           <Card>
-            <CardHeader><CardTitle className="text-base">Error Log</CardTitle></CardHeader>
+            <CardHeader className="flex-row items-center justify-between gap-3">
+              <CardTitle className="text-base">Error Log</CardTitle>
+              <Button size="sm" variant="outline" onClick={clearErrors} disabled={!errorEvents.length || clearingErrors}>
+                <Trash2 className="mr-1 h-3.5 w-3.5" />
+                {clearingErrors ? 'Clearing…' : 'Clear errors'}
+              </Button>
+            </CardHeader>
             <CardContent className="space-y-2">
               {errorEvents.slice(0, 8).map(event => {
                 const company = companies.find(c => c.id === event.company_id)
