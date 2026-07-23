@@ -162,7 +162,8 @@ create table if not exists companies (
   payment_prefix   text not null default 'PAY-',
   sales_return_prefix text not null default 'SR-',
   purchase_return_prefix text not null default 'PR-',
-  reset_numbering_fiscal_year boolean not null default false,
+  journal_numbering_mode text not null default 'auto' check (journal_numbering_mode in ('auto','manual')),
+  reset_numbering_fiscal_year boolean not null default true,
   print_format     text not null default 'A5' check (print_format in ('A5','A4')),
   invoice_terms    text,
   payment_qr_text  text,
@@ -173,6 +174,7 @@ create table if not exists companies (
   developer_notes  text,
   suspended        boolean not null default false,
   fiscal_year_start date not null default '2026-07-17',
+  fiscal_year_configured boolean not null default false,
   created_at       timestamptz not null default now()
 );
 
@@ -188,7 +190,14 @@ alter table companies add column if not exists receipt_prefix text not null defa
 alter table companies add column if not exists payment_prefix text not null default 'PAY-';
 alter table companies add column if not exists sales_return_prefix text not null default 'SR-';
 alter table companies add column if not exists purchase_return_prefix text not null default 'PR-';
-alter table companies add column if not exists reset_numbering_fiscal_year boolean not null default false;
+alter table companies add column if not exists journal_numbering_mode text not null default 'auto';
+alter table companies drop constraint if exists companies_journal_numbering_mode_check;
+alter table companies add constraint companies_journal_numbering_mode_check check (journal_numbering_mode in ('auto','manual'));
+alter table companies add column if not exists reset_numbering_fiscal_year boolean not null default true;
+alter table companies alter column reset_numbering_fiscal_year set default true;
+update companies set reset_numbering_fiscal_year = true where not reset_numbering_fiscal_year;
+alter table companies drop constraint if exists companies_fiscal_numbering_required;
+alter table companies add constraint companies_fiscal_numbering_required check (reset_numbering_fiscal_year);
 alter table companies add column if not exists print_format text not null default 'A5';
 alter table companies add column if not exists invoice_terms text;
 alter table companies add column if not exists payment_qr_text text;
@@ -198,10 +207,11 @@ alter table companies add column if not exists trial_ends_at date;
 alter table companies add column if not exists support_status text not null default 'normal';
 alter table companies add column if not exists developer_notes text;
 alter table companies add column if not exists suspended boolean not null default false;
+alter table companies add column if not exists fiscal_year_configured boolean not null default false;
 alter table companies alter column fiscal_year_start set default '2026-07-17';
 update companies
 set fiscal_year_start = '2026-07-17'
-where fiscal_year_start is null or fiscal_year_start = '2026-04-01';
+where fiscal_year_start is null;
 
 -- ── App Events (feature adoption / diagnostics) ───────────────────────────────
 create table if not exists app_events (
@@ -342,6 +352,7 @@ create table if not exists vouchers (
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
+  supplier_invoice_no text,
   numbering_period text not null default 'all',
   credit_days      integer,
   due_date_ad      date,
@@ -380,6 +391,9 @@ end $$;
 -- Old rows may keep date_bs/date_bs_key null until re-saved/imported; the app
 -- normalizes them from the legacy AD date while displaying.
 alter table vouchers add column if not exists date_ad date;
+alter table vouchers add column if not exists supplier_invoice_no text;
+alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
+alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
 alter table vouchers add column if not exists date_bs text;
 alter table vouchers add column if not exists date_bs_key integer;
 alter table vouchers add column if not exists original_voucher_id uuid references vouchers(id) on delete restrict;

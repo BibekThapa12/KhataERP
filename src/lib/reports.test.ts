@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, getLedgerRows, groupReportAccounts, vouchersInFiscalYear } from '@/lib/reports'
-import type { Account, AccountCategory, AccountType, Voucher, VoucherLine, VoucherType } from '@/types'
+import { buildAccountReportTree, computeCashFlow, computeDetailedProfitLoss, fiscalYearOptions, getLedgerRows, groupReportAccounts, vouchersInFiscalYear } from '@/lib/reports'
+import { bsToAd } from '@/lib/nepaliDate'
+import type { Account, AccountCategory, AccountType, Company, Voucher, VoucherLine, VoucherType } from '@/types'
 
 const account = (id: string, name: string, type: AccountType, group: string, balance: number, category_id = group) => ({
   id, name, type, group, balance, category_id, company_id: 'company', is_system: false, is_party: group.startsWith('Sundry'), opening_balance: 0,
@@ -11,6 +12,22 @@ const datedVoucher = (id: string, date_bs: string) => ({
 }) as Voucher
 
 describe('fiscal-year voucher filtering', () => {
+  it('offers only financial years from the company books start through the current year', () => {
+    const company = { id: 'company', fiscal_year_start: bsToAd('2082-04-01') } as Company
+    expect(fiscalYearOptions(company)).toEqual([
+      { value: '2083', label: '83/84' },
+      { value: '2082', label: '82/83' },
+    ])
+  })
+
+  it('includes an earlier year when legacy transactions predate the configured company year', () => {
+    const company = { id: 'company', fiscal_year_start: bsToAd('2083-04-01') } as Company
+    expect(fiscalYearOptions(company, [datedVoucher('legacy', '2082-05-10')])).toEqual([
+      { value: '2083', label: '83/84' },
+      { value: '2082', label: '82/83' },
+    ])
+  })
+
   it('includes both fiscal boundaries correctly and excludes adjacent years', () => {
     const rows = vouchersInFiscalYear([
       datedVoucher('previous', '2083-03-31'),

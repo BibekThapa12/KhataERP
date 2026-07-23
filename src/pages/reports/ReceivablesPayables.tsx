@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { selectedFiscalYearEndBs } from '@/lib/reports'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { downloadCsv } from '@/lib/csv'
 import {
   agingBuckets,
@@ -181,7 +181,7 @@ export function ReceivablesPayablesPage() {
             <Button size="sm" variant={view === 'aging' ? 'default' : 'ghost'} onClick={() => updateParams({ view: 'aging' }, false)}>Detailed</Button>
           </div>
           <div className="min-w-[220px] flex-1 sm:max-w-sm"><Label className="sr-only">Search parties or vouchers</Label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => updateParams({ search: event.target.value || null })} placeholder="Search party, PAN, phone, voucher..." className="pl-9" /></div></div>
-          <div className="space-y-1"><Label>As of</Label><NepaliDateInput value={asOf} onChange={value => updateParams({ asOf: value })} className="w-40" /></div>
+          <div className="space-y-1"><Label>As of</Label><NepaliDateInput value={asOf} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} onChange={value => updateParams({ asOf: value })} className="w-40" /></div>
         </div>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={overdueOnly} onChange={event => updateParams({ overdue: event.target.checked ? '1' : null, bucket: event.target.checked && activeBucket === 'Not Due' ? null : activeBucket })} />Show overdue only</label>

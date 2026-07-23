@@ -24,7 +24,7 @@ import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
 import { voucherNumberingPeriod, voucherNumberingScope } from '@/lib/voucherNumbers'
 import { SYSTEM_ACCOUNT_DESTINATIONS, systemAccountGroupLevels } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
-import { selectedFiscalYearStartBs } from '@/lib/reports'
+import { assertDateInSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
 import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
 import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } from '@/lib/writePerformance'
 import { publicErrorMessage, reportClientError } from '@/lib/security'
@@ -59,6 +59,7 @@ interface InvoiceSaveParams {
   credit_days: number
   discount?: number
   narration?: string
+  supplier_invoice_no?: string
   date_bs: string
 }
 
@@ -105,7 +106,7 @@ interface AppState {
   addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
   deleteAccountCategory: (id: string) => Promise<void>
-  addItemCategory: (data: { name: string; parent_category_id?: string | null }) => Promise<void>
+  addItemCategory: (data: { name: string; parent_category_id?: string | null }) => Promise<ItemCategory>
   alterItemCategory: (id: string, updates: Partial<ItemCategory>) => Promise<void>
   alterAccount: (id: string, updates: Partial<Account>) => Promise<void>
   deleteAccount: (id: string) => Promise<void>
@@ -116,14 +117,14 @@ interface AppState {
   savePurchaseVoucher: (params: InvoiceSaveParams) => Promise<void>
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }) => Promise<Voucher>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }) => Promise<void>
-  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
+  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string }) => Promise<void>
   saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams) => Promise<void>
   updateSalesVoucher: (id: string, params: InvoiceSaveParams) => Promise<void>
   updatePurchaseVoucher: (id: string, params: InvoiceSaveParams) => Promise<void>
   updateReceipt: (id: string, params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }) => Promise<void>
   updatePayment: (id: string, params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }) => Promise<void>
-  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string }) => Promise<void>
+  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string }) => Promise<void>
   updateReturnVoucher: (id: string, params: ReturnSaveParams) => Promise<void>
   cancelV: (id: string) => Promise<void>
 }
@@ -142,7 +143,9 @@ export interface ReturnSaveParams {
   date_bs: string
 }
 
-function voucherDateFields(date_bs: string) {
+function voucherDateFields(date_bs: string, company: Company) {
+  if (company.fiscal_year_configured === false) throw new Error('Complete Financial Year setup before posting transactions')
+  assertDateInSelectedFiscalYear(company, date_bs)
   const date_ad = bsToAd(date_bs)
   return {
     date: date_ad,
@@ -262,7 +265,7 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
   if (!params.return_reason.trim()) throw new Error('Enter a return reason')
   const partyAccountId = original?.party_account_id || params.party_account_id
   if (params.settlement_mode === 'party' && !partyAccountId) throw new Error('A cash invoice cannot be adjusted through a party ledger')
-  if (!params.items.length || params.items.some(item => !item.item_id || item.qty <= 0 || item.rate <= 0)) throw new Error('Enter at least one item with a positive quantity and rate')
+  if (!params.items.length || params.items.some(item => !item.item_id || !Number.isFinite(item.qty) || item.qty <= 0 || !Number.isFinite(item.rate) || item.rate < 0)) throw new Error('Enter at least one item with a positive quantity and a non-negative rate')
 
   if (original) {
     for (const item of params.items) {
@@ -681,6 +684,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ itemCategories: [...get().itemCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record item category audit'))
     notifySuccess('Item category created', category.name)
+    return category
   },
 
   alterItemCategory: async (id, updates) => {
@@ -828,7 +832,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
       return { effectiveParams, data }
     })
-    const dateFields = voucherDateFields(effectiveParams.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
@@ -856,10 +860,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
       return { effectiveParams, data: buildPurchaseVoucherData(effectiveParams) }
     })
-    const dateFields = voucherDateFields(effectiveParams.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Purchase', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Purchase', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, supplier_invoice_no: effectiveParams.supplier_invoice_no?.trim() || null, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
@@ -887,7 +891,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
       return { isCash, validAllocations, data }
     })
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Receipt', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
@@ -917,7 +921,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
       return { isCash, validAllocations, data }
     })
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Payment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
       lines: data.lines,
@@ -935,7 +939,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Journal ────────────────────────────────────────────────────────────────
-  saveJournal: async ({ lines, narration, date_bs }) => {
+  saveJournal: async ({ lines, narration, date_bs, invoice_no }) => {
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
@@ -943,9 +947,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
       return lines.reduce((sum, line) => sum + (line.debit || 0), 0)
     })
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
+    const manualInvoiceNumber = invoice_no?.trim()
+    if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, is_cash: false, total, cancelled: false },
+      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false },
       lines,
       numbering: voucherNumberingScope(company, 'Journal', date_bs),
       trace,
@@ -974,7 +980,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     return { original, partyAccountId, data }
     })
-    const dateFields = voucherDateFields(params.date_bs)
+    const dateFields = voucherDateFields(params.date_bs, company)
     const newVoucher = await insertVoucher({
       voucher: {
         company_id: company.id, type: params.type, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
@@ -1011,7 +1017,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
-    const dateFields = voucherDateFields(effectiveParams.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
@@ -1037,11 +1043,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('This bill has an active return and can no longer be edited')
     const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
-    const dateFields = voucherDateFields(effectiveParams.date_bs)
+    const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, ...creditFields, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
+      voucher: { ...dateFields, ...creditFields, numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), supplier_invoice_no: effectiveParams.supplier_invoice_no?.trim() || null, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
@@ -1064,7 +1070,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const validAllocations = validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true)
     const data = buildReceiptData(validAllocations, deposit_to_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false },
@@ -1092,7 +1098,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if ((transfer_to || qty_delta < 0) && quantity > stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition) + 0.0001) throw new Error(`Only ${stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition)} units are available in ${sourceCondition} stock`)
     })
     const quantity = Math.abs(qty_delta)
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Stock Adjustment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration: narration || (transfer_to ? `Transfer from saleable to ${transfer_to} stock` : undefined), is_cash: false, total: transfer_to ? 0 : Math.abs(qty_delta * rate), cancelled: false },
       lines: [],
@@ -1125,7 +1131,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const validAllocations = validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories, true)
     const data = buildPaymentData(validAllocations, paid_from_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false },
@@ -1140,7 +1146,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  updateJournal: async (id, { lines, narration, date_bs }) => {
+  updateJournal: async (id, { lines, narration, date_bs, invoice_no }) => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
@@ -1148,10 +1154,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     return measuredWrite({ operation: 'update_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
     if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
     const total = lines.reduce((s, l) => s + (l.debit || 0), 0)
-    const dateFields = voucherDateFields(date_bs)
+    const dateFields = voucherDateFields(date_bs, company)
+    const manualInvoiceNumber = invoice_no?.trim()
+    if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     const updated = await updateVoucher({
       id,
-      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, is_cash: false, total, cancelled: false },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false },
       lines,
       trace,
     })
@@ -1179,7 +1187,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const updated = await updateVoucher({
       id,
       voucher: {
-        ...voucherDateFields(params.date_bs), numbering_period: voucherNumberingPeriod(company, params.date_bs), original_voucher_id: original?.id || null,
+        ...voucherDateFields(params.date_bs, company), numbering_period: voucherNumberingPeriod(company, params.date_bs), original_voucher_id: original?.id || null,
         return_reason: params.return_reason.trim(), narration: params.return_reason.trim(),
         settlement_mode: params.settlement_mode, settlement_account_id: params.settlement_mode === 'party' ? partyAccountId : params.settlement_account_id, restock_items: params.type === 'Sales Return' ? params.restock_items : false,
         party_account_id: partyAccountId, is_cash: params.settlement_mode === 'cash',

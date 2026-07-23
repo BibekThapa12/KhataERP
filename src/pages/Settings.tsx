@@ -15,6 +15,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { InventoryValuationMethod } from '@/types'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
+import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 
 export function SettingsPage() {
   const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError } = useAppStore()
@@ -25,13 +26,14 @@ export function SettingsPage() {
   const [vatEnabled, setVatEnabled] = useState(company?.vat_enabled ?? true)
   const [valuationMethod, setValuationMethod] = useState<InventoryValuationMethod>(company?.inventory_valuation_method || 'weighted_average')
   const [fiscalYearStartBs, setFiscalYearStartBs] = useState(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
+  const [financialYear, setFinancialYear] = useState((company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS).slice(0, 4))
   const [salesPrefix, setSalesPrefix] = useState(company?.sales_prefix ?? 'INV-')
   const [purchasePrefix, setPurchasePrefix] = useState(company?.purchase_prefix ?? 'PB-')
   const [receiptPrefix, setReceiptPrefix] = useState(company?.receipt_prefix ?? 'RCPT-')
   const [paymentPrefix, setPaymentPrefix] = useState(company?.payment_prefix ?? 'PAY-')
   const [salesReturnPrefix, setSalesReturnPrefix] = useState(company?.sales_return_prefix ?? 'SR-')
   const [purchaseReturnPrefix, setPurchaseReturnPrefix] = useState(company?.purchase_return_prefix ?? 'PR-')
-  const [resetNumbering, setResetNumbering] = useState(company?.reset_numbering_fiscal_year ?? false)
+  const [journalNumberingMode, setJournalNumberingMode] = useState<'auto' | 'manual'>(company?.journal_numbering_mode ?? 'auto')
   const [printFormat, setPrintFormat] = useState(company?.print_format ?? 'A5')
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
@@ -44,6 +46,13 @@ export function SettingsPage() {
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
+  const fiscalYearLocked = vouchers.length > 0
+  const currentFiscalYear = Number(currentFiscalYearStartBs(company).slice(0, 4))
+  const selectedStartYear = Number(financialYear) || currentFiscalYear
+  const financialYearOptions = Array.from({ length: currentFiscalYear - Math.min(currentFiscalYear - 50, selectedStartYear) + 1 }, (_, index) => currentFiscalYear - index).map(year => ({
+    value: String(year),
+    label: `${String(year).slice(-2)}/${String(year + 1).slice(-2)}`,
+  }))
 
   useEffect(() => {
     setName(company?.name ?? '')
@@ -53,13 +62,14 @@ export function SettingsPage() {
     setVatEnabled(company?.vat_enabled ?? true)
     setValuationMethod(company?.inventory_valuation_method || 'weighted_average')
     setFiscalYearStartBs(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
+    setFinancialYear((company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS).slice(0, 4))
     setSalesPrefix(company?.sales_prefix ?? 'INV-')
     setPurchasePrefix(company?.purchase_prefix ?? 'PB-')
     setReceiptPrefix(company?.receipt_prefix ?? 'RCPT-')
     setPaymentPrefix(company?.payment_prefix ?? 'PAY-')
     setSalesReturnPrefix(company?.sales_return_prefix ?? 'SR-')
     setPurchaseReturnPrefix(company?.purchase_return_prefix ?? 'PR-')
-    setResetNumbering(company?.reset_numbering_fiscal_year ?? false)
+    setJournalNumberingMode(company?.journal_numbering_mode ?? 'auto')
     setPrintFormat(company?.print_format ?? 'A5')
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
@@ -71,6 +81,10 @@ export function SettingsPage() {
     setRestoreMessage('')
     if (!fiscalYearStartAd) {
       setSaveError('Enter fiscal year start in YYYY-MM-DD BS format.')
+      return
+    }
+    if (fiscalYearStartBs.slice(0, 4) !== financialYear) {
+      setSaveError('Financial Year and Financial Year Start Date must begin in the same B.S. year.')
       return
     }
     if (!isSafePublicImageUrl(logoUrl.trim())) {
@@ -88,13 +102,15 @@ export function SettingsPage() {
         vat_enabled: vatEnabled,
         inventory_valuation_method: valuationMethod,
         fiscal_year_start: fiscalYearStartAd,
+        fiscal_year_configured: true,
         sales_prefix: salesPrefix.trim() || 'INV-',
         purchase_prefix: purchasePrefix.trim() || 'PB-',
         receipt_prefix: receiptPrefix.trim() || 'RCPT-',
         payment_prefix: paymentPrefix.trim() || 'PAY-',
         sales_return_prefix: salesReturnPrefix.trim() || 'SR-',
         purchase_return_prefix: purchaseReturnPrefix.trim() || 'PR-',
-        reset_numbering_fiscal_year: resetNumbering,
+        journal_numbering_mode: journalNumberingMode,
+        reset_numbering_fiscal_year: true,
         print_format: printFormat,
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
@@ -301,10 +317,22 @@ export function SettingsPage() {
               </span>
             </label>
             <div className="space-y-1.5">
-              <Label>Fiscal Year Start (BS)</Label>
-              <NepaliDateInput value={fiscalYearStartBs} onChange={setFiscalYearStartBs} />
+              <Label>Financial Year</Label>
+              <SearchableSelect value={financialYear} disabled={fiscalYearLocked} onValueChange={value => {
+                setFinancialYear(value)
+                setFiscalYearStartBs(`${value}-${fiscalYearStartBs.slice(5)}`)
+              }} options={financialYearOptions} searchPlaceholder="Search financial year…" />
+            </div>
+            <div className="space-y-1.5">
+              <Label>Financial Year Start Date (BS)</Label>
+              <NepaliDateInput value={fiscalYearStartBs} onChange={value => {
+                setFiscalYearStartBs(value)
+                if (/^\d{4}-/.test(value)) setFinancialYear(value.slice(0, 4))
+              }} disabled={fiscalYearLocked} />
               <p className="text-xs text-muted-foreground">
-                Stored as AD internally: {fiscalYearStartAd || 'Enter a valid BS date'}
+                {fiscalYearLocked
+                  ? 'Locked because the company has posted transactions.'
+                  : `Stored as AD internally: ${fiscalYearStartAd || 'Enter a valid BS date'}`}
               </p>
             </div>
             <div className="space-y-1.5">
@@ -337,12 +365,17 @@ export function SettingsPage() {
                 <Label>Purchase Return Prefix</Label>
                 <Input value={purchaseReturnPrefix} onChange={e => setPurchaseReturnPrefix(e.target.value)} placeholder="PR-" />
               </div>
+              <div className="space-y-1.5">
+                <Label>Journal Voucher Number</Label>
+                <SearchableSelect value={journalNumberingMode} onValueChange={value => setJournalNumberingMode(value as 'auto' | 'manual')} options={[{ value: 'auto', label: 'Automatic' }, { value: 'manual', label: 'Manual' }]} />
+                <p className="text-xs text-muted-foreground">Manual mode requires the voucher number to be entered in each Journal Entry.</p>
+              </div>
             </div>
-            <label htmlFor="reset-numbering" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
-              <input id="reset-numbering" type="checkbox" checked={resetNumbering} onChange={e => setResetNumbering(e.target.checked)} className="mt-1" />
+            <label htmlFor="reset-numbering" className="flex items-start gap-3 rounded-md border border-border p-3">
+              <input id="reset-numbering" type="checkbox" checked disabled readOnly className="mt-1" />
               <span>
                 <span className="block text-sm font-medium">Reset numbering every fiscal year</span>
-                <span className="block text-xs text-muted-foreground">New voucher numbers start from 0001 on or after the fiscal year start date.</span>
+                <span className="block text-xs text-muted-foreground">Required. New voucher numbers start from 0001 on or after the fiscal year start date.</span>
               </span>
             </label>
             <div className="grid gap-3 sm:grid-cols-2">

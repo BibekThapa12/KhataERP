@@ -2,7 +2,8 @@ import { lazy, useState, useEffect, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
-import { addDaysToBs, todayBs } from '@/lib/nepaliDate'
+import { addDaysToBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { resolveSystemAccountId } from '@/lib/engine'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { partyTerminology } from '@/lib/partyTerminology'
@@ -38,10 +39,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const { company, accounts, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
 
-  const [dateBs, setDateBs] = useState(todayBs())
+  const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
   const [isCash, setIsCash] = useState(false)
   const [partyAccountId, setPartyAccountId] = useState('')
   const [creditDays, setCreditDays] = useState(0)
+  const [supplierInvoiceNo, setSupplierInvoiceNo] = useState('')
   const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
   const [vatRate, setVatRate] = useState(13)
   const [discount, setDiscount] = useState(0)
@@ -82,6 +84,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setPartyAccountId(voucher.party_account_id || '')
       const voucherParty = parties.find(party => party.account_id === voucher.party_account_id)
       setCreditDays(voucher.is_cash ? 0 : (voucher.credit_days ?? voucherParty?.default_credit_days ?? 0))
+      setSupplierInvoiceNo(voucher.supplier_invoice_no || '')
       setLines((voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
@@ -92,11 +95,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setNarration(voucher.narration ?? '')
       setError('')
     } else if (!open) {
-      setDateBs(todayBs()); setIsCash(false); setPartyAccountId(''); setCreditDays(0)
+      setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
       setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setNarration(''); setError('')
     }
-  }, [open, voucher, vatEnabled, items, parties])
+  }, [open, voucher, vatEnabled, items, parties, company])
 
   const selectParty = (accountId: string) => {
     setPartyAccountId(accountId)
@@ -154,10 +157,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   const handleSave = async () => {
     setError('')
-    const validLines = lines.filter(l => l.item_id && l.qty > 0 && l.rate > 0)
-    if (validLines.length === 0) { setError('Add at least one item with quantity and rate.'); return }
+    const validLines = lines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
+    if (!lines.length || validLines.length !== lines.length) { setError('Select an item and enter a quantity greater than zero for every line. Rate can be zero but cannot be negative.'); return }
     if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
     if (!Number.isInteger(creditDays) || creditDays < 0) { setError('Credit Days must be a whole number of 0 or more.'); return }
+    if (!isSales && supplierInvoiceNo.trim().length > 100) { setError('Supplier Invoice No. cannot exceed 100 characters.'); return }
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
@@ -178,7 +182,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, discount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params)
         else await saveSalesVoucher(params)
@@ -189,10 +193,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       if (voucher) {
         onClose()
       } else {
-        setDateBs(todayBs())
+        setDateBs(selectedFiscalYearEndBs(company))
         setIsCash(false)
         setPartyAccountId('')
         setCreditDays(0)
+        setSupplierInvoiceNo('')
         setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
         setVatRate(vatEnabled ? 13 : 0)
         setDiscount(0)
@@ -223,9 +228,13 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             <div className="flex flex-wrap items-start gap-3">
               <div className="w-full space-y-1.5 sm:w-40">
                 <Label>Date</Label>
-                <NepaliDateInput value={dateBs} onChange={setDateBs} />
+                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} />
               </div>
               <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
+              {!isSales && <div className="w-full space-y-1.5 sm:w-48">
+                <Label>Supplier Invoice No.</Label>
+                <Input value={supplierInvoiceNo} onChange={event => setSupplierInvoiceNo(event.target.value)} maxLength={100} placeholder="Physical bill number" />
+              </div>}
               <div className="flex h-8 items-center sm:mt-[1.2rem]">
                 <div className="flex items-center gap-2">
                   <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} className="h-4 w-4 shrink-0 rounded accent-primary" />
@@ -290,7 +299,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate || ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={Number.isFinite(line.rate) ? line.rate : ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
                       <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><div className="invoice-entry-value flex h-8 min-w-0 items-center whitespace-nowrap num font-semibold">{fmtMoney(amt)}</div></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />

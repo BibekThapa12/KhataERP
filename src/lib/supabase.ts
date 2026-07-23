@@ -99,7 +99,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,created_at'
+const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
 const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
@@ -114,7 +114,7 @@ const CHEQUE_FIELDS = 'id,company_id,cheque_number,bank_id,account_number,party_
 const CHEQUE_EVENT_FIELDS = 'id,action,created_at'
 const MASTER_CHANGE_FIELDS = 'id,record_type,action,old_values,new_values,created_at'
 const VOUCHER_SETTLEMENT_FIELDS = 'id,company_id,settlement_voucher_id,invoice_voucher_id,party_account_id,amount,created_at'
-const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,seq,created_at'
+const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,supplier_invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,seq,created_at'
 const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
 const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
 const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
@@ -336,7 +336,7 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     const selected = [...existingCompanies].sort((a, b) => scoreCompany(b) - scoreCompany(a))[0]
     const updates: Partial<Company> = {}
 
-    if (!selected.fiscal_year_start || selected.fiscal_year_start === '2026-04-01') {
+    if (!selected.fiscal_year_start) {
       updates.fiscal_year_start = DEFAULT_FISCAL_YEAR_START_AD
     }
     if (!selected.owner_email && metadataCompany.owner_email) {
@@ -378,7 +378,8 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     payment_prefix: 'PAY-',
     sales_return_prefix: 'SR-',
     purchase_return_prefix: 'PR-',
-    reset_numbering_fiscal_year: false,
+    journal_numbering_mode: 'auto',
+    reset_numbering_fiscal_year: true,
     print_format: 'A5',
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
   }
@@ -729,7 +730,7 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
 }
 
 interface InsertVoucherPayload {
-  voucher: Omit<Voucher, 'id' | 'seq' | 'invoice_no' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
+  voucher: Omit<Voucher, 'id' | 'seq' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
   stock_lines?: Omit<StockLine, 'id' | 'voucher_id'>[]
   invoice_items?: InvoiceItem[]
@@ -773,7 +774,7 @@ function voucherRequestFingerprint(
   invoiceItems?: UpdateVoucherPayload['invoice_items'],
   settlements?: UpdateVoucherPayload['settlements'],
 ) {
-  const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration].join('|')
+  const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.invoice_no, voucher.supplier_invoice_no, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration].join('|')
   const ledger = lines.map(line => `${line.account_id}:${line.debit}:${line.credit}`).join(',')
   const stock = (stockLines || []).map(line => `${line.item_id}:${line.direction}:${line.qty}:${line.rate}:${line.stock_condition || 'saleable'}`).join(',')
   const items = (invoiceItems || []).map(item => `${item.item_id}:${item.qty}:${item.rate}:${item.source_invoice_item_id || ''}`).join(',')
@@ -792,7 +793,7 @@ function atomicVoucherRequest(
   audit?: AtomicVoucherAudit,
   idempotencyKey?: string,
 ) {
-  return supabase.rpc('save_voucher_atomic', {
+  return supabase.rpc('save_voucher_with_document_metadata_atomic', {
     p_voucher: idempotencyKey ? { ...voucher, idempotency_key: idempotencyKey } : voucher,
     p_lines: lines,
     p_stock_lines: stockLines || [],
@@ -805,6 +806,8 @@ function atomicVoucherRequest(
     p_next_period_start_key: numbering?.nextPeriodStartKey ?? null,
     p_audit_event_type: audit?.eventType || null,
     p_audit_metadata: audit?.metadata || {},
+    p_manual_invoice_no: voucher.invoice_no || null,
+    p_supplier_invoice_no: voucher.supplier_invoice_no || null,
   })
 }
 
@@ -816,7 +819,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
   voucherIdempotencyKeys.set(fingerprint, idempotencyKey)
   const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit, idempotencyKey)
   const { data, error } = trace
-    ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_atomic' })
+    ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
     : await request()
   if (error) {
       globalThis.setTimeout(() => {
@@ -831,7 +834,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
 export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements, audit, trace }: UpdateVoucherPayload): Promise<Voucher> {
   const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit)
   const { data, error } = trace
-    ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_atomic' })
+    ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
     : await request()
   if (error) throw error
   return normalizeVoucherDates(data as Voucher) as Voucher

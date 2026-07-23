@@ -214,19 +214,47 @@ export function fiscalYearStartBs(company: Company | null) {
     : `${Number(current.slice(0, 4)) - 1}-${monthDay}`
 }
 
-export const fiscalYearSelectionKey = (_companyId?: string) => 'khata-fiscal-year'
+export function companyBooksStartBs(company: Company | null) {
+  return company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : fiscalYearStartBs(company)
+}
+
+export function fiscalYearOptions(company: Company | null, vouchers: Voucher[] = []) {
+  const firstYear = Number(companyBooksStartBs(company).slice(0, 4))
+  const currentStart = fiscalYearStartBs(company)
+  const currentYear = Number(currentStart.slice(0, 4))
+  const monthDay = currentStart.slice(5)
+  const transactionYears = vouchers.map(voucher => {
+    const voucherYear = Number(voucher.date_bs?.slice(0, 4))
+    return voucher.date_bs?.slice(5) >= monthDay ? voucherYear : voucherYear - 1
+  }).filter(year => Number.isInteger(year) && year > 0 && year <= currentYear)
+  const fromYear = Math.min(
+    Number.isInteger(firstYear) ? firstYear : currentYear,
+    ...transactionYears,
+    currentYear,
+  )
+  return Array.from({ length: currentYear - fromYear + 1 }, (_, index) => currentYear - index).map(year => ({
+    value: String(year),
+    label: `${String(year).slice(-2)}/${String(year + 1).slice(-2)}`,
+  }))
+}
+
+export const fiscalYearSelectionKey = (companyId?: string) => `khata-fiscal-year:${companyId || 'default'}`
+export const FISCAL_YEAR_CHANGED_EVENT = 'khataerp:fiscal-year-changed'
 
 export function selectedFiscalYearStartBs(company: Company | null) {
   const currentStart = fiscalYearStartBs(company)
   try {
-    const legacyKey = `khata-fiscal-year:${company?.id || 'default'}`
+    const companyKey = fiscalYearSelectionKey(company?.id)
     const legacyDashboardKey = `khata-dashboard-fiscal-year:${company?.id || 'default'}`
-    const selectedYear = Number(localStorage.getItem(fiscalYearSelectionKey()) || localStorage.getItem(legacyKey) || localStorage.getItem(legacyDashboardKey))
-    localStorage.removeItem(legacyKey)
+    const selectedYear = Number(localStorage.getItem(companyKey) || localStorage.getItem(legacyDashboardKey))
+    localStorage.removeItem('khata-fiscal-year')
     localStorage.removeItem(legacyDashboardKey)
-    return Number.isInteger(selectedYear) && selectedYear > 0
-      ? `${selectedYear}-${currentStart.slice(5)}`
-      : currentStart
+    const currentYear = Number(currentStart.slice(0, 4))
+    const effectiveYear = Number.isInteger(selectedYear) && selectedYear >= 2000 && selectedYear <= currentYear
+      ? selectedYear
+      : currentYear
+    localStorage.setItem(companyKey, String(effectiveYear))
+    return `${effectiveYear}-${currentStart.slice(5)}`
   } catch { return currentStart }
 }
 
@@ -240,8 +268,22 @@ export function selectedFiscalYearEndBs(company: Company | null) {
 }
 
 export function saveSelectedFiscalYear(company: Company | null, year: number) {
-  void company
-  try { localStorage.setItem(fiscalYearSelectionKey(), String(year)) } catch { /* local storage may be unavailable */ }
+  const currentYear = Number(fiscalYearStartBs(company).slice(0, 4))
+  if (!Number.isInteger(year) || year < 2000 || year > currentYear) throw new Error('Selected financial year is invalid')
+  try {
+    localStorage.setItem(fiscalYearSelectionKey(company?.id), String(year))
+    window.dispatchEvent(new CustomEvent(FISCAL_YEAR_CHANGED_EVENT, { detail: { companyId: company?.id, year } }))
+  } catch { /* local storage may be unavailable */ }
+}
+
+export function assertDateInSelectedFiscalYear(company: Company, dateBs: string) {
+  const booksStart = companyBooksStartBs(company)
+  if (makeBsKey(dateBs) < makeBsKey(booksStart)) throw new Error(`Date cannot be before the company books start date ${booksStart}`)
+  const selectedStart = selectedFiscalYearStartBs(company)
+  const nextStart = `${Number(selectedStart.slice(0, 4)) + 1}-${selectedStart.slice(5)}`
+  if (makeBsKey(dateBs) < makeBsKey(selectedStart) || makeBsKey(dateBs) >= makeBsKey(nextStart)) {
+    throw new Error(`Date must be inside selected financial year ${selectedStart.slice(0, 4)}/${String(Number(selectedStart.slice(0, 4)) + 1).slice(-2)}`)
+  }
 }
 
 export function vouchersInFiscalYear(vouchers: Voucher[], fiscalStart: string) {

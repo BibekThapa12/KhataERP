@@ -1,8 +1,8 @@
 import { useMemo, useState } from 'react'
 import { ArrowDown, ArrowUp, Columns3, Download, FileText, Info, MoreVertical, Printer, ScanLine, Search, SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { getDaybookRows } from '@/lib/reports'
-import { makeBsKey, todayBs } from '@/lib/nepaliDate'
+import { getDaybookRows, selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
+import { makeBsKey } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { normalizeSearch } from '@/lib/search'
 import { legacySettlementAccountId } from '@/lib/banks'
@@ -38,9 +38,9 @@ type OptionalColumn = 'narration' | 'debit' | 'credit' | 'net' | 'status'
 
 export function DaybookPage() {
   const { company, rawAccounts, parties, vouchers } = useAppStore()
-  const [range, setRange] = useState<ReportRange>('today')
-  const [from, setFrom] = useState(todayBs())
-  const [to, setTo] = useState(todayBs())
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [showCancelled, setShowCancelled] = useState(false)
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('all')

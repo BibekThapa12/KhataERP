@@ -8,10 +8,10 @@ import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalance
 import { todayBs } from '@/lib/nepaliDate'
 import { chequeEntitlement, chequeRelativeState } from '@/lib/cheques'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
-import { computeCashFlow, fiscalYearStartBs, getDaybookRows, saveSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
+import { computeCashFlow, FISCAL_YEAR_CHANGED_EVENT, fiscalYearOptions as companyFiscalYearOptions, fiscalYearStartBs, getDaybookRows, saveSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
 import {
   accountBalance, buildDashboardSeries, computeDashboardPerformance, dashboardVouchersInRange, dashboardVouchersThrough,
-  dashboardFiscalYearOptions, dashboardFiscalYearRange, isPostedDashboardVoucher, topSellingItems,
+  dashboardFiscalYearRange, isPostedDashboardVoucher, topSellingItems,
 } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -88,6 +88,11 @@ export function Dashboard() {
 
   useEffect(() => { setSelectedFiscalYear(Number(selectedFiscalYearStartBs(company).slice(0, 4))) }, [company, currentFiscalYear])
   useEffect(() => {
+    const syncFiscalYear = () => setSelectedFiscalYear(Number(selectedFiscalYearStartBs(company).slice(0, 4)))
+    window.addEventListener(FISCAL_YEAR_CHANGED_EVENT, syncFiscalYear)
+    return () => window.removeEventListener(FISCAL_YEAR_CHANGED_EVENT, syncFiscalYear)
+  }, [company])
+  useEffect(() => {
     if (range !== 'fiscal') return
     const fiscalRange = dashboardFiscalYearRange(selectedFiscalYear, fiscalStart)
     setFrom(fiscalRange.from)
@@ -99,7 +104,7 @@ export function Dashboard() {
 
   const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
   const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
-  const fiscalYearOptions = useMemo(() => dashboardFiscalYearOptions(vouchers, fiscalStart), [vouchers, fiscalStart])
+  const fiscalYearOptions = useMemo(() => companyFiscalYearOptions(company, vouchers), [company, vouchers])
   const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
   const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
   const beforeFrom = useMemo(() => dashboardVouchersThrough(postedVouchers, from, false), [postedVouchers, from])
@@ -174,7 +179,7 @@ export function Dashboard() {
     .sort((left, right) => right.date_bs_key - left.date_bs_key || right.voucher.seq - left.voucher.seq)
     .slice(0, 8), [periodVouchers, rawAccounts, parties])
 
-  const companySetupIncomplete = !!company && (company.name === 'My Trading Co.' || !company.address || !company.phone || !company.pan_vat)
+  const companySetupIncomplete = !!company && (company.fiscal_year_configured === false || company.name === 'My Trading Co.' || !company.address || !company.phone || !company.pan_vat)
   const rangeLabel = chartSeries.grouping === 'daily' ? 'Daily' : chartSeries.grouping === 'weekly' ? 'Weekly' : 'Monthly'
 
   return <div>

@@ -17,7 +17,7 @@ export function savedVoucherNumber(voucher: Voucher): string {
 }
 
 export function voucherNumberingPeriod(company: Company, dateBs: string): string {
-  if (!company.reset_numbering_fiscal_year || !company.fiscal_year_start) return 'all'
+  if (!company.fiscal_year_start) return 'all'
   const fiscalMonthDay = adToBs(company.fiscal_year_start).slice(5)
   const voucherYear = Number(dateBs.slice(0, 4))
   const fiscalYear = dateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1
@@ -33,7 +33,7 @@ export interface VoucherNumberingScope {
 
 /** Numbering inputs sent to the atomic posting RPC. */
 export function voucherNumberingScope(company: Company, type: VoucherType, dateBs: string): VoucherNumberingScope {
-  if (!company.reset_numbering_fiscal_year || !company.fiscal_year_start) {
+  if (!company.fiscal_year_start) {
     return { prefix: voucherPrefix(company, type), resetByFiscalYear: false, periodStartKey: null, nextPeriodStartKey: null }
   }
   const fiscalMonthDay = adToBs(company.fiscal_year_start).slice(5)
@@ -49,7 +49,7 @@ export function voucherNumberingScope(company: Company, type: VoucherType, dateB
 
 export function previewNextVoucherNumber(company: Company, vouchers: Voucher[], type: VoucherType, dateBs: string): string {
   let candidates = vouchers.filter(voucher => voucher.type === type)
-  if (company.reset_numbering_fiscal_year && company.fiscal_year_start && dateBs) {
+  if (company.fiscal_year_start && dateBs) {
     const fiscalMonthDay = adToBs(company.fiscal_year_start).slice(5)
     const voucherYear = Number(dateBs.slice(0, 4))
     const fiscalYear = dateBs.slice(5) >= fiscalMonthDay ? voucherYear : voucherYear - 1

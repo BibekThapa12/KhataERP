@@ -2,7 +2,7 @@ import { useMemo, useRef, useState } from 'react'
 import { AlertTriangle, Archive, Pencil, Plus, RotateCcw, Search, SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { cn, fmtDate, fmtMoney } from '@/lib/utils'
-import { todayBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs, vouchersInFiscalYear } from '@/lib/reports'
 import { normalizeSearch } from '@/lib/search'
 import { stockConditionQuantity } from '@/lib/engine'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
@@ -27,8 +27,8 @@ import { SubmissionLock } from '@/lib/submissionLock'
 type StatusFilter = 'all' | 'active' | 'inactive'
 
 function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => void }) {
-  const { items, stock, vouchers, saveStockAdjustment } = useAppStore()
-  const [dateBs, setDateBs] = useState(todayBs())
+  const { company, items, stock, vouchers, saveStockAdjustment } = useAppStore()
+  const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
   const [mode, setMode] = useState<'adjustment' | 'transfer'>('adjustment')
   const [itemId, setItemId] = useState('')
   const [stockCondition, setStockCondition] = useState<StockCondition>('saleable')
@@ -70,7 +70,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
       const baseQuantity = toBaseQty(mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), conversionFactor)
       const baseRate = mode === 'transfer' ? selectedStock?.avg_cost || 0 : toBaseRate(Number(rate) || 0, conversionFactor)
       await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined })
-      setDateBs(todayBs()); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError(publicErrorMessage(error, 'saving stock adjustment'))
@@ -81,7 +81,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
     <DialogContent className="voucher-dialog max-w-md">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} /></div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} /></div>
         <div className="space-y-1.5"><Label>Adjustment Type</Label><SearchableSelect value={mode} onValueChange={value => setMode(value as typeof mode)} options={[{ value: 'adjustment', label: 'Quantity Adjustment' }, { value: 'transfer', label: 'Transfer Stock Condition' }]} /></div>
         <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate('') }} placeholder="Select item" options={items.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
         {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div><div className="space-y-1.5"><Label>Rate / {selectedUnit || 'Unit'}</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-2 gap-3"><div className="space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="grid grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)] gap-3"><div className="space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableInSelectedUnit} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /></div><div className="space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div></div><p className="text-xs text-muted-foreground">Available: {selectedItem ? formatStockQuantity(availableSaleable, selectedItem) : '0'}. Transferred at {fmtMoney(fromBaseRate(selectedStock?.avg_cost || 0, conversionFactor))} / {selectedUnit || 'unit'}.</p></>}
@@ -94,7 +94,7 @@ function StockAdjustmentForm({ open, onClose }: { open: boolean; onClose: () => 
 }
 
 export function ItemsPage() {
-  const { items, stock, itemCategories, vouchers, loading, error, alterItem, alterItemCategory } = useAppStore()
+  const { company, items, stock, itemCategories, vouchers, loading, error, alterItem, alterItemCategory } = useAppStore()
   const [tab, setTab] = useState('items')
   const [searchByTab, setSearchByTab] = useState<Record<string, string>>({ items: '', adjustments: '' })
   const [status, setStatus] = useState<StatusFilter>('all')
@@ -114,11 +114,11 @@ export function ItemsPage() {
     const qty = stockConditionQuantity(items, vouchers, item.id, 'saleable')
     return { item, stock: { ...total, qty, value: qty * total.avg_cost } }
   }).sort((left, right) => left.item.name.localeCompare(right.item.name)), [items, stock, vouchers, itemCategories, status, query])
-  const adjustments = useMemo(() => vouchers.filter(voucher => voucher.type === 'Stock Adjustment').filter(voucher => {
+  const adjustments = useMemo(() => vouchersInFiscalYear(vouchers, selectedFiscalYearStartBs(company)).filter(voucher => voucher.type === 'Stock Adjustment').filter(voucher => {
     const line = voucher.stock_lines?.[0]
     const item = items.find(entry => entry.id === line?.item_id)
     return !query || normalizeSearch(`${voucher.date_bs} ${item?.name || ''} ${voucher.narration || ''} ${line?.direction || ''} ${voucher.cancelled ? 'cancelled' : 'active'}`).includes(query)
-  }).sort((left, right) => right.date_bs_key - left.date_bs_key || right.seq - left.seq), [vouchers, items, query])
+  }).sort((left, right) => right.date_bs_key - left.date_bs_key || right.seq - left.seq), [company, vouchers, items, query])
 
   const setSearch = (value: string) => setSearchByTab(current => ({ ...current, [tab]: value }))
 

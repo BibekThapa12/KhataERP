@@ -1,8 +1,8 @@
-import { useState, useEffect, useRef } from 'react'
+import { lazy, useState, useEffect, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
-import { todayBs } from '@/lib/nepaliDate'
+import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { resolveSystemAccountId, round2 } from '@/lib/engine'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
 import { categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
@@ -23,6 +23,9 @@ import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
+
+const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
+const CategoryDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.CategoryDialog })))
 
 // ─── Item Form ────────────────────────────────────────────────────────────────
 
@@ -45,6 +48,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const [openingRate, setOpeningRate] = useState(0)
   const [reorderLevel, setReorderLevel] = useState('')
   const [categoryId, setCategoryId] = useState('')
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
   const [sku, setSku] = useState('')
   const [barcode, setBarcode] = useState('')
   const [vatApplicable, setVatApplicable] = useState(true)
@@ -54,7 +58,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
@@ -77,6 +81,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>New Item</DialogTitle></DialogHeader>
@@ -87,7 +92,12 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
-            <SearchableSelect value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} />
+            <div className="flex gap-1.5">
+              <SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} />
+              <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" aria-label="Create new item category" title="Create new category" onClick={() => setCategoryDialogOpen(true)}>
+                <Plus className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -132,6 +142,8 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    <CategoryDialog kind="item" open={categoryDialogOpen} onClose={() => setCategoryDialogOpen(false)} onCreated={category => setCategoryId(category.id)} />
+    </>
   )
 }
 
@@ -149,7 +161,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const isReceipt = type === 'Receipt'
   const isEditing = !!voucher
 
-  const [dateBs, setDateBs] = useState(todayBs())
+  const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
   const [allocations, setAllocations] = useState<{ account_id: string; amount: string; invoice_allocations: { invoice_voucher_id: string; amount: string }[] }[]>([{ account_id: '', amount: '', invoice_allocations: [] }])
   const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
   const banks = bankAccounts(accounts, accountCategories, !!voucher)
@@ -172,9 +184,9 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     } else if (open) {
       setMoneyAccountId(cashAccountId)
     } else if (!open) {
-      setDateBs(todayBs()); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
     }
-  }, [open, voucher, cashAccountId, isReceipt])
+  }, [open, voucher, cashAccountId, isReceipt, company])
 
   const moneyIds = new Set([cashAccountId, ...bankAccounts(accounts, accountCategories, true).map(account => account.id)])
   const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
@@ -209,7 +221,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       if (voucher) {
         onClose()
       } else {
-        setDateBs(todayBs())
+        setDateBs(selectedFiscalYearEndBs(company))
         setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }])
         setMoneyAccountId(cashAccountId)
         setNarration('')
@@ -227,7 +239,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
@@ -283,7 +295,8 @@ interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Vouch
 interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
-  const { accounts, accountCategories, parties, saveJournal, updateJournal } = useAppStore()
+  const { company, accounts, accountCategories, parties, saveJournal, updateJournal } = useAppStore()
+  const manualJournalNumbering = company?.journal_numbering_mode === 'manual'
   const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
   const journalAccounts = accounts.filter(account => {
     const party = partyByAccount.get(account.id)
@@ -291,7 +304,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   })
   const isEditing = !!voucher
 
-  const [dateBs, setDateBs] = useState(todayBs())
+  const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
+  const [journalInvoiceNo, setJournalInvoiceNo] = useState(voucher?.invoice_no || '')
   const [jLines, setJLines] = useState<JLine[]>([
     { account_id: '', debit: 0, credit: 0 },
     { account_id: '', debit: 0, credit: 0 },
@@ -300,11 +314,13 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
 
   useEffect(() => {
     if (open && voucher) {
       setDateBs(voucher.date_bs)
+      setJournalInvoiceNo(voucher.invoice_no || '')
       setJLines((voucher.lines || []).map(l => ({
         account_id: l.account_id,
         debit: l.debit || 0,
@@ -312,13 +328,17 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       })))
       setNarration(voucher.narration || '')
       setError('')
+    } else if (open) {
+      setJournalInvoiceNo('')
     } else if (!open) {
-      setDateBs(todayBs())
+      setDateBs(selectedFiscalYearEndBs(company))
+      setJournalInvoiceNo('')
       setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
       setNarration('')
       setError('')
+      setLedgerLineIndex(null)
     }
-  }, [open, voucher])
+  }, [open, voucher, company])
 
   const totalDebit = round2(jLines.reduce((s, l) => s + (l.debit || 0), 0))
   const totalCredit = round2(jLines.reduce((s, l) => s + (l.credit || 0), 0))
@@ -334,19 +354,22 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   }
 
   const handleSave = async () => {
+    if (manualJournalNumbering && !journalInvoiceNo.trim()) { setError('Enter the Journal voucher number.'); return }
+    if (journalInvoiceNo.trim().length > 100) { setError('Journal voucher number cannot exceed 100 characters.'); return }
     const validLines = jLines.filter(l => l.account_id && (l.debit > 0 || l.credit > 0))
     if (validLines.length < 2) { setError('Add at least two lines.'); return }
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs }
+      const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs, invoice_no: manualJournalNumbering ? journalInvoiceNo.trim() : undefined }
       if (voucher) await updateJournal(voucher.id, params)
       else await saveJournal(params)
       if (voucher) {
         onClose()
       } else {
-        setDateBs(todayBs())
+        setDateBs(selectedFiscalYearEndBs(company))
+        setJournalInvoiceNo('')
         setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
         setNarration('')
         setError('')
@@ -358,6 +381,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
@@ -366,8 +390,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </p>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} /></div>
-            <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
+            {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
 
           {/* Lines header */}
@@ -376,7 +400,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           </div>
           {jLines.map((line, idx) => (
             <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
-              <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="col-span-2 sm:col-span-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
+              <div className="col-span-2 flex min-w-0 gap-1 sm:col-span-1">
+              <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="min-w-0 flex-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
                 const party = partyByAccount.get(account.id)
                 return {
                   value: account.id,
@@ -385,6 +410,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
                   searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type} ${party?.phone || ''} ${party?.pan_vat || ''} ${party?.address || ''}`,
                 }
               })} />
+              <Button type="button" variant="outline" size="icon" tabIndex={-1} className="h-9 w-9 shrink-0" aria-label="Create new ledger" title="Create new ledger" onClick={() => setLedgerLineIndex(idx)}>
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+              </div>
               <Input type="number" min="0" step="any" value={line.debit || ''} disabled={line.credit > 0} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right disabled:bg-muted" />
               <Input type="number" min="0" step="any" value={line.credit || ''} disabled={line.debit > 0} onChange={e => updateLine(idx, 'credit', e.target.value)} placeholder="0.00" className="text-right disabled:bg-muted" />
               <Button variant="ghost" size="icon" tabIndex={-1} className="h-9 w-9 text-muted-foreground hover:text-destructive"
@@ -420,5 +449,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {ledgerLineIndex !== null && <LedgerDialog open onClose={() => setLedgerLineIndex(null)} onCreated={account => {
+      setJLines(current => current.map((line, index) => index === ledgerLineIndex ? { ...line, account_id: account.id } : line))
+      setLedgerLineIndex(null)
+    }} />}
+    </>
   )
 }

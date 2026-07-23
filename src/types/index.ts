@@ -125,6 +125,7 @@ export interface Voucher {
   date_bs: string
   date_bs_key: number
   invoice_no?: string
+  supplier_invoice_no?: string | null
   numbering_period?: string
   credit_days?: number
   due_date_ad?: string
@@ -170,6 +171,7 @@ export interface Company {
   payment_prefix?: string
   sales_return_prefix?: string
   purchase_return_prefix?: string
+  journal_numbering_mode?: 'auto' | 'manual'
   reset_numbering_fiscal_year?: boolean
   print_format?: 'A5' | 'A4'
   invoice_terms?: string
@@ -181,6 +183,7 @@ export interface Company {
   developer_notes?: string
   suspended?: boolean
   fiscal_year_start: string
+  fiscal_year_configured?: boolean
   created_at?: string
 }
 

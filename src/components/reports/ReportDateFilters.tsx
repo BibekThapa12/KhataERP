@@ -1,4 +1,4 @@
-import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
+import { todayBs } from '@/lib/nepaliDate'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
@@ -18,14 +18,19 @@ interface ReportDateFiltersProps {
 }
 
 export function ReportDateFilters({ company, range, from, to, onRangeChange, onFromChange, onToChange }: ReportDateFiltersProps) {
+  const fiscalStart = selectedFiscalYearStartBs(company)
+  const fiscalEnd = selectedFiscalYearEndBs(company)
   const applyPreset = (preset: Exclude<ReportRange, 'custom'>) => {
     onRangeChange(preset)
     if (preset === 'today') {
-      onFromChange(todayBs())
-      onToChange(todayBs())
+      const effectiveToday = todayBs() < fiscalStart || todayBs() > fiscalEnd ? fiscalEnd : todayBs()
+      onFromChange(effectiveToday)
+      onToChange(effectiveToday)
     } else if (preset === 'month') {
-      onFromChange(firstOfCurrentBsMonth())
-      onToChange(todayBs())
+      const effectiveEnd = todayBs() < fiscalStart || todayBs() > fiscalEnd ? fiscalEnd : todayBs()
+      const monthStart = `${effectiveEnd.slice(0, 7)}-01`
+      onFromChange(monthStart < fiscalStart ? fiscalStart : monthStart)
+      onToChange(effectiveEnd)
     } else {
       onFromChange(selectedFiscalYearStartBs(company))
       onToChange(selectedFiscalYearEndBs(company))
@@ -42,11 +47,11 @@ export function ReportDateFilters({ company, range, from, to, onRangeChange, onF
       </div>
       <div className="min-w-[8.5rem] flex-1 space-y-1.5 sm:flex-none">
         <Label>From</Label>
-        <NepaliDateInput value={from} max={to} onChange={value => { onFromChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
+        <NepaliDateInput value={from} min={fiscalStart} max={to < fiscalEnd ? to : fiscalEnd} onChange={value => { onFromChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
       </div>
       <div className="min-w-[8.5rem] flex-1 space-y-1.5 sm:flex-none">
         <Label>To</Label>
-        <NepaliDateInput value={to} min={from} onChange={value => { onToChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
+        <NepaliDateInput value={to} min={from > fiscalStart ? from : fiscalStart} max={fiscalEnd} onChange={value => { onToChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
       </div>
     </div>
   )

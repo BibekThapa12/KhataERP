@@ -4,11 +4,10 @@ import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, Trend
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeStockConditionSummary, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, round2 } from '@/lib/engine'
-import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, saveSelectedFiscalYear, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
-import { dashboardFiscalYearOptions, dashboardFiscalYearRange, dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
+import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearOptions as companyFiscalYearOptions, fiscalYearStartBs, groupReportAccounts, saveSelectedFiscalYear, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
+import { dashboardFiscalYearRange, dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
-import { firstOfCurrentBsMonth, todayBs } from '@/lib/nepaliDate'
 import { formatStockQuantity } from '@/lib/units'
 import { publicErrorMessage } from '@/lib/security'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
@@ -493,7 +492,7 @@ export function BalanceSheetPage() {
   const currentFiscalStart = fiscalYearStartBs(company)
   const [selectedFiscalYear, setSelectedFiscalYear] = useState(() => Number(selectedFiscalYearStartBs(company).slice(0, 4)))
   const [asOf, setAsOf] = useState(() => selectedFiscalYearEndBs(company))
-  const fiscalYearOptions = useMemo(() => dashboardFiscalYearOptions(vouchers, currentFiscalStart), [vouchers, currentFiscalStart])
+  const fiscalYearOptions = useMemo(() => companyFiscalYearOptions(company, vouchers), [company, vouchers])
   useEffect(() => {
     const year = Number(selectedFiscalYearStartBs(company).slice(0, 4))
     setSelectedFiscalYear(year)
@@ -576,9 +575,12 @@ export function BalanceSheetPage() {
 export function VatReportPage() {
   const vouchers = useAppStore(s => s.vouchers)
   const company = useAppStore(s => s.company)
-  const [from, setFrom] = useState(firstOfCurrentBsMonth())
-  const [to, setTo] = useState(todayBs())
-  const [applied, setApplied] = useState({ from: firstOfCurrentBsMonth(), to: todayBs() })
+  const fiscalStart = selectedFiscalYearStartBs(company)
+  const fiscalEnd = selectedFiscalYearEndBs(company)
+  const defaultMonthStart = `${fiscalEnd.slice(0, 7)}-01` < fiscalStart ? fiscalStart : `${fiscalEnd.slice(0, 7)}-01`
+  const [from, setFrom] = useState(defaultMonthStart)
+  const [to, setTo] = useState(fiscalEnd)
+  const [applied, setApplied] = useState({ from: defaultMonthStart, to: fiscalEnd })
 
   const vat = useMemo(() => computeVatReport(vouchers, applied.from, applied.to), [vouchers, applied])
 
@@ -608,11 +610,11 @@ export function VatReportPage() {
             <div className="flex flex-wrap items-end gap-3">
               <div className="space-y-1.5">
                 <Label>From</Label>
-                <NepaliDateInput value={from} onChange={setFrom} className="w-40" />
+                <NepaliDateInput value={from} min={fiscalStart} max={to} onChange={setFrom} className="w-40" />
               </div>
               <div className="space-y-1.5">
                 <Label>To</Label>
-                <NepaliDateInput value={to} onChange={setTo} className="w-40" />
+                <NepaliDateInput value={to} min={from} max={fiscalEnd} onChange={setTo} className="w-40" />
               </div>
               <Button onClick={() => setApplied({ from, to })}>Apply</Button>
             </div>

@@ -22,6 +22,29 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(buildPaymentData([{ account_id: 'supplier', amount: 300 }], 'cash').lines).valid).toBe(true)
   })
 
+  it('posts zero-value sales, purchases, and returns while preserving item quantities', () => {
+    const item = { item_id: 'sample', qty: 2, rate: 0 }
+    const sale = buildSalesVoucherData({ party_account_id: null, is_cash: true, items: [item], vat_rate: 13, system_accounts: accounts })
+    const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items: [item], vat_rate: 13, system_accounts: accounts })
+    const salesReturn = buildReturnVoucherData({
+      type: 'Sales Return', party_account_id: 'customer', items: [{ ...item, cost_rate: 25 }],
+      settlement_mode: 'party', restock_items: true, stock_condition: 'saleable',
+      system_accounts: { sales_return: 'sales-return' },
+    })
+    const purchaseReturn = buildReturnVoucherData({
+      type: 'Purchase Return', party_account_id: 'supplier', items: [{ ...item, cost_rate: 25 }],
+      settlement_mode: 'party', restock_items: true, stock_condition: 'saleable',
+      system_accounts: { purchase_return: 'purchase-return' },
+    })
+
+    for (const result of [sale, purchase, salesReturn, purchaseReturn]) {
+      expect(result.total).toBe(0)
+      expect(result.invoice_items[0]).toMatchObject({ item_id: 'sample', qty: 2, rate: 0 })
+      expect(result.stock_lines[0]).toMatchObject({ item_id: 'sample', qty: 2 })
+      expect(validateBalanced(result.lines as VoucherLine[]).valid).toBe(true)
+    }
+  })
+
   it('keeps input and output VAT as signed liability balances', () => {
     const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
     const inputVat = chart.find(account => account.id === 'c:vat_receivable')!

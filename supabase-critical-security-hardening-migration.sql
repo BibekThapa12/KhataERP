@@ -364,7 +364,7 @@ begin
     if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.01 then
       raise exception 'Voucher total does not match its ledger posting';
     end if;
-    if voucher_record.type in ('Receipt','Payment','Journal','Sales Return','Purchase Return')
+    if voucher_record.type in ('Receipt','Payment','Journal')
       and coalesce(voucher_record.total, 0) <= 0 then
       raise exception 'Voucher total must be greater than zero';
     end if;
@@ -390,9 +390,9 @@ begin
     if item_count = 0 or exists (
       select 1 from public.invoice_items item
       where item.voucher_id = target_voucher_id
-        and (item.qty <= 0 or item.rate <= 0 or coalesce(item.conversion_factor, 1) <= 0
+        and (item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
           or (item.base_qty is not null and abs(item.base_qty - item.qty * coalesce(item.conversion_factor, 1)) > 0.0001))
-    ) then raise exception 'Invoice items require positive quantities and valid rates'; end if;
+    ) then raise exception 'Invoice items require positive quantities and non-negative rates'; end if;
 
     if voucher_record.type in ('Sales','Purchase') then
       calculated_discount := coalesce(voucher_record.discount, 0);

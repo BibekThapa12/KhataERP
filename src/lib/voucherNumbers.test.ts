@@ -28,8 +28,9 @@ describe('voucher numbering', () => {
     expect(savedVoucherNumber(voucher('Journal', undefined, 27))).toBe('27')
   })
 
-  it('uses separate uniqueness periods when fiscal-year numbering is enabled', () => {
+  it('always uses separate uniqueness periods when a fiscal year is configured', () => {
     const fiscalCompany = { ...company, reset_numbering_fiscal_year: true, fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD } as Company
+    const legacyOptOutCompany = { ...fiscalCompany, reset_numbering_fiscal_year: false } as Company
     expect(voucherNumberingPeriod(fiscalCompany, '2083-03-30')).toBe('FY-2082')
     expect(voucherNumberingPeriod(fiscalCompany, '2083-04-01')).toBe('FY-2083')
     expect(voucherNumberingPeriod(company, '2083-04-01')).toBe('all')
@@ -37,6 +38,8 @@ describe('voucher numbering', () => {
       prefix: 'SI-', resetByFiscalYear: true,
       periodStartKey: 20820401, nextPeriodStartKey: 20830401,
     })
+    expect(voucherNumberingPeriod(legacyOptOutCompany, '2083-04-01')).toBe('FY-2083')
+    expect(voucherNumberingScope(legacyOptOutCompany, 'Sales', '2083-04-01').resetByFiscalYear).toBe(true)
     expect(voucherNumberingScope(company, 'Sales', '2083-04-01')).toEqual({
       prefix: 'SI-', resetByFiscalYear: false,
       periodStartKey: null, nextPeriodStartKey: null,

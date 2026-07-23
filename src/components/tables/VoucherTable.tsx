@@ -36,6 +36,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
     <div className="space-y-4">
       <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-3">
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.date_bs)}</p></div>
+        {voucher.type === 'Purchase' && voucher.supplier_invoice_no && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Supplier Invoice No.</p><p className="font-medium mt-0.5">{voucher.supplier_invoice_no}</p></div>}
         {(voucher.type === 'Sales' || voucher.type === 'Purchase') && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Credit Days</p><p className="font-medium mt-0.5">{voucher.credit_days ?? 0}</p></div>}
         {(voucher.type === 'Sales' || voucher.type === 'Purchase') && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Due Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.due_date_bs || voucher.date_bs)}</p></div>}
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Party</p><p className="font-medium mt-0.5">{partyName}</p></div>
@@ -229,6 +230,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
               <div class="meta">
                 <h2>${esc(documentTitle)}</h2>
                 <p><strong>No:</strong> ${esc(voucher.invoice_no || voucher.seq)}</p>
+                ${voucher.type === 'Purchase' && voucher.supplier_invoice_no ? `<p><strong>Supplier Invoice No:</strong> ${esc(voucher.supplier_invoice_no)}</p>` : ''}
                 <p><strong>Date:</strong> ${esc(fmtDate(voucher.date_bs))}</p>
                 ${(voucher.type === 'Sales' || voucher.type === 'Purchase') ? `<p><strong>Credit Days:</strong> ${esc(voucher.credit_days ?? 0)}</p><p><strong>Due Date:</strong> ${esc(fmtDate(voucher.due_date_bs || voucher.date_bs))}</p>` : ''}
                 ${originalVoucher ? `<p><strong>Original Invoice:</strong> ${esc(originalVoucher.invoice_no || originalVoucher.seq)}</p><p><strong>Original Date:</strong> ${esc(fmtDate(originalVoucher.date_bs))}</p>` : ''}

@@ -29,7 +29,7 @@ import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterC
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
 
-export function CategoryDialog({ kind, category, parentCategory, open, onClose }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void }) {
+export function CategoryDialog({ kind, category, parentCategory, open, onClose, onCreated }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void; onCreated?: (category: ItemCategory) => void }) {
   const { accountCategories, itemCategories, addAccountCategory, alterAccountCategory, addItemCategory, alterItemCategory } = useAppStore()
   const [name, setName] = useState('')
   const [type, setType] = useState<AccountType>('Expense')
@@ -54,7 +54,10 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose }
         if (category) await alterAccountCategory(category.id, { name: name.trim(), account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
         else await addAccountCategory({ name: name.trim(), account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
       } else if (category) await alterItemCategory(category.id, { name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
-      else await addItemCategory({ name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
+      else {
+        const created = await addItemCategory({ name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
+        onCreated?.(created)
+      }
       onClose()
     } catch (e: unknown) { setError(publicErrorMessage(e, 'saving category')) } finally { setSaving(false) }
   }
