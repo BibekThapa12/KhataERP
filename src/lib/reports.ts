@@ -1,6 +1,6 @@
 import type { Account, AccountCategory, AccountType, Company, DetailedProfitLoss, Party, StockEntry, Voucher } from '@/types'
 import { buildCategoryTree, categoryPath, type CategoryTreeNode } from '@/lib/categoryHierarchy'
-import { normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
+import { isCompletedVoucher, normalSide, resolveSystemAccountId, round2 } from '@/lib/engine'
 import { bankAccounts, signedBankBalance } from '@/lib/banks'
 import { addDaysToBs, adToBs, firstOfCurrentBsMonth, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { legacySettlementAccountId } from '@/lib/banks'
@@ -323,7 +323,7 @@ export function getDaybookRows(vouchers: Voucher[], accounts: Account[], parties
   const accountMap = new Map(accounts.map(account => [account.id, account]))
   const partyMap = new Map(parties.map(party => [party.account_id, party]))
 
-  return [...vouchers].sort(sortVouchers).map(voucher => ({
+  return [...vouchers].filter(isCompletedVoucher).sort(sortVouchers).map(voucher => ({
     voucher,
     date_bs: voucher.date_bs,
     date_bs_key: voucherKey(voucher),
@@ -363,7 +363,7 @@ export function getLedgerRows(
 
   for (const voucher of vouchers) {
     const key = voucherKey(voucher)
-    if (voucher.cancelled || key >= fromKey) continue
+    if (!isCompletedVoucher(voucher) || key >= fromKey) continue
     // Income and Expense accounts close at every fiscal year end. Their report
     // opening is therefore only the current fiscal year's activity before the
     // selected From date; balance-sheet accounts continue carrying forward.
@@ -377,7 +377,7 @@ export function getLedgerRows(
   const rows: LedgerRow[] = []
   for (const voucher of [...vouchers].sort(sortVouchers)) {
     const key = voucherKey(voucher)
-    if (key < fromKey || key > toKey || (voucher.cancelled && !includeCancelled)) continue
+    if (key < fromKey || key > toKey || (!includeCancelled && !isCompletedVoucher(voucher)) || (includeCancelled && voucher.status === 'Draft')) continue
     const lines = (voucher.lines || []).filter(line => line.account_id === accountId)
     if (!lines.length) continue
 

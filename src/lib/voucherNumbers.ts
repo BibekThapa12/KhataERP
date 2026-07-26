@@ -13,7 +13,16 @@ export function voucherPrefix(company: Company, type: VoucherType): string {
 }
 
 export function savedVoucherNumber(voucher: Voucher): string {
+  if (voucher.status === 'Draft') return voucher.draft_no || `Draft ${voucher.seq}`
   return voucher.invoice_no || String(voucher.seq)
+}
+
+export function previewNextDraftNumber(vouchers: Voucher[]): string {
+  const highest = vouchers.reduce((value, voucher) => {
+    const match = String(voucher.draft_no || '').match(/(\d+)$/)
+    return match ? Math.max(value, Number(match[1])) : value
+  }, 0)
+  return `DRAFT-${String(highest + 1).padStart(4, '0')}`
 }
 
 export function voucherNumberingPeriod(company: Company, dateBs: string): string {

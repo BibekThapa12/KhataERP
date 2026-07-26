@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Building2, Landmark, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
+  Building2, FileClock, Landmark, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
@@ -104,6 +104,18 @@ export function Dashboard() {
 
   const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
   const postedVouchers = useMemo(() => vouchers.filter(isPostedDashboardVoucher), [vouchers])
+  const draftSummary = useMemo(() => {
+    const drafts = vouchers.filter(voucher => voucher.status === 'Draft')
+    const count = (type: Voucher['type']) => drafts.filter(voucher => voucher.type === type).length
+    return {
+      total: drafts.length,
+      sales: count('Sales'),
+      purchases: count('Purchase'),
+      receipts: count('Receipt'),
+      payments: count('Payment'),
+      journals: count('Journal'),
+    }
+  }, [vouchers])
   const fiscalYearOptions = useMemo(() => companyFiscalYearOptions(company, vouchers), [company, vouchers])
   const periodVouchers = useMemo(() => dashboardVouchersInRange(postedVouchers, from, to), [postedVouchers, from, to])
   const throughTo = useMemo(() => dashboardVouchersThrough(postedVouchers, to), [postedVouchers, to])
@@ -195,6 +207,25 @@ export function Dashboard() {
       {companySetupIncomplete && <Card className="border-amber-200 bg-amber-50/50"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-4"><div><p className="text-sm font-semibold text-amber-800">Complete company setup</p><p className="mt-0.5 text-xs text-amber-700">Add company name, address, phone, PAN/VAT, VAT mode, and fiscal year from Settings.</p></div><Button size="sm" onClick={() => navigate('/settings')}>Open Settings</Button></CardContent></Card>}
 
       <Card className="shadow-none"><CardContent className="p-3 sm:p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
+
+      <Card onClick={() => navigate('/draft-vouchers')} className="cursor-pointer border-amber-200 bg-amber-50/60 shadow-none transition-colors hover:bg-amber-50">
+        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-white text-amber-700"><FileClock className="h-[18px] w-[18px]" /></div>
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Draft Vouchers</p>
+              <p className="mt-0.5 font-serif text-xl font-bold text-primary">{draftSummary.total}</p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-amber-900 sm:grid-cols-5">
+            <span>Sales {draftSummary.sales}</span>
+            <span>Purchase {draftSummary.purchases}</span>
+            <span>Receipt {draftSummary.receipts}</span>
+            <span>Payment {draftSummary.payments}</span>
+            <span>Journal {draftSummary.journals}</span>
+          </div>
+        </CardContent>
+      </Card>
 
       <section className="space-y-3" aria-labelledby="account-balance-heading">
         <div className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1">

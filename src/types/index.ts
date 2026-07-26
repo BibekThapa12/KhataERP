@@ -2,6 +2,7 @@
 
 export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense'
 export type VoucherType = 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
+export type VoucherStatus = 'Draft' | 'Completed'
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
 export type InventoryValuationMethod = 'weighted_average' | 'fifo' | 'lifo'
@@ -125,6 +126,7 @@ export interface Voucher {
   date_bs: string
   date_bs_key: number
   invoice_no?: string
+  draft_no?: string | null
   supplier_invoice_no?: string | null
   numbering_period?: string
   credit_days?: number
@@ -145,8 +147,15 @@ export interface Voucher {
   vat_amount?: number
   total: number
   cancelled: boolean
+  status?: VoucherStatus
   seq: number
+  created_by?: string | null
+  updated_by?: string | null
   created_at?: string
+  updated_at?: string
+  completed_by?: string | null
+  completed_at?: string | null
+  draft_payload?: Record<string, unknown> | null
   // joined
   lines?: VoucherLine[]
   stock_lines?: StockLine[]

@@ -16,7 +16,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
-import { publicErrorMessage } from '@/lib/security'
+import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
@@ -36,7 +36,7 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { company, accounts, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher } = useAppStore()
+  const { company, accounts, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
@@ -79,20 +79,23 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   useEffect(() => {
     if (open && voucher) {
+      const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
+        dateBs: string; isCash: boolean; partyAccountId: string; creditDays: number; supplierInvoiceNo: string; lines: LineItem[]; vatRate: number; discount: number; narration: string
+      }> | null : null
       setDateBs(voucher.date_bs)
-      setIsCash(voucher.is_cash)
-      setPartyAccountId(voucher.party_account_id || '')
+      setIsCash(draft?.isCash ?? voucher.is_cash)
+      setPartyAccountId(draft?.partyAccountId ?? voucher.party_account_id ?? '')
       const voucherParty = parties.find(party => party.account_id === voucher.party_account_id)
-      setCreditDays(voucher.is_cash ? 0 : (voucher.credit_days ?? voucherParty?.default_credit_days ?? 0))
-      setSupplierInvoiceNo(voucher.supplier_invoice_no || '')
-      setLines((voucher.invoice_items || []).map(i => {
+      setCreditDays(draft?.creditDays ?? (voucher.is_cash ? 0 : (voucher.credit_days ?? voucherParty?.default_credit_days ?? 0)))
+      setSupplierInvoiceNo(draft?.supplierInvoiceNo ?? voucher.supplier_invoice_no ?? '')
+      setLines(draft?.lines?.length ? draft.lines : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
         return { item_id: i.item_id, qty: i.qty, rate: i.rate, unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
       }))
-      setVatRate(vatEnabled ? (voucher.vat_rate ?? 13) : 0)
-      setDiscount(voucher.discount ?? 0)
-      setNarration(voucher.narration ?? '')
+      setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
+      setDiscount(draft?.discount ?? voucher.discount ?? 0)
+      setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
     } else if (!open) {
       setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
@@ -155,7 +158,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     return () => window.cancelAnimationFrame(frame)
   }, [lines.length])
 
-  const handleSave = async () => {
+  const handleSave = async (status: Voucher['status'] = 'Completed') => {
     setError('')
     const validLines = lines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
     if (!lines.length || validLines.length !== lines.length) { setError('Select an item and enter a quantity greater than zero for every line. Rate can be zero but cannot be negative.'); return }
@@ -184,11 +187,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     try {
       const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
-        if (voucher) await updateSalesVoucher(voucher.id, params)
-        else await saveSalesVoucher(params)
+        if (voucher) await updateSalesVoucher(voucher.id, params, status)
+        else await saveSalesVoucher(params, status)
       } else {
-        if (voucher) await updatePurchaseVoucher(voucher.id, params)
-        else await savePurchaseVoucher(params)
+        if (voucher) await updatePurchaseVoucher(voucher.id, params, status)
+        else await savePurchaseVoucher(params, status)
       }
       if (voucher) {
         onClose()
@@ -211,6 +214,41 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
     } finally {
       submissionLock.release()
+      setSaving(false)
+    }
+  }
+
+  const handleSaveDraft = async () => {
+    setError('')
+    setSaving(true)
+    try {
+      await saveDraftVoucher({
+        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        type,
+        date_bs: dateBs,
+        narration: narration.trim(),
+        party_account_id: partyAccountId || null,
+        is_cash: isCash,
+        total,
+        draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, narration },
+      })
+      onClose()
+    } catch (e: unknown) {
+      setError(`${publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)} Detail: ${safeErrorMessage(e)}`)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleDeleteDraft = async () => {
+    if (!voucher || voucher.status !== 'Draft') return
+    setSaving(true)
+    try {
+      await deleteDraftVoucher(voucher.id)
+      onClose()
+    } catch (e: unknown) {
+      setError(publicErrorMessage(e, 'deleting draft voucher'))
+    } finally {
       setSaving(false)
     }
   }
@@ -347,9 +385,13 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
           </div>
 
           <DialogFooter>
+            {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
             <Button variant="outline" tabIndex={-1} onClick={onClose}>Cancel</Button>
-            <Button onClick={handleSave} disabled={saving}>
-              {saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} ${type === 'Sales' ? 'Invoice' : 'Bill'}`}
+            <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
+              {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
+            </Button>
+            <Button onClick={() => handleSave('Completed')} disabled={saving}>
+              {saving ? 'Saving...' : 'Complete Voucher'}
             </Button>
           </DialogFooter>
         </DialogContent>

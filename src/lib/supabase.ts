@@ -114,7 +114,7 @@ const CHEQUE_FIELDS = 'id,company_id,cheque_number,bank_id,account_number,party_
 const CHEQUE_EVENT_FIELDS = 'id,action,created_at'
 const MASTER_CHANGE_FIELDS = 'id,record_type,action,old_values,new_values,created_at'
 const VOUCHER_SETTLEMENT_FIELDS = 'id,company_id,settlement_voucher_id,invoice_voucher_id,party_account_id,amount,created_at'
-const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,supplier_invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,seq,created_at'
+const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,draft_no,supplier_invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,status,seq,created_by,updated_by,created_at,updated_at,completed_by,completed_at,draft_payload'
 const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
 const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
 const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
@@ -774,7 +774,7 @@ function voucherRequestFingerprint(
   invoiceItems?: UpdateVoucherPayload['invoice_items'],
   settlements?: UpdateVoucherPayload['settlements'],
 ) {
-  const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.invoice_no, voucher.supplier_invoice_no, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration].join('|')
+  const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.invoice_no, voucher.supplier_invoice_no, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration, voucher.status].join('|')
   const ledger = lines.map(line => `${line.account_id}:${line.debit}:${line.credit}`).join(',')
   const stock = (stockLines || []).map(line => `${line.item_id}:${line.direction}:${line.qty}:${line.rate}:${line.stock_condition || 'saleable'}`).join(',')
   const items = (invoiceItems || []).map(item => `${item.item_id}:${item.qty}:${item.rate}:${item.source_invoice_item_id || ''}`).join(',')
@@ -840,10 +840,55 @@ export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_i
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
+export async function insertDraftVoucher(
+  voucher: Omit<Voucher, 'id' | 'seq' | 'created_at' | 'updated_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>,
+  draft_no: string,
+  seq: number,
+): Promise<Voucher> {
+  const { data: { user } } = await supabase.auth.getUser()
+  const { data, error } = await supabase
+    .from('vouchers')
+    .insert({
+      ...voucher,
+      invoice_no: null,
+      draft_no,
+      seq,
+      status: 'Draft',
+      created_by: user?.id,
+      updated_by: user?.id,
+      updated_at: new Date().toISOString(),
+    })
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
+    .single()
+  if (error) throw error
+  return normalizeVoucherDates(data as Voucher) as Voucher
+}
+
+export async function updateDraftVoucher(
+  id: string,
+  voucher: Partial<Omit<Voucher, 'id' | 'created_at' | 'updated_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>>,
+): Promise<Voucher> {
+  const { data: { user } } = await supabase.auth.getUser()
+  const { data, error } = await supabase
+    .from('vouchers')
+    .update({ ...voucher, status: 'Draft', updated_by: user?.id, updated_at: new Date().toISOString() })
+    .eq('id', id)
+    .eq('status', 'Draft')
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
+    .single()
+  if (error) throw error
+  return normalizeVoucherDates(data as Voucher) as Voucher
+}
+
 export async function cancelVoucher(id: string, trace?: WritePerformanceTrace) {
   const request = () => supabase.from('vouchers').update({ cancelled: true }).eq('id', id)
   const { error } = trace
     ? await trace.measure('voucher_cancel_update', request, { category: 'network_database', query: true, dbFunction: 'postgrest:vouchers.update' })
     : await request()
+  if (error) throw error
+}
+
+export async function deleteVoucher(id: string) {
+  const { error } = await supabase.from('vouchers').delete().eq('id', id).eq('status', 'Draft')
   if (error) throw error
 }

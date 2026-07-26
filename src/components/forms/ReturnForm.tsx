@@ -16,7 +16,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { publicErrorMessage } from '@/lib/security'
+import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
@@ -35,7 +35,7 @@ interface ReturnLine extends ReturnItemInput {
 }
 
 export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
-  const { company, vouchers, items, stock, accounts, accountCategories, parties, getPartyByAccountId, saveReturnVoucher, updateReturnVoucher } = useAppStore()
+  const { company, vouchers, items, stock, accounts, accountCategories, parties, getPartyByAccountId, saveReturnVoucher, updateReturnVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const originalType = type === 'Sales Return' ? 'Sales' : 'Purchase'
   const isSalesReturn = type === 'Sales Return'
   const vatEnabled = company?.vat_enabled ?? true
@@ -107,16 +107,20 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       return
     }
     if (voucher) {
+      const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
+        partyAccountId: string; originalId: string; dateBs: string; lines: ReturnLine[]; settlementMode: 'party' | 'cash' | 'bank'; settlementAccountId: string; stockCondition: StockCondition; manualVatRate: number; reason: string
+      }> | null : null
       const source = vouchers.find(entry => entry.id === voucher.original_voucher_id)
-      setPartyAccountId(voucher.party_account_id || source?.party_account_id || '')
-      setOriginalId(voucher.original_voucher_id || '')
-      setDateBs(voucher.date_bs)
-      setSettlementMode(voucher.settlement_mode || (source?.party_account_id ? 'party' : 'cash'))
-      setSettlementAccountId(legacySettlementAccountId(voucher) || (voucher.is_cash ? cashAccountId : defaultBankId))
-      setStockCondition(voucher.stock_lines?.[0]?.stock_condition || (voucher.restock_items === false ? 'damaged' : 'saleable'))
-      setManualVatRate(voucher.vat_rate || 0)
-      setReason(voucher.return_reason || voucher.narration || '')
-      if (source) setLines(makeLines(source, voucher))
+      setPartyAccountId(draft?.partyAccountId ?? voucher.party_account_id ?? source?.party_account_id ?? '')
+      setOriginalId(draft?.originalId ?? voucher.original_voucher_id ?? '')
+      setDateBs(draft?.dateBs ?? voucher.date_bs)
+      setSettlementMode(draft?.settlementMode ?? voucher.settlement_mode ?? (source?.party_account_id ? 'party' : 'cash'))
+      setSettlementAccountId(draft?.settlementAccountId ?? legacySettlementAccountId(voucher) ?? (voucher.is_cash ? cashAccountId : defaultBankId))
+      setStockCondition(draft?.stockCondition ?? voucher.stock_lines?.[0]?.stock_condition ?? (voucher.restock_items === false ? 'damaged' : 'saleable'))
+      setManualVatRate(draft?.manualVatRate ?? voucher.vat_rate ?? 0)
+      setReason(draft?.reason ?? voucher.return_reason ?? voucher.narration ?? '')
+      if (draft?.lines?.length) setLines(draft.lines)
+      else if (source) setLines(makeLines(source, voucher))
       else setLines((voucher.invoice_items || []).map(line => ({ ...line, source_invoice_item_id: undefined, item_name: line.item_name || items.find(item => item.id === line.item_id)?.name || '', unit: line.unit || items.find(item => item.id === line.item_id)?.unit || '', entry_unit: line.entry_unit || line.unit, conversion_factor: line.conversion_factor || 1, cost_rate: line.cost_rate || stock.find(entry => entry.id === line.item_id)?.avg_cost || 0, original_qty: 0, returned_qty: 0 })))
     } else {
       setLines(current => current.length ? current : [emptyManualLine()])
@@ -170,7 +174,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     restock_items: true, stock_condition: stockCondition, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
 
-  const save = async () => {
+  const save = async (status: Voucher['status'] = 'Completed') => {
     setError('')
     if (!original && !partyAccountId) return setError(`Select a ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular}.`)
     if (!reason.trim()) return setError('Enter the reason for the return.')
@@ -188,8 +192,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      if (voucher) await updateReturnVoucher(voucher.id, params)
-      else await saveReturnVoucher(params)
+      if (voucher) await updateReturnVoucher(voucher.id, params, status)
+      else await saveReturnVoucher(params, status)
       if (voucher) {
         onClose()
       } else {
@@ -206,6 +210,33 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`)) } finally { submissionLock.release(); setSaving(false) }
+  }
+
+  const deleteDraft = async () => {
+    if (!voucher || voucher.status !== 'Draft') return
+    setSaving(true)
+    try { await deleteDraftVoucher(voucher.id); onClose() }
+    catch (e: unknown) { setError(publicErrorMessage(e, 'deleting draft voucher')) }
+    finally { setSaving(false) }
+  }
+
+  const saveDraft = async () => {
+    setError('')
+    setSaving(true)
+    try {
+      await saveDraftVoucher({
+        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        type,
+        date_bs: dateBs,
+        narration: reason,
+        party_account_id: partyAccountId || null,
+        is_cash: settlementMode === 'cash',
+        total: preview?.total || 0,
+        draft_payload: { partyAccountId, originalId, dateBs, lines, settlementMode, settlementAccountId, stockCondition, manualVatRate, reason },
+      })
+      onClose()
+    } catch (e: unknown) { setError(`${publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)} Detail: ${safeErrorMessage(e)}`) }
+    finally { setSaving(false) }
   }
 
   const party = partyAccountId ? getPartyByAccountId(partyAccountId) : null
@@ -249,7 +280,12 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           </div>
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : `Save ${documentName}`}</Button></DialogFooter>
+        <DialogFooter>
+          {voucher?.status === 'Draft' && <Button variant="destructive" onClick={deleteDraft} disabled={saving}>Delete Draft</Button>}
+          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
+          <Button onClick={() => save('Completed')} disabled={saving}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   )

@@ -359,6 +359,16 @@ begin
       and cheque.status = 'cleared'
   ) then raise exception 'A Receipt linked to a cleared cheque cannot be cancelled'; end if;
 
+  if length(coalesce(voucher_record.narration, '')) > 4000
+    or length(coalesce(voucher_record.return_reason, '')) > 2000
+    or length(coalesce(voucher_record.invoice_no, '')) > 100 then
+    raise exception 'Voucher text exceeds the allowed length';
+  end if;
+
+  if coalesce(voucher_record.status, 'Completed') = 'Draft' then
+    return null;
+  end if;
+
   if voucher_record.type <> 'Stock Adjustment' then
     if line_count < 2 then raise exception 'Posted vouchers require at least two ledger lines'; end if;
     if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.01 then

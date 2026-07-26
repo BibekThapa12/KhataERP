@@ -352,6 +352,7 @@ create table if not exists vouchers (
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
+  draft_no         text,
   supplier_invoice_no text,
   numbering_period text not null default 'all',
   credit_days      integer,
@@ -371,8 +372,15 @@ create table if not exists vouchers (
   vat_amount       numeric(14,2),
   total            numeric(14,2) not null default 0,
   cancelled        boolean not null default false,
+  status           text not null default 'Completed' check (status in ('Draft','Completed')),
   seq              integer not null,
-  created_at       timestamptz not null default now()
+  created_by       uuid references auth.users(id),
+  updated_by       uuid references auth.users(id),
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  completed_by     uuid references auth.users(id),
+  completed_at     timestamptz,
+  draft_payload    jsonb
 );
 
 do $$
@@ -392,6 +400,7 @@ end $$;
 -- normalizes them from the legacy AD date while displaying.
 alter table vouchers add column if not exists date_ad date;
 alter table vouchers add column if not exists supplier_invoice_no text;
+alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
 alter table vouchers add column if not exists date_bs text;
@@ -399,6 +408,15 @@ alter table vouchers add column if not exists date_bs_key integer;
 alter table vouchers add column if not exists original_voucher_id uuid references vouchers(id) on delete restrict;
 alter table vouchers add column if not exists return_reason text;
 alter table vouchers add column if not exists settlement_mode text;
+alter table vouchers add column if not exists status text not null default 'Completed';
+alter table vouchers drop constraint if exists vouchers_status_check;
+alter table vouchers add constraint vouchers_status_check check (status in ('Draft','Completed'));
+alter table vouchers add column if not exists created_by uuid references auth.users(id);
+alter table vouchers add column if not exists updated_by uuid references auth.users(id);
+alter table vouchers add column if not exists updated_at timestamptz not null default now();
+alter table vouchers add column if not exists completed_by uuid references auth.users(id);
+alter table vouchers add column if not exists completed_at timestamptz;
+alter table vouchers add column if not exists draft_payload jsonb;
 alter table vouchers add column if not exists restock_items boolean;
 update vouchers set date_ad = coalesce(date_ad, date) where date_ad is null;
 
@@ -489,6 +507,7 @@ create index if not exists idx_master_logs_company on master_change_logs(company
 create index if not exists idx_vouchers_company   on vouchers(company_id, date desc, seq desc);
 create index if not exists idx_vouchers_company_bs on vouchers(company_id, date_bs_key desc, seq desc);
 create unique index if not exists vouchers_company_type_period_invoice_no_unique on vouchers(company_id, type, numbering_period, invoice_no) where invoice_no is not null;
+create unique index if not exists vouchers_company_draft_no_unique on vouchers(company_id, draft_no) where draft_no is not null;
 create index if not exists idx_vouchers_original on vouchers(original_voucher_id) where original_voucher_id is not null;
 create index if not exists idx_iitems_source on invoice_items(source_invoice_item_id) where source_invoice_item_id is not null;
 create index if not exists idx_vlines_voucher     on voucher_lines(voucher_id);

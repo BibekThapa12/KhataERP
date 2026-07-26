@@ -21,6 +21,15 @@ export function validateBalanced(lines: VoucherLine[]): { valid: boolean; total_
   return { valid: Math.abs(diff) < 0.005, total_debit, total_credit, diff }
 }
 
+export function voucherStatus(voucher: Voucher): 'Draft' | 'Completed' {
+  return voucher.status === 'Draft' ? 'Draft' : 'Completed'
+}
+
+export function isCompletedVoucher(voucher: Voucher) {
+  const workflow = voucher as Voucher & { posted?: boolean; deleted_at?: string | null }
+  return !voucher.cancelled && !workflow.deleted_at && workflow.posted !== false && voucherStatus(voucher) === 'Completed'
+}
+
 export type SystemAccountKey =
   | 'cash'
   | 'bank'
@@ -82,7 +91,7 @@ export function recomputeAllBalances(accounts: Account[], vouchers: Voucher[]): 
     (a.date_bs_key || makeBsKey(a.date_bs)) - (b.date_bs_key || makeBsKey(b.date_bs)) || a.seq - b.seq
   )
   for (const v of sorted) {
-    if (v.cancelled || !v.lines) continue
+    if (!isCompletedVoucher(v) || !v.lines) continue
     for (const line of v.lines) {
       const acc = byId.get(line.account_id)
       if (!acc) continue
@@ -198,7 +207,7 @@ export function applyVoucherBalanceDelta(
   const accountById = new Map(accounts.map(account => [account.id, account]))
   const deltas = new Map<string, number>()
   const collect = (voucher: Voucher | undefined, multiplier: number) => {
-    if (!voucher || voucher.cancelled) return
+    if (!voucher || !isCompletedVoucher(voucher)) return
     for (const line of voucher.lines || []) {
       const account = accountById.get(line.account_id)
       if (!account) continue
@@ -235,11 +244,7 @@ interface CostLayer { qty: number; rate: number; sourceVoucherId: string }
 interface InventoryState { qty: number; value: number; layers: CostLayer[] }
 interface IssueCost { qty: number; value: number; rate: number }
 
-function isPostedInventoryVoucher(voucher: Voucher) {
-  const workflow = voucher as Voucher & { status?: string; posted?: boolean; deleted_at?: string | null }
-  const status = workflow.status?.toLowerCase()
-  return !voucher.cancelled && !workflow.deleted_at && workflow.posted !== false && status !== 'draft' && status !== 'unposted' && status !== 'deleted'
-}
+function isPostedInventoryVoucher(voucher: Voucher) { return isCompletedVoucher(voucher) }
 
 function replayInventory(items: Item[], vouchers: Voucher[], method: InventoryValuationMethod) {
   const summary = new Map(items.map(item => {
@@ -731,7 +736,7 @@ export function computeVatReport(vouchers: Voucher[], from_date: string, to_date
   const toKey = makeBsKey(to_date)
   const in_range = vouchers.filter(v => {
     const key = v.date_bs_key || makeBsKey(v.date_bs)
-    return !v.cancelled && key >= fromKey && key <= toKey
+    return isCompletedVoucher(v) && key >= fromKey && key <= toKey
   })
   const sales = in_range.filter(v => v.type === 'Sales')
   const purchases = in_range.filter(v => v.type === 'Purchase')

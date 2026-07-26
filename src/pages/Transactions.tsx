@@ -7,6 +7,7 @@ import { VoucherTable } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { ReturnForm } from '@/components/forms/ReturnForm'
+import { StockAdjustmentForm } from '@/pages/Items'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { selectedFiscalYearStartBs, vouchersInFiscalYear } from '@/lib/reports'
@@ -143,6 +144,30 @@ export function JournalPage() {
         <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <JournalForm open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
+    </div>
+  )
+}
+
+export function DraftVouchersPage() {
+  const allVouchers = useAppStore(s => s.vouchers)
+  const company = useAppStore(s => s.company)
+  const fiscalStart = selectedFiscalYearStartBs(company)
+  const vouchers = useMemo(
+    () => vouchersInFiscalYear(allVouchers, fiscalStart)
+      .filter(voucher => voucher.status === 'Draft')
+      .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq),
+    [allVouchers, fiscalStart],
+  )
+  const [editing, setEditing] = useState<Voucher | null>(null)
+  return (
+    <div>
+      <PageHeader title="Draft Vouchers" description="Saved but not posted to ledgers, inventory, reports, or dashboard totals" />
+      <PageContent><Card><VoucherTable vouchers={vouchers} onEdit={setEditing} /></Card></PageContent>
+      {editing && (editing.type === 'Sales' || editing.type === 'Purchase') && <InvoiceForm type={editing.type} open voucher={editing} onClose={() => setEditing(null)} />}
+      {editing && (editing.type === 'Receipt' || editing.type === 'Payment') && <ReceiptPaymentForm type={editing.type} open voucher={editing} onClose={() => setEditing(null)} />}
+      {editing?.type === 'Journal' && <JournalForm open voucher={editing} onClose={() => setEditing(null)} />}
+      {editing && (editing.type === 'Sales Return' || editing.type === 'Purchase Return') && <ReturnForm type={editing.type} open voucher={editing} onClose={() => setEditing(null)} />}
+      {editing?.type === 'Stock Adjustment' && <StockAdjustmentForm open voucher={editing} onClose={() => setEditing(null)} />}
     </div>
   )
 }

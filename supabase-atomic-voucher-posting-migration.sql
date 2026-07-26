@@ -4,6 +4,15 @@
 begin;
 
 alter table public.vouchers add column if not exists idempotency_key uuid;
+alter table public.vouchers add column if not exists status text not null default 'Completed';
+alter table public.vouchers drop constraint if exists vouchers_status_check;
+alter table public.vouchers add constraint vouchers_status_check check (status in ('Draft','Completed'));
+alter table public.vouchers add column if not exists created_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists updated_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists updated_at timestamptz not null default now();
+alter table public.vouchers add column if not exists completed_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists completed_at timestamptz;
+alter table public.vouchers add column if not exists draft_payload jsonb;
 create unique index if not exists vouchers_company_idempotency_unique
   on public.vouchers(company_id, idempotency_key)
   where idempotency_key is not null;
@@ -64,6 +73,7 @@ declare
   saved public.vouchers%rowtype;
   target_company uuid;
   target_type text;
+  target_status text;
   next_seq integer;
   highest_number bigint;
   generated_number text;
@@ -79,6 +89,10 @@ declare
 begin
   if p_voucher is null or jsonb_typeof(p_voucher) <> 'object' then
     raise exception 'Voucher payload must be an object';
+  end if;
+  target_status := coalesce(nullif(p_voucher->>'status', ''), 'Completed');
+  if target_status not in ('Draft', 'Completed') then
+    raise exception 'Voucher status must be Draft or Completed';
   end if;
   if jsonb_typeof(coalesce(p_lines, '[]'::jsonb)) <> 'array'
     or jsonb_typeof(coalesce(p_stock_lines, '[]'::jsonb)) <> 'array'
@@ -190,7 +204,8 @@ begin
       narration, original_voucher_id, return_reason, settlement_mode,
       settlement_account_id, restock_items, party_account_id, is_cash,
       subtotal, discount, vat_rate, vat_amount, total, cancelled, seq,
-      idempotency_key
+      status, created_by, updated_by, updated_at, completed_by, completed_at,
+      draft_payload, idempotency_key
     ) values (
       target_company, target_type,
       (p_voucher->>'date')::date, (p_voucher->>'date_ad')::date,
@@ -206,6 +221,10 @@ begin
       nullif(p_voucher->>'discount', '')::numeric, nullif(p_voucher->>'vat_rate', '')::numeric,
       nullif(p_voucher->>'vat_amount', '')::numeric, coalesce((p_voucher->>'total')::numeric, 0),
       coalesce((p_voucher->>'cancelled')::boolean, false), next_seq,
+      target_status, auth.uid(), auth.uid(), now(),
+      case when target_status = 'Completed' then auth.uid() else null end,
+      case when target_status = 'Completed' then now() else null end,
+      case when p_voucher ? 'draft_payload' then p_voucher->'draft_payload' else null end,
       requested_idempotency
     ) returning * into saved;
   else
@@ -236,7 +255,13 @@ begin
       vat_rate = case when p_voucher ? 'vat_rate' then nullif(p_voucher->>'vat_rate', '')::numeric else voucher.vat_rate end,
       vat_amount = case when p_voucher ? 'vat_amount' then nullif(p_voucher->>'vat_amount', '')::numeric else voucher.vat_amount end,
       total = case when p_voucher ? 'total' then (p_voucher->>'total')::numeric else voucher.total end,
-      cancelled = case when p_voucher ? 'cancelled' then (p_voucher->>'cancelled')::boolean else voucher.cancelled end
+      cancelled = case when p_voucher ? 'cancelled' then (p_voucher->>'cancelled')::boolean else voucher.cancelled end,
+      status = case when p_voucher ? 'status' then target_status else voucher.status end,
+      updated_by = auth.uid(),
+      updated_at = now(),
+      completed_by = case when p_voucher ? 'status' and target_status = 'Completed' and voucher.status = 'Draft' then auth.uid() else voucher.completed_by end,
+      completed_at = case when p_voucher ? 'status' and target_status = 'Completed' and voucher.status = 'Draft' then now() else voucher.completed_at end,
+      draft_payload = case when p_voucher ? 'draft_payload' then p_voucher->'draft_payload' else voucher.draft_payload end
     where voucher.id = p_voucher_id and voucher.company_id = target_company
     returning * into saved;
 
@@ -274,9 +299,10 @@ begin
       on stock_line.item_id = affected.item_id
      and coalesce(stock_line.stock_condition, 'saleable') = affected.stock_condition
     left join public.vouchers voucher
-      on voucher.id = stock_line.voucher_id
+     on voucher.id = stock_line.voucher_id
      and voucher.company_id = target_company
      and not voucher.cancelled
+     and voucher.status = 'Completed'
     group by affected.item_id, affected.stock_condition, item.opening_qty
     having (case when affected.stock_condition = 'saleable' then coalesce(item.opening_qty, 0) else 0 end)
       + coalesce(sum(case when voucher.id is not null and stock_line.direction = 'in' then stock_line.qty

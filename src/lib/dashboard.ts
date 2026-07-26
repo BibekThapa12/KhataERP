@@ -1,6 +1,6 @@
 import type { Account, AccountCategory, Item, Voucher } from '@/types'
 import { addDaysToBs, adToBs, bsToAd, makeBsKey, parseBsDate, todayBs } from '@/lib/nepaliDate'
-import { round2 } from '@/lib/engine'
+import { isCompletedVoucher, round2 } from '@/lib/engine'
 import { categoryDescendantIds } from '@/lib/categoryHierarchy'
 
 export type DashboardGrouping = 'daily' | 'weekly' | 'monthly'
@@ -46,16 +46,8 @@ export interface DashboardSeriesPoint {
   net: number
 }
 
-type VoucherWithWorkflow = Voucher & {
-  status?: string
-  posted?: boolean
-  deleted_at?: string | null
-}
-
 export function isPostedDashboardVoucher(voucher: Voucher) {
-  const workflow = voucher as VoucherWithWorkflow
-  const status = workflow.status?.toLowerCase()
-  return !voucher.cancelled && !workflow.deleted_at && workflow.posted !== false && status !== 'draft' && status !== 'unposted' && status !== 'deleted'
+  return isCompletedVoucher(voucher)
 }
 
 export function dashboardVouchersInRange(vouchers: Voucher[], from: string, to: string) {

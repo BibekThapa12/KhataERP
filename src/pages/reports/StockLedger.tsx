@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Boxes, Edit2, Eye, PackageMinus, PackageOpen, PackagePlus, Printer } from 'lucide-react'
+import { Boxes, Edit2, Eye, PackageMinus, PackageOpen, PackagePlus, Printer, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeStockLedger } from '@/lib/engine'
@@ -7,6 +7,7 @@ import { categoryPath } from '@/lib/categoryHierarchy'
 import { downloadCsv } from '@/lib/csv'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
+import { normalizeSearch } from '@/lib/search'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportActions } from '@/components/reports/ReportActions'
 import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
@@ -20,6 +21,7 @@ import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
+import { Input } from '@/components/ui/input'
 import type { Item, Voucher } from '@/types'
 
 function number(value: number) {
@@ -44,6 +46,7 @@ export function StockLedgerPage() {
   const [range, setRange] = useState<ReportRange>('fiscal')
   const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
   const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
+  const [search, setSearch] = useState('')
   const [selectedVoucher, setSelectedVoucher] = useState<Voucher | null>(null)
   const [editingVoucher, setEditingVoucher] = useState<Voucher | null>(null)
   const printableVoucherRef = useRef<HTMLDivElement>(null)
@@ -71,6 +74,11 @@ export function StockLedgerPage() {
     if (voucher.party_account_id && partyByAccount.get(voucher.party_account_id)?.name) return partyByAccount.get(voucher.party_account_id)!.name
     return voucher.type === 'Stock Adjustment' ? 'Stock Adjustment' : voucher.is_cash ? 'Cash' : '—'
   }
+  const filteredMovements = useMemo(() => {
+    const query = normalizeSearch(search)
+    if (!ledger || !query) return ledger?.movements || []
+    return ledger.movements.filter(row => normalizeSearch(`${row.date_bs} ${row.voucher_type} ${row.voucher_no} ${particulars(row.voucher_id)} ${row.narration || ''} ${row.inward_qty || ''} ${row.inward_rate || ''} ${row.inward_value || ''} ${row.outward_qty || ''} ${row.outward_rate || ''} ${row.outward_value || ''} ${row.balance_qty} ${row.balance_rate} ${row.balance_value}`).includes(query))
+  }, [ledger, search, voucherById, partyByAccount])
 
   const canEditVoucher = (voucher: Voucher) => !voucher.cancelled && ['Sales', 'Purchase', 'Sales Return', 'Purchase Return'].includes(voucher.type)
   const editVoucher = (voucher: Voucher) => {
@@ -102,7 +110,7 @@ export function StockLedgerPage() {
   const selectItem = (value: string) => setSearchParams(value ? { item: value } : {}, { replace: true })
   const exportCsv = () => {
     if (!item || !ledger) return
-    downloadCsv(`stock-ledger-${item.name}-${from}-to-${to}.csv`, ['Date', 'Voucher Type', 'Voucher No.', 'Particulars', 'Narration', 'Inward Qty', 'Inward Rate', 'Inward Value', 'Outward Qty', 'Outward Rate', 'Outward Value', 'Balance Qty', 'Balance Rate', 'Balance Value'], ledger.movements.map(row => [row.date_bs, row.voucher_type, row.voucher_no, particulars(row.voucher_id), row.narration, row.inward_qty || '', row.inward_rate || '', row.inward_value || '', row.outward_qty || '', row.outward_rate || '', row.outward_value || '', row.balance_qty, row.balance_rate, row.balance_value]))
+    downloadCsv(`stock-ledger-${item.name}-${from}-to-${to}.csv`, ['Date', 'Voucher Type', 'Voucher No.', 'Particulars', 'Narration', 'Inward Qty', 'Inward Rate', 'Inward Value', 'Outward Qty', 'Outward Rate', 'Outward Value', 'Balance Qty', 'Balance Rate', 'Balance Value'], filteredMovements.map(row => [row.date_bs, row.voucher_type, row.voucher_no, particulars(row.voucher_id), row.narration, row.inward_qty || '', row.inward_rate || '', row.inward_value || '', row.outward_qty || '', row.outward_rate || '', row.outward_value || '', row.balance_qty, row.balance_rate, row.balance_value]))
   }
 
   return <div className="report-page stock-ledger-report-page">
@@ -111,7 +119,7 @@ export function StockLedgerPage() {
       <FormalReportPrintHeader company={company} title="Stock Ledger Statement" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={`${item?.name || 'No item selected'} · ${methodLabel}`} />
       <Card className="report-controls"><CardContent className="space-y-4 p-4">
         <div className="max-w-2xl space-y-1.5"><Label>Stock Item</Label><SearchableSelect value={selectedId} onValueChange={selectItem} placeholder="Select stock item" searchPlaceholder="Search name, SKU, barcode, category or unit…" emptyMessage="No matching stock items" options={sortedItems.map(candidate => ({ value: candidate.id, label: `${candidate.name}${candidate.is_archived ? ' (Archived)' : ''}`, searchText: `${candidate.sku || ''} ${candidate.barcode || ''} ${categoryPath(itemCategories, candidate.category_id)} ${candidate.unit} ${candidate.alternate_unit || ''}` }))} /></div>
-        <ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} />
+        <div className="flex flex-wrap items-end justify-between gap-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /><div className="relative min-w-[240px] flex-1 sm:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock movements..." className="pl-8" /></div></div>
       </CardContent></Card>
 
       {item && ledger ? <>
@@ -132,11 +140,11 @@ export function StockLedgerPage() {
             <tbody>
               <tr className="stock-ledger-screen-opening border-t bg-amber-50/60 font-medium"><td className="report-td text-muted-foreground">Before {fmtDate(from)}</td><td colSpan={4} className="report-td italic">Opening Balance b/f</td><td colSpan={6}></td><td className="report-td text-right"><QuantityCell value={ledger.opening_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.opening_rate)}</td><td className="report-td text-right num">{fmtMoney(ledger.opening_value)}</td><td className="print:hidden"></td></tr>
               <tr className="stock-ledger-print-opening hidden border-t bg-amber-50/60 font-medium"><td className="report-td text-muted-foreground">Before {fmtDate(from)}</td><td colSpan={4} className="report-td italic">Opening Balance b/f</td><td colSpan={4}></td><td className="report-td text-right"><QuantityCell value={ledger.opening_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.opening_rate)}</td><td className="report-td text-right num">{fmtMoney(ledger.opening_value)}</td></tr>
-              {ledger.movements.map((row, index) => {
+              {filteredMovements.map((row, index) => {
                 const voucher = voucherById.get(row.voucher_id)
                 return <tr key={`${row.voucher_id}-${index}`} tabIndex={voucher ? 0 : undefined} aria-label={voucher ? `View ${voucher.type} ${row.voucher_no}` : undefined} onClick={() => voucher && setSelectedVoucher(voucher)} onKeyDown={event => { if (voucher && (event.key === 'Enter' || event.key === ' ')) { event.preventDefault(); setSelectedVoucher(voucher) } }} className="cursor-pointer border-t transition-colors hover:bg-muted/30 focus:bg-muted/30 focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"><td className="report-td whitespace-nowrap">{fmtDate(row.date_bs)}</td><td className="report-td">{row.voucher_type}</td><td className="report-td font-medium text-primary underline-offset-4">{row.voucher_no}</td><td className="report-td">{particulars(row.voucher_id)}</td><td className="report-td max-w-56 truncate text-muted-foreground" title={row.narration}>{row.narration || '—'}</td><td className="report-td text-right text-emerald-700">{row.inward_qty ? <QuantityCell value={row.inward_qty} item={item} /> : '—'}</td><td className="report-td text-right num text-emerald-700">{row.inward_qty ? fmtMoney(row.inward_rate) : '—'}</td><td className="report-td text-right num text-emerald-700">{row.inward_qty ? fmtMoney(row.inward_value) : '—'}</td><td className="report-td text-right text-red-700">{row.outward_qty ? <QuantityCell value={row.outward_qty} item={item} /> : '—'}</td><td className="report-td text-right num text-red-700">{row.outward_qty ? fmtMoney(row.outward_rate) : '—'}</td><td className="report-td text-right num text-red-700">{row.outward_qty ? fmtMoney(row.outward_value) : '—'}</td><td className="report-td text-right font-semibold"><QuantityCell value={row.balance_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(row.balance_rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(row.balance_value)}</td><td className="report-td print:hidden"><div className="flex justify-end gap-1"><Button type="button" variant="ghost" size="icon" title="View voucher" aria-label={`View ${row.voucher_no}`} onClick={event => { event.stopPropagation(); if (voucher) setSelectedVoucher(voucher) }}><Eye className="h-4 w-4" /></Button><Button type="button" variant="ghost" size="icon" title="Print voucher" aria-label={`Print ${row.voucher_no}`} onClick={event => { event.stopPropagation(); if (voucher) requestVoucherPrint(voucher) }}><Printer className="h-4 w-4" /></Button>{voucher && canEditVoucher(voucher) && <Button type="button" variant="ghost" size="icon" title="Edit voucher" aria-label={`Edit ${row.voucher_no}`} onClick={event => { event.stopPropagation(); editVoucher(voucher) }}><Edit2 className="h-4 w-4" /></Button>}</div></td></tr>
               })}
-              {!ledger.movements.length && <tr><td colSpan={15} className="px-4 py-14 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No stock movements in this period</p><p className="mt-1 text-sm">Opening and closing balances are still shown.</p></td></tr>}
+              {!filteredMovements.length && <tr><td colSpan={15} className="px-4 py-14 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">{search ? 'No matching stock movements' : 'No stock movements in this period'}</p><p className="mt-1 text-sm">Opening and closing balances are still shown.</p></td></tr>}
             </tbody>
             <tfoot><tr className="stock-ledger-screen-total border-t-2 bg-muted/30 font-semibold"><td colSpan={5} className="report-td">Period Total</td><td className="report-td text-right"><QuantityCell value={ledger.inward_qty} item={item} /></td><td></td><td className="report-td text-right num">{fmtMoney(ledger.inward_value)}</td><td className="report-td text-right"><QuantityCell value={ledger.outward_qty} item={item} /></td><td></td><td className="report-td text-right num">{fmtMoney(ledger.outward_value)}</td><td className="report-td text-right"><QuantityCell value={ledger.closing_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.closing_rate)}</td><td className="report-td text-right num">{fmtMoney(ledger.closing_value)}</td><td className="print:hidden"></td></tr><tr className="stock-ledger-print-total hidden border-t-2 bg-muted/30 font-semibold"><td colSpan={5} className="report-td">Period Total</td><td className="report-td text-right"><QuantityCell value={ledger.inward_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.inward_value)}</td><td className="report-td text-right"><QuantityCell value={ledger.outward_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.outward_value)}</td><td className="report-td text-right"><QuantityCell value={ledger.closing_qty} item={item} /></td><td className="report-td text-right num">{fmtMoney(ledger.closing_rate)}</td><td className="report-td text-right num">{fmtMoney(ledger.closing_value)}</td></tr></tfoot>
           </table></div>

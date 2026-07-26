@@ -16,7 +16,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { Textarea } from '@/components/ui/misc'
-import { publicErrorMessage } from '@/lib/security'
+import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
@@ -157,7 +157,7 @@ interface ReceiptPaymentFormProps {
 }
 
 export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaymentFormProps) {
-  const { company, accounts, accountCategories, parties, vouchers, saveReceipt, savePayment, updateReceipt, updatePayment } = useAppStore()
+  const { company, accounts, accountCategories, parties, vouchers, saveReceipt, savePayment, updateReceipt, updatePayment, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const isReceipt = type === 'Receipt'
   const isEditing = !!voucher
 
@@ -174,12 +174,13 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   useEffect(() => {
     if (open && voucher) {
+      const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; allocations: typeof allocations; moneyAccountId: string; narration: string }> | null : null
       setDateBs(voucher.date_bs)
       const settlementId = legacySettlementAccountId(voucher) || cashAccountId
-      setMoneyAccountId(settlementId)
+      setMoneyAccountId(draft?.moneyAccountId || settlementId)
       const restored = (voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => ({ account_id: line.account_id, amount: String(isReceipt ? line.credit || 0 : line.debit || 0), invoice_allocations: (voucher.settlements || []).filter(row => row.party_account_id === line.account_id).map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: String(row.amount) })) })).filter(line => Number(line.amount) > 0)
-      setAllocations(restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }])
-      setNarration(voucher.narration || '')
+      setAllocations(draft?.allocations?.length ? draft.allocations : restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }])
+      setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
     } else if (open) {
       setMoneyAccountId(cashAccountId)
@@ -203,7 +204,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   }))
   const updateInvoiceAllocation = (allocationIndex: number, invoiceId: string, value: string) => setAllocations(current => current.map((allocation, index) => index === allocationIndex ? { ...allocation, invoice_allocations: allocation.invoice_allocations.map(row => row.invoice_voucher_id === invoiceId ? { ...row, amount: value } : row) } : allocation))
 
-  const handleSave = async () => {
+  const handleSave = async (status: Voucher['status'] = 'Completed') => {
     const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount), invoice_allocations: allocation.invoice_allocations.map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: Number(row.amount) })).filter(row => row.amount > 0) }))
     if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
@@ -212,11 +213,11 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     setSaving(true)
     try {
       if (isReceipt) {
-        if (voucher) await updateReceipt(voucher.id, { allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
-        else await saveReceipt({ allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs })
+        if (voucher) await updateReceipt(voucher.id, { allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
+        else await saveReceipt({ allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
       } else {
-        if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
-        else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs })
+        if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
+        else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
       }
       if (voucher) {
         onClose()
@@ -231,6 +232,33 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     } catch (e: unknown) {
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
     } finally { submissionLock.release(); setSaving(false) }
+  }
+
+  const handleDeleteDraft = async () => {
+    if (!voucher || voucher.status !== 'Draft') return
+    setSaving(true)
+    try { await deleteDraftVoucher(voucher.id); onClose() }
+    catch (e: unknown) { setError(publicErrorMessage(e, 'deleting draft voucher')) }
+    finally { setSaving(false) }
+  }
+
+  const handleSaveDraft = async () => {
+    setError('')
+    setSaving(true)
+    try {
+      await saveDraftVoucher({
+        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        type,
+        date_bs: dateBs,
+        narration,
+        party_account_id: allocations.find(allocation => allocation.account_id)?.account_id || null,
+        is_cash: moneyAccountId === cashAccountId,
+        total,
+        draft_payload: { dateBs, allocations, moneyAccountId, narration },
+      })
+      onClose()
+    } catch (e: unknown) { setError(`${publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)} Detail: ${safeErrorMessage(e)}`) }
+    finally { setSaving(false) }
   }
 
   return (
@@ -280,8 +308,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
+          {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} ${type}`}</Button>
+          <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
+          <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -295,7 +325,7 @@ interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Vouch
 interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
-  const { company, accounts, accountCategories, parties, saveJournal, updateJournal } = useAppStore()
+  const { company, accounts, accountCategories, parties, saveJournal, updateJournal, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const manualJournalNumbering = company?.journal_numbering_mode === 'manual'
   const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
   const journalAccounts = accounts.filter(account => {
@@ -319,14 +349,15 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
 
   useEffect(() => {
     if (open && voucher) {
+      const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; journalInvoiceNo: string; jLines: JLine[]; narration: string }> | null : null
       setDateBs(voucher.date_bs)
-      setJournalInvoiceNo(voucher.invoice_no || '')
-      setJLines((voucher.lines || []).map(l => ({
+      setJournalInvoiceNo(draft?.journalInvoiceNo ?? voucher.invoice_no ?? '')
+      setJLines(draft?.jLines?.length ? draft.jLines : (voucher.lines || []).map(l => ({
         account_id: l.account_id,
         debit: l.debit || 0,
         credit: l.credit || 0,
       })))
-      setNarration(voucher.narration || '')
+      setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
     } else if (open) {
       setJournalInvoiceNo('')
@@ -353,7 +384,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     setJLines(next)
   }
 
-  const handleSave = async () => {
+  const handleSave = async (status: Voucher['status'] = 'Completed') => {
     if (manualJournalNumbering && !journalInvoiceNo.trim()) { setError('Enter the Journal voucher number.'); return }
     if (journalInvoiceNo.trim().length > 100) { setError('Journal voucher number cannot exceed 100 characters.'); return }
     const validLines = jLines.filter(l => l.account_id && (l.debit > 0 || l.credit > 0))
@@ -363,8 +394,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     setSaving(true)
     try {
       const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs, invoice_no: manualJournalNumbering ? journalInvoiceNo.trim() : undefined }
-      if (voucher) await updateJournal(voucher.id, params)
-      else await saveJournal(params)
+      if (voucher) await updateJournal(voucher.id, params, status)
+      else await saveJournal(params, status)
       if (voucher) {
         onClose()
       } else {
@@ -378,6 +409,31 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     } catch (e: unknown) {
       setError(publicErrorMessage(e, 'saving journal voucher'))
     } finally { submissionLock.release(); setSaving(false) }
+  }
+
+  const handleDeleteDraft = async () => {
+    if (!voucher || voucher.status !== 'Draft') return
+    setSaving(true)
+    try { await deleteDraftVoucher(voucher.id); onClose() }
+    catch (e: unknown) { setError(publicErrorMessage(e, 'deleting draft voucher')) }
+    finally { setSaving(false) }
+  }
+
+  const handleSaveDraft = async () => {
+    setError('')
+    setSaving(true)
+    try {
+      await saveDraftVoucher({
+        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        type: 'Journal',
+        date_bs: dateBs,
+        narration,
+        total: totalDebit || totalCredit,
+        draft_payload: { dateBs, journalInvoiceNo, jLines, narration },
+      })
+      onClose()
+    } catch (e: unknown) { setError(`${publicErrorMessage(e, 'saving journal draft')} Detail: ${safeErrorMessage(e)}`) }
+    finally { setSaving(false) }
   }
 
   return (
@@ -444,8 +500,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>
+          {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving || !balanced}>{saving ? 'Saving...' : `${isEditing ? 'Update' : 'Save'} Journal Entry`}</Button>
+          <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
+          <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

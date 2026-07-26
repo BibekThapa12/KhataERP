@@ -18,6 +18,7 @@ const PurchaseReturnPage = lazy(() => import('@/pages/PurchaseReturn').then(m =>
 const ReceiptsPage = lazy(() => import('@/pages/Receipts').then(m => ({ default: m.ReceiptsPage })))
 const PaymentsPage = lazy(() => import('@/pages/Payments').then(m => ({ default: m.PaymentsPage })))
 const JournalPage = lazy(() => import('@/pages/Journal').then(m => ({ default: m.JournalPage })))
+const DraftVouchersPage = lazy(() => import('@/pages/DraftVouchers').then(m => ({ default: m.DraftVouchersPage })))
 const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
 const AccountsPage = lazy(() => import('@/pages/Accounts').then(m => ({ default: m.AccountsPage })))
@@ -226,6 +227,7 @@ export default function App() {
             <Route path="receipts" element={<ReceiptsPage />} />
             <Route path="payments" element={<PaymentsPage />} />
             <Route path="journal" element={<JournalPage />} />
+            <Route path="draft-vouchers" element={<DraftVouchersPage />} />
             <Route path="transactions" element={<Navigate to="/sales" replace />} />
             <Route path="transactions/sales" element={<SalesPage />} />
             <Route path="transactions/purchase" element={<PurchasePage />} />
@@ -235,6 +237,7 @@ export default function App() {
             <Route path="transactions/receipts" element={<ReceiptsPage />} />
             <Route path="transactions/payments" element={<PaymentsPage />} />
             <Route path="transactions/journal" element={<JournalPage />} />
+            <Route path="transactions/drafts" element={<DraftVouchersPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />
             <Route path="accounts" element={<AccountsPage />} />

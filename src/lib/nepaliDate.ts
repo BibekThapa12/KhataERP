@@ -120,5 +120,6 @@ export function normalizeVoucherDates<T extends { date?: string; date_ad?: strin
     date_ad: dateAd,
     date_bs: dateBs,
     date_bs_key: voucher.date_bs_key || makeBsKey(dateBs),
+    status: (voucher as T & { status?: string | null }).status === 'Draft' ? 'Draft' : 'Completed',
   }
 }
