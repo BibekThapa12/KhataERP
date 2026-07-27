@@ -704,10 +704,10 @@ export function StockReportPage() {
     setMethodError('')
     try { await saveCompany({ inventory_valuation_method: next }) } catch (error: unknown) { setMethodError(publicErrorMessage(error, 'changing valuation method')) }
   }
-  const headings = showDetails ? ['Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
-  const exportCsv = () => downloadCsv(`${stockCondition}-stock-summary-${from}-to-${to}.csv`, headings, rows.map(row => showDetails
-    ? [row.item.name, row.category, row.item.unit, row.movement.opening_qty, row.movement.inward_qty, row.movement.outward_qty, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]
-    : [row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
+  const headings = showDetails ? ['S.No.', 'Item', 'Category', 'Unit', 'Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value', 'Status'] : ['S.No.', 'Item', 'Category', 'Unit', 'Closing', 'Avg Rate', 'Value', 'Status']
+  const exportCsv = () => downloadCsv(`${stockCondition}-stock-summary-${from}-to-${to}.csv`, headings, rows.map((row, index) => showDetails
+    ? [index + 1, row.item.name, row.category, row.item.unit, row.movement.opening_qty, row.movement.inward_qty, row.movement.outward_qty, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]
+    : [index + 1, row.item.name, row.category, row.item.unit, row.movement.closing_qty, row.movement.closing_rate, row.movement.closing_value, row.status]))
 
   return <div className="report-page stock-summary-report-page">
     <PageHeader title="Stock Summary" description={`${conditionLabel} movement and closing quantities with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
@@ -736,9 +736,9 @@ export function StockReportPage() {
       </div>
       {methodError && <p className="text-sm text-destructive">{methodError}</p>}
       <Card className="report-table-card overflow-hidden">{rows.length === 0 ? <div className="py-16 text-center text-muted-foreground"><Boxes className="mx-auto mb-3 h-8 w-8 opacity-30" /><p className="font-medium text-foreground">No matching stock items</p><p className="mt-1 text-sm">Try changing the search or filters.</p></div> : <div className="overflow-x-auto"><table className={`stock-summary-table w-full border-collapse text-sm ${showDetails ? 'stock-summary-detailed min-w-[1120px]' : 'stock-summary-compact min-w-[820px]'}`}>
-        <thead><tr className="bg-muted/50">{headings.map((heading, index) => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${index >= 3 && heading !== 'Status' ? 'text-right' : 'text-left'} ${heading === 'Category' || heading === 'Status' ? 'stock-summary-print-hide' : ''}`}>{heading}</th>)}</tr></thead>
-        <tbody>{rows.map(row => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="stock-summary-print-hide px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="stock-summary-print-hide px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
-        <tfoot><tr className="stock-summary-screen-total border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr><tr className="stock-summary-print-total hidden border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={2}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td></tr></tfoot>
+        <thead><tr className="bg-muted/50">{headings.map(heading => <th key={heading} className={`px-4 py-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground ${['Opening', 'Inward', 'Outward', 'Closing', 'Avg Rate', 'Value'].includes(heading) ? 'text-right' : 'text-left'} ${heading === 'Category' || heading === 'Status' ? 'stock-summary-print-hide' : ''}`}>{heading}</th>)}</tr></thead>
+        <tbody>{rows.map((row, index) => <tr key={row.item.id} className="border-t border-border hover:bg-muted/20"><td className="px-4 py-3 text-muted-foreground num">{index + 1}</td><td className="px-4 py-3 font-medium">{row.item.name}</td><td className="stock-summary-print-hide px-4 py-3 text-muted-foreground">{row.category || '—'}</td><td className="px-4 py-3"><span className="block">{row.item.unit}</span>{row.item.alternate_unit && <span className="block text-[11px] text-muted-foreground">1 {row.item.unit} = {row.item.alternate_conversion} {row.item.alternate_unit}</span>}</td>{showDetails && <><td className="px-4 py-3 text-right">{qty(row.movement.opening_qty, row.item)}</td><td className="px-4 py-3 text-right text-emerald-600">{qty(row.movement.inward_qty, row.item)}</td><td className="px-4 py-3 text-right text-red-600">{qty(row.movement.outward_qty, row.item)}</td></>}<td className="px-4 py-3 text-right font-semibold">{qty(row.movement.closing_qty, row.item)}</td><td className="px-4 py-3 text-right num">{fmtMoney(row.movement.closing_rate)}</td><td className="px-4 py-3 text-right num font-semibold">{fmtMoney(row.movement.closing_value)}</td><td className="stock-summary-print-hide px-4 py-3">{badge(row.status)}</td></tr>)}</tbody>
+        <tfoot><tr className="stock-summary-screen-total border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={4}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td><td></td></tr><tr className="stock-summary-print-total hidden border-t-2 border-border bg-muted/30 font-semibold"><td className="px-4 py-3" colSpan={3}>Filtered Total ({rows.length} item{rows.length === 1 ? '' : 's'})</td>{showDetails && (['opening', 'inward', 'outward'] as const).map(key => <td key={key} className="px-4 py-3 text-right num">{sameUnit ? totals[key].toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td>)}<td className="px-4 py-3 text-right num">{sameUnit ? totals.closing.toLocaleString('en-NP', { maximumFractionDigits: 4 }) : '—'}</td><td></td><td className="px-4 py-3 text-right num">{fmtMoney(totalValue)}</td></tr></tfoot>
       </table></div>}</Card>
       <FormalReportPrintFooter />
     </PageContent>
@@ -793,6 +793,7 @@ export function LegacyStockReportPage() {
               {!showDetails ? <table className="w-full text-sm border-collapse">
                 <thead>
                   <tr className="bg-muted/50">
+                    <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">S.No.</th>
                     <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Qty</th>
                     <th className="text-right px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Unit</th>
@@ -801,8 +802,9 @@ export function LegacyStockReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(({ item, s }) => (
+                  {rows.map(({ item, s }, index) => (
                     <tr key={item.id} className="border-t border-border hover:bg-muted/20">
+                      <td className="px-4 py-2.5 text-muted-foreground num">{index + 1}</td>
                       <td className="px-4 py-2.5 font-medium">{item.name}</td>
                       <td className="px-4 py-2.5 text-right num font-semibold">{formatStockQuantity(s.qty, item)}</td>
                       <td className="px-4 py-2.5 text-right text-muted-foreground">{item.unit}</td>
@@ -813,13 +815,14 @@ export function LegacyStockReportPage() {
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="px-4 py-2.5" colSpan={4}>Total Stock Value</td>
+                    <td className="px-4 py-2.5" colSpan={5}>Total Stock Value</td>
                     <td className="px-4 py-2.5 text-right num">{fmtMoney(totalValue)}</td>
                   </tr>
                 </tfoot>
               </table> : <table className="w-full min-w-[900px] text-sm border-collapse">
                 <thead>
                   <tr className="bg-muted/50 border-b border-border">
+                    <th rowSpan={2} className="border-r border-border px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">S.No.</th>
                     <th rowSpan={2} className="border-r border-border px-4 py-2.5 text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground">Item</th>
                     {['Opening', 'Inward', 'Outward', 'Closing'].map(label => <th key={label} colSpan={2} className="border-r border-border px-4 py-2 text-center text-xs font-semibold uppercase tracking-wider text-muted-foreground">{label}</th>)}
                   </tr>
@@ -831,7 +834,8 @@ export function LegacyStockReportPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(({ item, movement }) => <tr key={item.id} className="border-b border-border hover:bg-muted/20">
+                  {rows.map(({ item, movement }, index) => <tr key={item.id} className="border-b border-border hover:bg-muted/20">
+                    <td className="border-r border-border px-4 py-2.5 text-muted-foreground num">{index + 1}</td>
                     <td className="border-r border-border px-4 py-2.5 font-medium">{item.name}<span className="ml-1.5 text-xs font-normal text-muted-foreground">({item.unit})</span></td>
                     <td className="border-r border-border px-3 py-2.5 text-right num">{movement.opening_qty}</td>
                     <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movement.opening_value)}</td>
@@ -845,7 +849,7 @@ export function LegacyStockReportPage() {
                 </tbody>
                 <tfoot>
                   <tr className="border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="border-r border-border px-4 py-2.5 text-center">Total</td>
+                    <td className="border-r border-border px-4 py-2.5 text-center" colSpan={2}>Total</td>
                     <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.openingQty : '—'}</td>
                     <td className="border-r border-border px-3 py-2.5 text-right num">{fmtMoney(movementTotals.openingValue)}</td>
                     <td className="border-r border-border px-3 py-2.5 text-right num">{canTotalQuantities ? movementTotals.inwardQty : '—'}</td>

@@ -78,7 +78,7 @@ export function DaybookPage() {
   const toggleColumn = (column: OptionalColumn) => setColumns(current => { const next = new Set(current); if (next.has(column)) next.delete(column); else next.add(column); return next })
   const exportCsv = () => {
     const quote = (value: unknown) => `"${String(value ?? '').replaceAll('"', '""')}"`
-    const data = [['Date', 'Voucher Type', 'Voucher No.', 'Party / Account', 'Narration', 'Debit', 'Credit', 'Net Amount', 'Status'], ...rows.map(row => [row.date_bs, row.voucher_type, row.voucher_no, rowParticulars(row).primary, row.narration, row.debit, row.credit, row.debit - row.credit, row.cancelled ? 'Cancelled' : 'Active'])]
+    const data = [['S.No.', 'Date', 'Voucher Type', 'Voucher No.', 'Party / Account', 'Narration', 'Debit', 'Credit', 'Net Amount', 'Status'], ...rows.map((row, index) => [index + 1, row.date_bs, row.voucher_type, row.voucher_no, rowParticulars(row).primary, row.narration, row.debit, row.credit, row.debit - row.credit, row.cancelled ? 'Cancelled' : 'Active'])]
     const blob = new Blob([data.map(record => record.map(quote).join(',')).join('\r\n')], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = `daybook-${from}-to-${to}.csv`; link.click(); URL.revokeObjectURL(url)
   }
@@ -134,6 +134,7 @@ export function DaybookPage() {
               <table className="w-full min-w-[1050px] border-collapse text-sm">
                 <thead>
                   <tr className="bg-muted/50">
+                    <th className="report-th text-left">S.No.</th>
                     <th className="report-th text-left">Date</th>
                     <th className="report-th text-left">Voucher Type</th>
                     <th className="report-th text-left">Voucher No.</th>
@@ -147,12 +148,13 @@ export function DaybookPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map(row => (
+                  {rows.map((row, index) => (
                     <tr
                       key={row.voucher.id}
                       onClick={() => setSelected(row.voucher)}
                       className={`cursor-pointer border-t border-border transition-colors hover:bg-muted/30 ${row.cancelled ? 'opacity-50' : ''}`}
                     >
+                      <td className="report-td whitespace-nowrap text-muted-foreground num">{index + 1}</td>
                       <td className="report-td whitespace-nowrap text-muted-foreground">{fmtDate(row.date_bs)}</td>
                       <td className="report-td"><Badge variant={badgeVariant(row.voucher_type, row.cancelled)}>{row.voucher_type}</Badge></td>
                       <td className="report-td num">{row.voucher_no}</td>
@@ -168,7 +170,7 @@ export function DaybookPage() {
                 </tbody>
                 <tfoot>
                   <tr className="daybook-screen-total border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="report-td" colSpan={4 + (columns.has('narration') ? 1 : 0)}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
+                    <td className="report-td" colSpan={5 + (columns.has('narration') ? 1 : 0)}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
                     {columns.has('debit') && <td className="report-td text-right num debit-amt"><span className="daybook-screen-money">{fmtMoney(totalDebit)}</span><span className="daybook-print-money hidden">{printMoney(totalDebit)}</span></td>}
                     {columns.has('credit') && <td className="report-td text-right num credit-amt"><span className="daybook-screen-money">{fmtMoney(totalCredit)}</span><span className="daybook-print-money hidden">{printMoney(totalCredit)}</span></td>}
                     {columns.has('net') && <td className="report-td text-right num">{fmtMoney(Math.abs(netTotal))}</td>}
@@ -176,7 +178,7 @@ export function DaybookPage() {
                     <td className="report-td report-controls"></td>
                   </tr>
                   <tr className="daybook-print-total hidden border-t-2 border-border bg-muted/30 font-semibold">
-                    <td className="report-td" colSpan={4}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
+                    <td className="report-td" colSpan={5}>Period totals ({activeRows.length} active voucher{activeRows.length === 1 ? '' : 's'})</td>
                     {columns.has('debit') && <td className="report-td text-right num debit-amt">{printMoney(totalDebit)}</td>}
                     {columns.has('credit') && <td className="report-td text-right num credit-amt">{printMoney(totalCredit)}</td>}
                   </tr>

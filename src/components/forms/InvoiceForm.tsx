@@ -24,6 +24,7 @@ import type { Voucher } from '@/types'
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
 interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
+type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100 }
 
@@ -47,6 +48,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
   const [vatRate, setVatRate] = useState(13)
   const [discount, setDiscount] = useState(0)
+  const [discountMode, setDiscountMode] = useState<DiscountMode>('flat')
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -72,7 +74,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   // Totals
   const subtotal = round2Local(lines.reduce((s, l) => s + l.qty * l.rate, 0))
-  const taxable = round2Local(subtotal - discount)
+  const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
+  const taxable = round2Local(subtotal - discountAmount)
   const effectiveVatRate = vatEnabled ? vatRate : 0
   const vatAmount = round2Local(taxable * (effectiveVatRate / 100))
   const total = round2Local(taxable + vatAmount)
@@ -80,7 +83,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   useEffect(() => {
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
-        dateBs: string; isCash: boolean; partyAccountId: string; creditDays: number; supplierInvoiceNo: string; lines: LineItem[]; vatRate: number; discount: number; narration: string
+        dateBs: string; isCash: boolean; partyAccountId: string; creditDays: number; supplierInvoiceNo: string; lines: LineItem[]; vatRate: number; discount: number; discountMode: DiscountMode; narration: string
       }> | null : null
       setDateBs(voucher.date_bs)
       setIsCash(draft?.isCash ?? voucher.is_cash)
@@ -95,12 +98,13 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
+      setDiscountMode(draft?.discountMode ?? 'flat')
       setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
     } else if (!open) {
       setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
       setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
-      setDiscount(0); setNarration(''); setError('')
+      setDiscount(0); setDiscountMode('flat'); setNarration(''); setError('')
     }
   }, [open, voucher, vatEnabled, items, parties, company])
 
@@ -185,7 +189,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params, status)
         else await saveSalesVoucher(params, status)
@@ -204,6 +208,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
         setVatRate(vatEnabled ? 13 : 0)
         setDiscount(0)
+        setDiscountMode('flat')
         setNarration('')
         setError('')
         itemTriggerRefs.current = []
@@ -229,7 +234,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         party_account_id: partyAccountId || null,
         is_cash: isCash,
         total,
-        draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, narration },
+        draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, discountMode, narration },
       })
       onClose()
     } catch (e: unknown) {
@@ -354,8 +359,14 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               <div className="min-w-0 space-y-3">
                 <div className="flex flex-wrap gap-3">
                   <div className="w-full space-y-1.5 sm:w-40">
-                    <Label>Discount (Rs, flat)</Label>
-                    <Input type="number" min="0" step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" />
+                    <Label>Discount</Label>
+                    <div className="flex overflow-hidden rounded-md border bg-white focus-within:ring-2 focus-within:ring-ring">
+                      <Input type="number" min="0" max={discountMode === 'percent' ? 100 : undefined} step="any" value={discount || ''} onChange={e => setDiscount(Number(e.target.value))} placeholder="0" className="h-8 min-w-0 flex-1 border-0 focus-visible:ring-0" />
+                      <div className="flex border-l bg-muted/30 p-0.5">
+                        <Button type="button" size="sm" variant={discountMode === 'flat' ? 'default' : 'ghost'} className="h-6 px-2 text-xs" onClick={() => setDiscountMode('flat')}>Rs</Button>
+                        <Button type="button" size="sm" variant={discountMode === 'percent' ? 'default' : 'ghost'} className="h-6 px-2 text-xs" onClick={() => setDiscountMode('percent')}>%</Button>
+                      </div>
+                    </div>
                   </div>
                   {vatEnabled && (
                     <div className="w-full space-y-1.5 sm:w-44">
@@ -372,7 +383,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
               <div className="h-full space-y-2 rounded-lg bg-[#f6f6f6] p-3 text-[14px]">
                 <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num font-medium">{fmtMoney(subtotal)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num font-medium">- {fmtMoney(discount)}</span></div>
+                <div className="flex justify-between"><span className="text-muted-foreground">Discount{discountMode === 'percent' && discount > 0 ? ` (${discount}%)` : ''}</span><span className="num font-medium">- {fmtMoney(discountAmount)}</span></div>
                 {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num font-medium">{fmtMoney(vatAmount)}</span></div>}
                 <div className="mt-2 flex justify-between border-t border-border pt-2 font-serif text-[16px] font-bold">
                   <span>Total</span><span className="num">{fmtMoney(total)}</span>

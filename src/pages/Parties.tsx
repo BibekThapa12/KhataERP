@@ -64,11 +64,11 @@ function PartyLedger({ party }: { party: Party }) {
     const closing = statementRows.at(-1)?.balance ?? opening
     const fromDate = statementRows[0]?.v.date_bs || company?.fiscal_year_start || todayBs()
     const toDate = statementRows.at(-1)?.v.date_bs || todayBs()
-    const rows = statementRows.map(({ v, dr, cr, particulars, balance }) => `<tr><td>${escapePrintHtml(fmtDate(v.date_bs))}</td><td>${escapePrintHtml(v.type)}</td><td>${escapePrintHtml(v.invoice_no || v.seq)}</td><td>${escapePrintHtml(particulars)}</td><td class="right">${dr ? escapePrintHtml(fmtMoney(dr)) : '-'}</td><td class="right">${cr ? escapePrintHtml(fmtMoney(cr)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, party.type))}</td></tr>`).join('')
+    const rows = statementRows.map(({ v, dr, cr, particulars, balance }, index) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(fmtDate(v.date_bs))}</td><td>${escapePrintHtml(v.type)}</td><td>${escapePrintHtml(v.invoice_no || v.seq)}</td><td>${escapePrintHtml(particulars)}</td><td class="right">${dr ? escapePrintHtml(fmtMoney(dr)) : '-'}</td><td class="right">${cr ? escapePrintHtml(fmtMoney(cr)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, party.type))}</td></tr>`).join('')
     const win = window.open('', '_blank', 'width=900,height=900')
     if (!win) return
     logAppEvent('print_party_statement', company?.id, { party_type: party.type })
-    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(party.name)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>Party Ledger Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Party Name</strong><span>:</span><b>${escapePrintHtml(party.name)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(terminology.singular)}</b></p><p><strong>Address</strong><span>:</span><b>${escapePrintHtml(party.address || '-')}</b></p><p><strong>Phone</strong><span>:</span><b>${escapePrintHtml(party.phone || '-')}</b></p></div><div><p><strong>Group</strong><span>:</span><b>${escapePrintHtml(account?.group || '-')}</b></p><p><strong>Opening Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(opening, party.type))}</b></p><p><strong>From Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(fromDate))}</b></p><p><strong>To Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(toDate))}</b></p></div></section><table class="ledger-table"><thead><tr><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody><tr><td></td><td></td><td></td><td class="strong">Opening Balance</td><td class="right">-</td><td class="right">-</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(opening, party.type))}</td></tr>${rows || '<tr><td colspan="7" class="empty">No transactions in this statement.</td></tr>'}<tr class="strong"><td colspan="4" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(totalDebit))}</td><td class="right">${escapePrintHtml(fmtMoney(totalCredit))}</td><td></td></tr><tr class="closing"><td colspan="6" class="center">Closing Balance</td><td class="right">${escapePrintHtml(partyBalanceLabel(closing, party.type))}</td></tr></tbody></table><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(toDate))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
+    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(party.name)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>Party Ledger Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Party Name</strong><span>:</span><b>${escapePrintHtml(party.name)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(terminology.singular)}</b></p><p><strong>Address</strong><span>:</span><b>${escapePrintHtml(party.address || '-')}</b></p><p><strong>Phone</strong><span>:</span><b>${escapePrintHtml(party.phone || '-')}</b></p></div><div><p><strong>Group</strong><span>:</span><b>${escapePrintHtml(account?.group || '-')}</b></p><p><strong>Opening Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(opening, party.type))}</b></p><p><strong>From Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(fromDate))}</b></p><p><strong>To Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(toDate))}</b></p></div></section><table class="ledger-table"><thead><tr><th>S.No.</th><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody><tr><td></td><td></td><td></td><td></td><td class="strong">Opening Balance</td><td class="right">-</td><td class="right">-</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(opening, party.type))}</td></tr>${rows || '<tr><td colspan="8" class="empty">No transactions in this statement.</td></tr>'}<tr class="strong"><td colspan="5" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(totalDebit))}</td><td class="right">${escapePrintHtml(fmtMoney(totalCredit))}</td><td></td></tr><tr class="closing"><td colspan="7" class="center">Closing Balance</td><td class="right">${escapePrintHtml(partyBalanceLabel(closing, party.type))}</td></tr></tbody></table><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(toDate))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
     win.document.close()
     win.focus()
     win.print()
@@ -101,6 +101,7 @@ function PartyLedger({ party }: { party: Party }) {
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-muted/50">
+              <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">S.No.</th>
               <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">Date</th>
               <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">Type</th>
               <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground font-semibold">Ref</th>
@@ -110,9 +111,10 @@ function PartyLedger({ party }: { party: Party }) {
             </tr>
           </thead>
           <tbody>
-            {statementRows.map(({ v, dr, cr, balance }) => {
+            {statementRows.map(({ v, dr, cr, balance }, index) => {
               return (
                 <tr key={v.id} className="border-t border-border hover:bg-muted/30">
+                  <td className="px-3 py-2.5 text-muted-foreground num">{index + 1}</td>
                   <td className="px-3 py-2.5 text-muted-foreground">{fmtDate(v.date_bs)}</td>
                   <td className="px-3 py-2.5">{v.type}</td>
                   <td className="px-3 py-2.5 text-muted-foreground num text-xs">{v.invoice_no}</td>
@@ -161,6 +163,7 @@ function PartyTable({ partyType, selectedPartyId, rows, totals, hasSearch }: {
       <table className="w-full text-sm border-collapse">
         <thead>
           <tr className="bg-muted/50">
+            <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">S.No.</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground">Name</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden md:table-cell">Phone</th>
             <th className="text-left px-4 py-2.5 text-xs font-semibold uppercase tracking-wider text-muted-foreground hidden lg:table-cell">PAN/VAT</th>
@@ -171,9 +174,10 @@ function PartyTable({ partyType, selectedPartyId, rows, totals, hasSearch }: {
           </tr>
         </thead>
         <tbody>
-          {rows.length ? rows.map(({ party: p, debit, credit }) => {
+          {rows.length ? rows.map(({ party: p, debit, credit }, index) => {
             return (
               <tr key={p.id} className="border-t border-border hover:bg-muted/30 transition-colors">
+                <td className="px-4 py-3 text-muted-foreground num">{index + 1}</td>
                 <td className="px-4 py-3 font-semibold">{p.name}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{p.phone || '—'}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.pan_vat || '—'}</td>
@@ -187,11 +191,11 @@ function PartyTable({ partyType, selectedPartyId, rows, totals, hasSearch }: {
                 </td>
               </tr>
             )
-          }) : <tr><td colSpan={7} className="px-4 py-8 text-center text-muted-foreground">No matching {terminology.plural.toLowerCase()}.</td></tr>}
+          }) : <tr><td colSpan={8} className="px-4 py-8 text-center text-muted-foreground">No matching {terminology.plural.toLowerCase()}.</td></tr>}
         </tbody>
         <tfoot>
           <tr className="border-t-2 bg-muted/30 font-semibold">
-            <td colSpan={4} className="px-4 py-2.5">Total ({rows.length})</td>
+            <td colSpan={5} className="px-4 py-2.5">Total ({rows.length})</td>
             <td className="px-4 py-2.5 text-right num debit-amt">{fmtMoney(totals.debit)}</td>
             <td className="px-4 py-2.5 text-right num credit-amt">{fmtMoney(totals.credit)}</td>
             <td className="px-4 py-2.5" />
@@ -236,7 +240,7 @@ export function PartiesPage() {
   const reportSlug = tab === 'customer' ? 'sundry-debtors' : 'sundry-creditors'
 
   const exportBalances = () => {
-    downloadCsv(`${reportSlug}-balances.csv`, ['Party', 'Phone', 'PAN / VAT', 'Debit', 'Credit'], activeRows.map(row => [row.party.name, row.party.phone, row.party.pan_vat, row.debit || '', row.credit || '']))
+    downloadCsv(`${reportSlug}-balances.csv`, ['S.No.', 'Party', 'Phone', 'PAN / VAT', 'Debit', 'Credit'], activeRows.map((row, index) => [index + 1, row.party.name, row.party.phone, row.party.pan_vat, row.debit || '', row.credit || '']))
     logAppEvent('export_party_balance_summary', company?.id, { party_type: tab, party_count: activeRows.length })
   }
 
@@ -245,12 +249,12 @@ export function PartiesPage() {
     if (!win) return
     const asOf = todayBs()
     const groupBalance = tab === 'customer' ? round2(activeTotals.debit - activeTotals.credit) : round2(activeTotals.credit - activeTotals.debit)
-    const rows = activeRows.map(row => {
+    const rows = activeRows.map((row, index) => {
       const balance = row.party.type === 'customer' ? round2(row.debit - row.credit) : round2(row.credit - row.debit)
-      return `<tr><td class="strong">${escapePrintHtml(row.party.name)}</td><td>${escapePrintHtml(row.party.phone || '-')}</td><td>${escapePrintHtml(row.party.pan_vat || '-')}</td><td class="right">${row.debit ? escapePrintHtml(fmtMoney(row.debit)) : '-'}</td><td class="right">${row.credit ? escapePrintHtml(fmtMoney(row.credit)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, row.party.type))}</td></tr>`
+      return `<tr><td>${index + 1}</td><td class="strong">${escapePrintHtml(row.party.name)}</td><td>${escapePrintHtml(row.party.phone || '-')}</td><td>${escapePrintHtml(row.party.pan_vat || '-')}</td><td class="right">${row.debit ? escapePrintHtml(fmtMoney(row.debit)) : '-'}</td><td class="right">${row.credit ? escapePrintHtml(fmtMoney(row.credit)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, row.party.type))}</td></tr>`
     }).join('')
     const balanceMeaning = tab === 'customer' ? 'Debit: receivable from customers. Credit: customer advance or amount payable.' : 'Debit: supplier advance or amount recoverable. Credit: payable to suppliers.'
-    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(activeTitle)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>${escapePrintHtml(activeTitle)} Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Group Name</strong><span>:</span><b>${escapePrintHtml(activeTitle)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(tab === 'customer' ? 'Sundry Debtors' : 'Sundry Creditors')}</b></p><p><strong>Party Count</strong><span>:</span><b>${activeRows.length}</b></p></div><div><p><strong>As of Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(asOf))}</b></p><p><strong>Total Debit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.debit))}</b></p><p><strong>Total Credit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.credit))}</b></p><p><strong>Group Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</b></p></div></section><table class="group-table"><thead><tr><th>Party</th><th>Phone</th><th>PAN/VAT</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody>${rows || '<tr><td colspan="6" class="empty">No matching parties.</td></tr>'}<tr class="strong"><td colspan="3" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.debit))}</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.credit))}</td><td class="right">${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</td></tr></tbody></table><section style="padding:7px 10px;border-top:1px solid #4b5563;font-size:8px">${escapePrintHtml(balanceMeaning)}</section><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(asOf))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
+    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(activeTitle)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>${escapePrintHtml(activeTitle)} Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Group Name</strong><span>:</span><b>${escapePrintHtml(activeTitle)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(tab === 'customer' ? 'Sundry Debtors' : 'Sundry Creditors')}</b></p><p><strong>Party Count</strong><span>:</span><b>${activeRows.length}</b></p></div><div><p><strong>As of Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(asOf))}</b></p><p><strong>Total Debit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.debit))}</b></p><p><strong>Total Credit</strong><span>:</span><b>${escapePrintHtml(fmtMoney(activeTotals.credit))}</b></p><p><strong>Group Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</b></p></div></section><table class="group-table"><thead><tr><th>S.No.</th><th>Party</th><th>Phone</th><th>PAN/VAT</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody>${rows || '<tr><td colspan="7" class="empty">No matching parties.</td></tr>'}<tr class="strong"><td colspan="4" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.debit))}</td><td class="right">${escapePrintHtml(fmtMoney(activeTotals.credit))}</td><td class="right">${escapePrintHtml(partyBalanceLabel(groupBalance, tab))}</td></tr></tbody></table><section style="padding:7px 10px;border-top:1px solid #4b5563;font-size:8px">${escapePrintHtml(balanceMeaning)}</section><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(asOf))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
     win.document.close()
     win.focus()
     logAppEvent('print_party_balance_summary', company?.id, { party_type: tab, party_count: activeRows.length })

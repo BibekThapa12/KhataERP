@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Download, Printer, Search } from 'lucide-react'
+import { Download, MoreVertical, Printer, Search } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { downloadCsv } from '@/lib/csv'
 import { getRegister, getTransactionRegister, type InvoiceRegisterKind, type TransactionRegisterKind } from '@/lib/managementReports'
@@ -11,7 +11,13 @@ import { ReportDateFilters, type ReportRange } from '@/components/reports/Report
 import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { VoucherTable } from '@/components/tables/VoucherTable'
+import { InvoiceForm } from '@/components/forms/InvoiceForm'
+import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
+import { ReturnForm } from '@/components/forms/ReturnForm'
+import type { Voucher } from '@/types'
 
 type RegisterKind = InvoiceRegisterKind | TransactionRegisterKind
 
@@ -33,6 +39,8 @@ export function RegistersPage() {
   const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   const [showCancelled, setShowCancelled] = useState(false)
   const [search, setSearch] = useState('')
+  const [selected, setSelected] = useState<Voucher | null>(null)
+  const [editing, setEditing] = useState<Voucher | null>(null)
 
   useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
 
@@ -74,15 +82,21 @@ export function RegistersPage() {
   } : null
   const title = `${registerLabels[kind]} Register`
 
+  const editVoucher = (voucher: Voucher) => {
+    setSelected(null)
+    setEditing(voucher)
+  }
+  const closeEdit = () => setEditing(null)
+
   const exportCsv = () => {
     if (filteredInvoiceReport) {
       const supplierInvoiceColumn = kind === 'purchase'
-      const headers = ['Date', 'Type', 'Voucher No.', ...(supplierInvoiceColumn ? ['Supplier Invoice No.'] : []), 'Party / Cash', 'Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross']
-      const rows = filteredInvoiceReport.rows.map(row => [row.voucher.date_bs, row.voucher.type, row.voucher.invoice_no || row.voucher.seq, ...(supplierInvoiceColumn ? [row.voucher.supplier_invoice_no || ''] : []), row.party, row.subtotal, row.discount, row.taxable, row.vat, row.gross])
+      const headers = ['S.No.', 'Date', 'Type', 'Voucher No.', ...(supplierInvoiceColumn ? ['Supplier Invoice No.'] : []), 'Party / Cash', 'Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross']
+      const rows = filteredInvoiceReport.rows.map((row, index) => [index + 1, row.voucher.date_bs, row.voucher.type, row.voucher.invoice_no || row.voucher.seq, ...(supplierInvoiceColumn ? [row.voucher.supplier_invoice_no || ''] : []), row.party, row.subtotal, row.discount, row.taxable, row.vat, row.gross])
       downloadCsv(`${kind}-register.csv`, headers, rows)
       return
     }
-    if (filteredTransactionReport) downloadCsv(`${kind}-register.csv`, ['Date', 'Voucher No.', 'Type', 'Particulars', 'Narration', 'Debit', 'Credit', 'Amount', 'Status'], filteredTransactionReport.rows.map(row => [row.voucher.date_bs, row.voucher.invoice_no || row.voucher.seq, row.voucher.type, row.particulars, row.voucher.narration || '', row.debit, row.credit, row.amount, row.voucher.cancelled ? 'Cancelled' : 'Active']))
+    if (filteredTransactionReport) downloadCsv(`${kind}-register.csv`, ['S.No.', 'Date', 'Voucher No.', 'Type', 'Particulars', 'Narration', 'Debit', 'Credit', 'Amount', 'Status'], filteredTransactionReport.rows.map((row, index) => [index + 1, row.voucher.date_bs, row.voucher.invoice_no || row.voucher.seq, row.voucher.type, row.particulars, row.voucher.narration || '', row.debit, row.credit, row.amount, row.voucher.cancelled ? 'Cancelled' : 'Active']))
   }
 
   return (
@@ -106,29 +120,47 @@ export function RegistersPage() {
           </CardContent>
         </Card>
 
-        {filteredInvoiceReport ? <InvoiceRegisterTable report={filteredInvoiceReport} showSupplierInvoiceNo={kind === 'purchase'} /> : filteredTransactionReport ? <TransactionRegisterTable report={filteredTransactionReport} /> : null}
+        {filteredInvoiceReport ? <InvoiceRegisterTable report={filteredInvoiceReport} showSupplierInvoiceNo={kind === 'purchase'} onSelect={setSelected} /> : filteredTransactionReport ? <TransactionRegisterTable report={filteredTransactionReport} onSelect={setSelected} /> : null}
         <FormalReportPrintFooter />
       </PageContent>
+
+      <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}>
+        <DialogContent className="max-w-4xl">
+          <DialogHeader><DialogTitle>Voucher actions</DialogTitle></DialogHeader>
+          {selected && <VoucherTable vouchers={[selected]} onEdit={editVoucher} />}
+        </DialogContent>
+      </Dialog>
+
+      <InvoiceForm type="Sales" open={editing?.type === 'Sales'} voucher={editing?.type === 'Sales' ? editing : null} onClose={closeEdit} />
+      <InvoiceForm type="Purchase" open={editing?.type === 'Purchase'} voucher={editing?.type === 'Purchase' ? editing : null} onClose={closeEdit} />
+      <ReceiptPaymentForm type="Receipt" open={editing?.type === 'Receipt'} voucher={editing?.type === 'Receipt' ? editing : null} onClose={closeEdit} />
+      <ReceiptPaymentForm type="Payment" open={editing?.type === 'Payment'} voucher={editing?.type === 'Payment' ? editing : null} onClose={closeEdit} />
+      <JournalForm open={editing?.type === 'Journal'} voucher={editing?.type === 'Journal' ? editing : null} onClose={closeEdit} />
+      <ReturnForm type="Sales Return" open={editing?.type === 'Sales Return'} voucher={editing?.type === 'Sales Return' ? editing : null} onClose={closeEdit} />
+      <ReturnForm type="Purchase Return" open={editing?.type === 'Purchase Return'} voucher={editing?.type === 'Purchase Return' ? editing : null} onClose={closeEdit} />
     </div>
   )
 }
 
-function InvoiceRegisterTable({ report, showSupplierInvoiceNo = false }: { report: ReturnType<typeof getRegister>; showSupplierInvoiceNo?: boolean }) {
-  const columnCount = showSupplierInvoiceNo ? 10 : 9
-  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className={cn('w-full text-sm', showSupplierInvoiceNo ? 'min-w-[1080px]' : 'min-w-[980px]')}>
+function InvoiceRegisterTable({ report, showSupplierInvoiceNo = false, onSelect }: { report: ReturnType<typeof getRegister>; showSupplierInvoiceNo?: boolean; onSelect: (voucher: Voucher) => void }) {
+  const columnCount = showSupplierInvoiceNo ? 12 : 11
+  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className={cn('w-full text-sm', showSupplierInvoiceNo ? 'min-w-[1180px]' : 'min-w-[1080px]')}>
     <thead><tr className="bg-muted/50">
+      <th className="report-th text-left">S.No.</th>
       <th className="report-th text-left">Date</th>
       <th className="register-print-hide report-th text-left">Type</th>
       <th className="report-th text-left">Voucher No.</th>
       {showSupplierInvoiceNo && <th className="report-th text-left">Supplier Invoice No.</th>}
       <th className="report-th text-left">Party / Cash</th>
       {['Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross'].map(value => <th key={value} className="report-th text-right">{value}</th>)}
+      <th className="report-th report-controls text-center">Action</th>
     </tr></thead>
-    <tbody>{report.rows.length ? report.rows.map(row => <tr key={row.voucher.id} className={cn('border-t', row.voucher.cancelled && 'opacity-50 line-through', row.voucher.type.includes('Return') && 'bg-muted/20')}>
-      <td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td>{showSupplierInvoiceNo && <td className="report-td num">{row.voucher.supplier_invoice_no || '-'}</td>}<td className="report-td font-medium">{row.party}</td>
+    <tbody>{report.rows.length ? report.rows.map((row, rowIndex) => <tr key={row.voucher.id} onClick={() => onSelect(row.voucher)} className={cn('cursor-pointer border-t hover:bg-muted/30', row.voucher.cancelled && 'opacity-50 line-through', row.voucher.type.includes('Return') && 'bg-muted/20')}>
+      <td className="report-td text-muted-foreground num">{rowIndex + 1}</td><td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td>{showSupplierInvoiceNo && <td className="report-td num">{row.voucher.supplier_invoice_no || '-'}</td>}<td className="report-td font-medium">{row.party}</td>
       {[row.subtotal, row.discount, row.taxable, row.vat, row.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} dashWhenZero /></td>)}
+      <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher.invoice_no || row.voucher.seq}`} onClick={event => { event.stopPropagation(); onSelect(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>
     </tr>) : <tr><td colSpan={columnCount} className="px-4 py-10 text-center text-muted-foreground">No transactions found for this period.</td></tr>}</tbody>
-    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 5 : 4}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} /></td>)}</tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 4 : 3}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num">{registerPrintMoney(value)}</td>)}</tr></tfoot>
+    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 6 : 5}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} /></td>)}<td className="report-td report-controls"></td></tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 5 : 4}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num">{registerPrintMoney(value)}</td>)}</tr></tfoot>
   </table></div></Card>
 }
 
@@ -139,12 +171,13 @@ function RegisterMoney({ value, dashWhenZero = false }: { value: number; dashWhe
   return <><span className="register-screen-money">{empty ? '-' : fmtMoney(value)}</span><span className="register-print-money hidden">{empty ? '-' : registerPrintMoney(value)}</span></>
 }
 
-function TransactionRegisterTable({ report }: { report: ReturnType<typeof getTransactionRegister> }) {
-  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1050px] text-sm">
-    <thead><tr className="bg-muted/50">{['Date', 'Voucher No.', 'Type', 'Particulars', 'Narration', 'Debit', 'Credit', 'Amount', 'Status'].map((value, index) => <th key={value} className={cn('report-th', index >= 5 && index <= 7 ? 'text-right' : 'text-left', index === 2 && 'register-print-hide')}>{value}</th>)}</tr></thead>
-    <tbody>{report.rows.length ? report.rows.map(row => <tr key={row.voucher.id} className={cn('border-t', row.voucher.cancelled && 'opacity-50 line-through')}>
-      <td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td">{row.particulars}</td><td className="report-td text-muted-foreground">{row.voucher.narration || '-'}</td><td className="report-td text-right num"><RegisterMoney value={row.debit} /></td><td className="report-td text-right num"><RegisterMoney value={row.credit} /></td><td className="report-td text-right num font-semibold"><RegisterMoney value={row.amount} /></td><td className="report-td">{row.voucher.cancelled ? 'Cancelled' : 'Active'}</td>
-    </tr>) : <tr><td colSpan={9} className="px-4 py-10 text-center text-muted-foreground">No transactions found for this period.</td></tr>}</tbody>
-    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={5}>Total</td><td className="report-td text-right num"><RegisterMoney value={report.total_debit} /></td><td className="report-td text-right num"><RegisterMoney value={report.total_credit} /></td><td className="report-td text-right num"><RegisterMoney value={report.total_amount} /></td><td /></tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={4}>Total</td><td className="report-td text-right num">{registerPrintMoney(report.total_debit)}</td><td className="report-td text-right num">{registerPrintMoney(report.total_credit)}</td><td className="report-td text-right num">{registerPrintMoney(report.total_amount)}</td><td /></tr></tfoot>
+function TransactionRegisterTable({ report, onSelect }: { report: ReturnType<typeof getTransactionRegister>; onSelect: (voucher: Voucher) => void }) {
+  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[1120px] text-sm">
+    <thead><tr className="bg-muted/50">{['S.No.', 'Date', 'Voucher No.', 'Type', 'Particulars', 'Narration', 'Debit', 'Credit', 'Amount', 'Status'].map((value, index) => <th key={value} className={cn('report-th', index >= 6 && index <= 8 ? 'text-right' : 'text-left', index === 3 && 'register-print-hide')}>{value}</th>)}<th className="report-th report-controls text-center">Action</th></tr></thead>
+    <tbody>{report.rows.length ? report.rows.map((row, index) => <tr key={row.voucher.id} onClick={() => onSelect(row.voucher)} className={cn('cursor-pointer border-t hover:bg-muted/30', row.voucher.cancelled && 'opacity-50 line-through')}>
+      <td className="report-td text-muted-foreground num">{index + 1}</td><td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td">{row.particulars}</td><td className="report-td text-muted-foreground">{row.voucher.narration || '-'}</td><td className="report-td text-right num"><RegisterMoney value={row.debit} /></td><td className="report-td text-right num"><RegisterMoney value={row.credit} /></td><td className="report-td text-right num font-semibold"><RegisterMoney value={row.amount} /></td><td className="report-td">{row.voucher.cancelled ? 'Cancelled' : 'Active'}</td>
+      <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher.invoice_no || row.voucher.seq}`} onClick={event => { event.stopPropagation(); onSelect(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>
+    </tr>) : <tr><td colSpan={11} className="px-4 py-10 text-center text-muted-foreground">No transactions found for this period.</td></tr>}</tbody>
+    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={6}>Total</td><td className="report-td text-right num"><RegisterMoney value={report.total_debit} /></td><td className="report-td text-right num"><RegisterMoney value={report.total_credit} /></td><td className="report-td text-right num"><RegisterMoney value={report.total_amount} /></td><td /><td className="report-td report-controls" /></tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={5}>Total</td><td className="report-td text-right num">{registerPrintMoney(report.total_debit)}</td><td className="report-td text-right num">{registerPrintMoney(report.total_credit)}</td><td className="report-td text-right num">{registerPrintMoney(report.total_amount)}</td><td /></tr></tfoot>
   </table></div></Card>
 }
