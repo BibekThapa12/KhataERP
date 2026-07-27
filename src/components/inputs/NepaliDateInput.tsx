@@ -17,11 +17,12 @@ export interface NepaliDateInputProps {
   allowClear?: boolean
   placeholder?: string
   id?: string
+  tabIndex?: number
 }
 
 export function NepaliDateInput({
   value, onChange, className, min, max, disabled, required, allowClear = false,
-  placeholder = '2083-03-21', id,
+  placeholder = '2083-03-21', id, tabIndex,
 }: NepaliDateInputProps) {
   const [focused, setFocused] = useState(false)
   const [open, setOpen] = useState(false)
@@ -57,11 +58,12 @@ export function NepaliDateInput({
               autoComplete="off"
               disabled={disabled}
               required={required}
+              tabIndex={tabIndex}
               aria-invalid={invalid}
               className={cn('pr-9', invalid && 'border-destructive focus-visible:ring-destructive')}
             />
             <Popover.Trigger asChild>
-              <button type="button" disabled={disabled} aria-label="Open Nepali date calendar" className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" disabled={disabled} tabIndex={tabIndex} aria-label="Open Nepali date calendar" className="absolute inset-y-0 right-0 flex w-9 items-center justify-center rounded-r-md text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50">
                 <CalendarDays className="h-4 w-4" />
               </button>
             </Popover.Trigger>

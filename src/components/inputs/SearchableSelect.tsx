@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { Ref } from 'react'
+import type { FocusEvent, Ref } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -30,13 +30,15 @@ interface SearchableSelectProps {
 
 export function SearchableSelect({
   value, onValueChange, options, placeholder = 'Select…', searchPlaceholder = 'Search…',
-  emptyText = 'No matching options', disabled, className, id, autoFocus, tabIndex, triggerRef,
+  emptyText = 'No matching options', disabled, className, id, tabIndex, triggerRef,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const suppressNextFocus = useRef(false)
+  const focusCameFromTab = useRef(false)
+  const focusCameFromTriggerPointer = useRef(false)
   const scrollFrame = useRef<number | null>(null)
   const scrollTarget = useRef(0)
   const uniqueOptions = useMemo(() => [...new Map(options.map(option => [option.value, option])).values()], [options])
@@ -69,6 +71,23 @@ export function SearchableSelect({
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current)
   }, [])
 
+  useEffect(() => {
+    const trackKeyboardFocus = (event: KeyboardEvent) => {
+      focusCameFromTab.current = event.key === 'Tab'
+      if (event.key === 'Tab') focusCameFromTriggerPointer.current = false
+    }
+    const resetFocusSource = () => {
+      focusCameFromTab.current = false
+      focusCameFromTriggerPointer.current = false
+    }
+    document.addEventListener('keydown', trackKeyboardFocus, true)
+    document.addEventListener('pointerdown', resetFocusSource, true)
+    return () => {
+      document.removeEventListener('keydown', trackKeyboardFocus, true)
+      document.removeEventListener('pointerdown', resetFocusSource, true)
+    }
+  }, [])
+
   const scrollList = (element: HTMLDivElement, delta: number) => {
     const maximum = Math.max(0, element.scrollHeight - element.clientHeight)
     if (scrollFrame.current === null) scrollTarget.current = element.scrollTop
@@ -95,19 +114,26 @@ export function SearchableSelect({
     setOpen(false)
   }
 
-  const openOnFocus = () => {
+  const openOnFocus = (event: FocusEvent<HTMLButtonElement>) => {
     if (suppressNextFocus.current) {
       suppressNextFocus.current = false
       return
     }
-    // Delay until after the trigger's click handler so mouse focus and
-    // keyboard Tab focus both leave the popover open.
+    if (focusCameFromTriggerPointer.current) {
+      focusCameFromTriggerPointer.current = false
+      return
+    }
+    if (!focusCameFromTab.current) {
+      event.currentTarget.blur()
+      return
+    }
+    focusCameFromTab.current = false
     window.setTimeout(() => setOpen(true), 0)
   }
 
   return <Popover.Root open={open} onOpenChange={handleOpenChange}>
     <Popover.Trigger asChild>
-      <button ref={triggerRef} id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} autoFocus={autoFocus} tabIndex={tabIndex} data-dialog-autofocus={autoFocus ? '' : undefined} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
+      <button ref={triggerRef} id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} tabIndex={tabIndex} onPointerDown={() => { focusCameFromTriggerPointer.current = true; focusCameFromTab.current = false }} onFocus={openOnFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
         <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')} title={selected?.label}>{selected?.label || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>

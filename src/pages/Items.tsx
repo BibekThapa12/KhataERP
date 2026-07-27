@@ -94,7 +94,6 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       if (voucher?.status === 'Draft') await deleteDraftVoucher(voucher.id)
       onClose()
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
-      window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError(publicErrorMessage(error, 'saving stock adjustment'))
     } finally { submissionLock.release(); setSaving(false) }
@@ -114,7 +113,6 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       })
       onClose()
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
-      window.requestAnimationFrame(() => itemTriggerRef.current?.focus())
     } catch (error: unknown) {
       setError(`${publicErrorMessage(error, 'saving stock adjustment draft')} Detail: ${safeErrorMessage(error)}`)
     } finally { setSaving(false) }

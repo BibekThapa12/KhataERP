@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque } from '@/types'
+import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, insertItem,
@@ -9,6 +9,7 @@ import {
   updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, updateItemsByIds, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
   fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
+  fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin,
 } from '@/lib/supabase'
 import {
   applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
@@ -39,6 +40,34 @@ const nextVoucherNumberText = (value: string) => value.replace(/(\d+)$/, match =
 // together. Share the active request so one company never performs the same
 // full hydration more than once concurrently.
 const companyDataLoadPromises = new Map<string, Promise<void>>()
+let companyDataLoadVersion = 0
+
+const blankCompanyData = {
+  company: null,
+  accounts: [],
+  rawAccounts: [],
+  accountCategories: [],
+  parties: [],
+  items: [],
+  itemCategories: [],
+  stock: [],
+  vouchers: [],
+  companyModules: [],
+  chequePermissions: [],
+  chequeBanks: [],
+  cheques: [],
+  dataReady: false,
+}
+
+const activeCompanyStorageKey = (userId: string) => `khataerp:active-company:${userId}`
+
+function rememberActiveCompany(userId: string, companyId: string) {
+  try { window.localStorage.setItem(activeCompanyStorageKey(userId), companyId) } catch { /* storage unavailable */ }
+}
+
+function rememberedActiveCompany(userId: string) {
+  try { return window.localStorage.getItem(activeCompanyStorageKey(userId)) } catch { return null }
+}
 
 async function measuredWrite<T>(context: WriteTraceContext, task: (trace: WritePerformanceTrace) => Promise<T>): Promise<T> {
   const trace = beginWriteTrace(context)
@@ -71,6 +100,9 @@ interface AppState {
 
   // Data
   company: Company | null
+  companyMemberships: CompanyMembership[]
+  activeCompanyId: string | null
+  companyCreationLicense: CompanyCreationLicense | null
   accounts: Account[]      // with computed balances
   rawAccounts: Account[]   // opening balances only (for recompute)
   accountCategories: AccountCategory[]
@@ -98,6 +130,10 @@ interface AppState {
 
   // Actions
   loadAll: (userId: string) => Promise<void>
+  loadCompanies: (userId: string) => Promise<void>
+  switchCompany: (companyId: string) => Promise<void>
+  createCompany: (company: CompanyCreateInput) => Promise<Company>
+  addCompanyAdmin: (email: string) => Promise<void>
   saveCompany: (updates: Partial<Company>) => Promise<void>
   refreshChequeData: () => Promise<void>
 
@@ -317,23 +353,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   userId: null,
   setUserId: (id) => set(state => state.userId === id ? state : {
     userId: id,
-    company: null,
-    accounts: [],
-    rawAccounts: [],
-    accountCategories: [],
-    parties: [],
-    items: [],
-    itemCategories: [],
-    stock: [],
-    vouchers: [],
-    companyModules: [],
-    chequePermissions: [],
-    chequeBanks: [],
-    cheques: [],
-    dataReady: false,
+    ...blankCompanyData,
+    companyMemberships: [],
+    activeCompanyId: null,
+    companyCreationLicense: null,
     error: null,
   }),
   company: null,
+  companyMemberships: [],
+  activeCompanyId: null,
+  companyCreationLicense: null,
   accounts: [],
   rawAccounts: [],
   accountCategories: [],
@@ -368,15 +397,75 @@ export const useAppStore = create<AppState>((set, get) => ({
   closingStockValue: () => get().stock.reduce((s, e) => s + e.value, 0),
 
   // ─── Load All ───────────────────────────────────────────────────────────────
+  loadCompanies: async (userId) => {
+    const response = await fetchMyCompanies()
+    let memberships = response.memberships
+    let activeCompanyId = response.active_company_id || null
+    const remembered = rememberedActiveCompany(userId)
+    if (!activeCompanyId && remembered && memberships.some(entry => entry.company_id === remembered)) {
+      const active = await setActiveCompanyRemote(remembered)
+      activeCompanyId = active.id
+      memberships = memberships.map(entry => entry.company_id === active.id ? { ...entry, company: active } : entry)
+    }
+    if (activeCompanyId) rememberActiveCompany(userId, activeCompanyId)
+    set({ companyMemberships: memberships, activeCompanyId, companyCreationLicense: response.license })
+  },
+  switchCompany: async (companyId) => {
+    const userId = get().userId
+    if (!userId) throw new Error('No user')
+    if (companyId === get().company?.id && get().dataReady) return
+    companyDataLoadVersion += 1
+    const active = await setActiveCompanyRemote(companyId)
+    rememberActiveCompany(userId, active.id)
+    const memberships = get().companyMemberships.map(entry => entry.company_id === active.id ? { ...entry, company: active } : entry)
+    set({ ...blankCompanyData, company: active, companyMemberships: memberships, activeCompanyId: active.id, loading: true, error: null })
+    await get().loadAll(userId)
+  },
+  createCompany: async (companyInput) => {
+    const userId = get().userId
+    if (!userId) throw new Error('No user')
+    const company = await createCompanyAtomic(companyInput)
+    rememberActiveCompany(userId, company.id)
+    set({ ...blankCompanyData, company, activeCompanyId: company.id, loading: true, error: null })
+    await get().loadAll(userId)
+    notifySuccess('Company created', company.name)
+    return company
+  },
+  addCompanyAdmin: async (email) => {
+    const company = get().company
+    if (!company) throw new Error('No company')
+    await addExistingCompanyAdmin(company.id, email)
+    notifySuccess('Company admin added', email)
+  },
   loadAll: (userId) => {
-    const pending = companyDataLoadPromises.get(userId)
+    const pendingKey = `${userId}:${get().activeCompanyId || ''}`
+    const pending = companyDataLoadPromises.get(pendingKey)
     if (pending) return pending
 
+    const loadVersion = ++companyDataLoadVersion
     const request = (async () => {
     set({ loading: true, error: null })
     try {
-      const company = await getOrCreateCompany(userId)
-      set({ company, userId })
+      let response = await fetchMyCompanies()
+      let company = response.memberships.find(entry => entry.company_id === response.active_company_id)?.company || null
+      const remembered = rememberedActiveCompany(userId)
+      if (remembered && remembered !== response.active_company_id && response.memberships.some(entry => entry.company_id === remembered)) {
+        company = await setActiveCompanyRemote(remembered)
+        response = await fetchMyCompanies()
+      }
+      if (!company) {
+        company = await getOrCreateCompany(userId)
+        response = await fetchMyCompanies()
+      }
+      if (loadVersion !== companyDataLoadVersion) return
+      rememberActiveCompany(userId, company.id)
+      set({
+        company,
+        userId,
+        companyMemberships: response.memberships.length ? response.memberships : [{ company_id: company.id, role: 'Admin', status: 'active', company }],
+        activeCompanyId: company.id,
+        companyCreationLicense: response.license,
+      })
       const [rawAccounts, accountCategories, fetchedParties, items, itemCategories, vouchers] = await Promise.all([
         fetchAccounts(company.id),
         fetchAccountCategories(company.id),
@@ -521,6 +610,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const stock = recomputeStock(items, vouchers, valuationMethod(company))
       // Core accounting data is complete at this point. Render it immediately;
       // optional paid-module data must not hold the dashboard loading state.
+      if (loadVersion !== companyDataLoadVersion) return
       set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, userId, loading: false, dataReady: true })
 
       let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
@@ -533,7 +623,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           chequeBanks = loaded[1]; cheques = loaded[2]
         }
         // Ignore a late response when the authenticated company changed.
-        if (get().company?.id === company.id) set({ companyModules, chequePermissions, chequeBanks, cheques })
+        if (loadVersion === companyDataLoadVersion && get().company?.id === company.id) set({ companyModules, chequePermissions, chequeBanks, cheques })
       } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
     } catch (e: unknown) {
       set({ error: publicErrorMessage(e, 'loading company data'), loading: false })
@@ -541,11 +631,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     })()
 
     const trackedRequest = request.finally(() => {
-      if (companyDataLoadPromises.get(userId) === trackedRequest) {
-        companyDataLoadPromises.delete(userId)
+      if (companyDataLoadPromises.get(pendingKey) === trackedRequest) {
+        companyDataLoadPromises.delete(pendingKey)
       }
     })
-    companyDataLoadPromises.set(userId, trackedRequest)
+    companyDataLoadPromises.set(pendingKey, trackedRequest)
     return trackedRequest
   },
 

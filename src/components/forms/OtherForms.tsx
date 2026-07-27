@@ -227,7 +227,6 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         setMoneyAccountId(cashAccountId)
         setNarration('')
         setError('')
-        window.requestAnimationFrame(() => moneyAccountTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
@@ -267,7 +266,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
@@ -404,7 +403,6 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
         setNarration('')
         setError('')
-        window.requestAnimationFrame(() => firstAccountTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
       setError(publicErrorMessage(e, 'saving journal voucher'))
@@ -446,8 +444,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </p>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
-            {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
+            {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" tabIndex={-1} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
 
           {/* Lines header */}

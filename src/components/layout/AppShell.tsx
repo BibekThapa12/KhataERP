@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { isDeveloperAdmin, signOut } from '@/lib/supabase'
@@ -6,12 +6,19 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, ChevronRight, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/misc'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
+import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { chequeEntitlement } from '@/lib/cheques'
+import { DEFAULT_FISCAL_YEAR_START_BS, bsToAd, parseBsDate } from '@/lib/nepaliDate'
+import { publicErrorMessage } from '@/lib/security'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -163,6 +170,155 @@ function ReportNavGroup({ item, open, active, onToggle, onNavigate, pathname, se
   </div>
 }
 
+function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
+  const company = useAppStore(s => s.company)
+  const memberships = useAppStore(s => s.companyMemberships)
+  const license = useAppStore(s => s.companyCreationLicense)
+  const switchCompany = useAppStore(s => s.switchCompany)
+  const createCompany = useAppStore(s => s.createCompany)
+  const switcherRef = useRef<HTMLDivElement | null>(null)
+  const [open, setOpen] = useState(false)
+  const [addOpen, setAddOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [switchingId, setSwitchingId] = useState('')
+  const [error, setError] = useState('')
+  const [form, setForm] = useState({
+    name: '',
+    address: '',
+    pan_vat: '',
+    phone: '',
+    vat_enabled: true,
+    fiscal_year_start_bs: DEFAULT_FISCAL_YEAR_START_BS,
+    sales_prefix: 'INV-',
+    purchase_prefix: 'PB-',
+    receipt_prefix: 'RCPT-',
+    payment_prefix: 'PAY-',
+    sales_return_prefix: 'SR-',
+    purchase_return_prefix: 'PR-',
+    print_format: 'A5' as 'A5' | 'A4',
+  })
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase()
+    if (!q) return memberships
+    return memberships.filter(entry => [entry.company.name, entry.company.owner_email, entry.company.phone].filter(Boolean).some(value => String(value).toLowerCase().includes(q)))
+  }, [memberships, query])
+  const canCreate = !!license?.can_create_company
+  const limitMessage = 'You have reached your maximum allowed company limit. Please contact the administrator.'
+  const updateForm = (key: keyof typeof form, value: string | boolean) => setForm(current => ({ ...current, [key]: value }))
+
+  useEffect(() => {
+    if (!open) return
+    const closeOnOutsidePointer = (event: PointerEvent) => {
+      const target = event.target
+      if (!(target instanceof Node) || switcherRef.current?.contains(target)) return
+      setOpen(false)
+    }
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('pointerdown', closeOnOutsidePointer)
+    document.addEventListener('keydown', closeOnEscape)
+    return () => {
+      document.removeEventListener('pointerdown', closeOnOutsidePointer)
+      document.removeEventListener('keydown', closeOnEscape)
+    }
+  }, [open])
+
+  const handleSwitch = async (companyId: string) => {
+    setSwitchingId(companyId)
+    setError('')
+    try {
+      await switchCompany(companyId)
+      setOpen(false)
+      onSwitched()
+    } catch (err) {
+      setError(publicErrorMessage(err, 'switching company'))
+    } finally {
+      setSwitchingId('')
+    }
+  }
+  const handleCreate = async () => {
+    setCreating(true)
+    setError('')
+    try {
+      const { fiscal_year_start_bs, ...companyForm } = form
+      const fiscalYearStartAd = parseBsDate(fiscal_year_start_bs) ? bsToAd(fiscal_year_start_bs) : ''
+      if (!fiscalYearStartAd) {
+        setError('Enter a valid fiscal year start date.')
+        return
+      }
+      await createCompany({
+        ...companyForm,
+        name: form.name.trim() || 'My Company',
+        fiscal_year_start: fiscalYearStartAd,
+        fiscal_year_configured: true,
+      })
+      setAddOpen(false)
+      setOpen(false)
+      onSwitched()
+    } catch (err) {
+      setError(publicErrorMessage(err, 'creating company'))
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  return (
+    <div ref={switcherRef} className="relative mt-3">
+      <button type="button" onClick={() => setOpen(value => !value)} className="flex w-full items-center gap-1 rounded bg-white/5 px-2.5 py-1.5 text-left text-xs text-blue-100/80 transition-colors hover:bg-white/10">
+        <span className="min-w-0 flex-1 truncate">{company?.name ?? 'Loading company...'}</span>
+        <ChevronDown className={cn('h-3 w-3 flex-shrink-0 transition-transform', open && 'rotate-180')} />
+      </button>
+      {open && (
+        <div className="absolute left-0 right-0 top-full z-50 mt-2 rounded-md border border-white/10 bg-[#10203d] p-2 shadow-xl">
+          <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search companies..." className="h-8 border-white/15 bg-white/95 text-xs" />
+          <div className="mt-2 max-h-56 space-y-1 overflow-y-auto">
+            {filtered.map(entry => (
+              <button key={entry.company_id} type="button" onClick={() => handleSwitch(entry.company_id)} disabled={switchingId === entry.company_id} className={cn('flex w-full items-center gap-2 rounded px-2 py-2 text-left text-xs text-blue-100 hover:bg-white/10', company?.id === entry.company_id && 'bg-white font-semibold text-[#1B2A4A]')}>
+                <span className="min-w-0 flex-1 truncate">{entry.company.name}</span>
+                {company?.id === entry.company_id && <CheckCircle2 className="h-3.5 w-3.5" />}
+              </button>
+            ))}
+            {!filtered.length && <p className="px-2 py-2 text-xs text-blue-100/60">No companies found.</p>}
+          </div>
+          <button type="button" onClick={() => canCreate ? (setAddOpen(true), setOpen(false)) : setError(limitMessage)} className={cn('mt-2 flex w-full items-center gap-2 rounded border border-white/10 px-2 py-2 text-left text-xs text-blue-100 hover:bg-white/10', !canCreate && 'opacity-60')}>
+            <Plus className="h-3.5 w-3.5" />
+            <span>Add Company</span>
+          </button>
+          {license && <p className="mt-1 px-1 text-[10px] text-blue-100/55">{license.unlimited_companies ? 'Unlimited companies' : `${license.current_companies}/${license.max_companies} companies used`}</p>}
+          {error && <p className="mt-2 rounded bg-red-500/10 px-2 py-1.5 text-[11px] text-red-100">{error}</p>}
+        </div>
+      )}
+      <Dialog open={addOpen} onOpenChange={setAddOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Add Company</DialogTitle>
+            <DialogDescription>Create an independent company under this login.</DialogDescription>
+          </DialogHeader>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5"><Label>Company Name</Label><Input value={form.name} onChange={event => updateForm('name', event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} onChange={event => updateForm('phone', event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>PAN / VAT No.</Label><Input value={form.pan_vat} onChange={event => updateForm('pan_vat', event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Fiscal Year Start Date (B.S.)</Label><NepaliDateInput value={form.fiscal_year_start_bs} onChange={value => updateForm('fiscal_year_start_bs', value)} /></div>
+            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} value={form.address} onChange={event => updateForm('address', event.target.value)} /></div>
+            <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.vat_enabled} onChange={event => updateForm('vat_enabled', event.target.checked)} /> VAT Mode</label>
+            <div className="space-y-1.5"><Label>Print Format</Label><select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={form.print_format} onChange={event => updateForm('print_format', event.target.value as 'A5' | 'A4')}><option value="A5">A5</option><option value="A4">A4</option></select></div>
+            {(['sales_prefix','purchase_prefix','receipt_prefix','payment_prefix','sales_return_prefix','purchase_return_prefix'] as const).map(key => (
+              <div key={key} className="space-y-1.5"><Label>{key.replaceAll('_', ' ')}</Label><Input value={form[key]} onChange={event => updateForm(key, event.target.value)} /></div>
+            ))}
+          </div>
+          {error && <p className="text-sm text-destructive">{error}</p>}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setAddOpen(false)}>Cancel</Button>
+            <Button onClick={handleCreate} disabled={creating || !canCreate}>{creating ? 'Creating...' : 'Create Company'}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
+  )
+}
+
 export function AppShell() {
   const company = useAppStore(s => s.company)
   const navigate = useNavigate()
@@ -264,13 +420,7 @@ export function AppShell() {
           <button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/10 md:hidden"><X className="h-5 w-5" /></button>
           <div className="font-serif text-2xl font-bold text-white tracking-tight">Khata</div>
           <div className="text-[10px] uppercase tracking-widest text-blue-200/70 mt-0.5">ERP for Nepal</div>
-          <button
-            onClick={() => navigate('/settings')}
-            className="mt-3 w-full text-left text-xs text-blue-100/80 bg-white/5 hover:bg-white/10 rounded px-2.5 py-1.5 transition-colors truncate flex items-center gap-1"
-          >
-            {company?.name ?? '…'}
-            <ChevronRight className="h-3 w-3 ml-auto flex-shrink-0" />
-          </button>
+          <CompanySwitcher onSwitched={() => { setMobileOpen(false); navigate('/') }} />
         </div>
 
         {/* Nav */}

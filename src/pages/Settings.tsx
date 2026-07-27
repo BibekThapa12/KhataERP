@@ -18,7 +18,7 @@ import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } f
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 
 export function SettingsPage() {
-  const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError } = useAppStore()
+  const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError, addCompanyAdmin } = useAppStore()
   const [name, setName] = useState(company?.name ?? '')
   const [address, setAddress] = useState(company?.address ?? '')
   const [panVat, setPanVat] = useState(company?.pan_vat ?? '')
@@ -45,6 +45,9 @@ export function SettingsPage() {
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [deleteError, setDeleteError] = useState('')
+  const [memberEmail, setMemberEmail] = useState('')
+  const [memberSaving, setMemberSaving] = useState(false)
+  const [memberError, setMemberError] = useState('')
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
   const fiscalYearLocked = vouchers.length > 0
   const currentFiscalYear = Number(currentFiscalYearStartBs(company).slice(0, 4))
@@ -268,6 +271,24 @@ export function SettingsPage() {
     }
   }
 
+  const handleAddCompanyAdmin = async () => {
+    setMemberError('')
+    const email = memberEmail.trim()
+    if (!email) {
+      setMemberError('Enter an existing user email address.')
+      return
+    }
+    setMemberSaving(true)
+    try {
+      await addCompanyAdmin(email)
+      setMemberEmail('')
+    } catch (error: unknown) {
+      setMemberError(publicErrorMessage(error, 'adding company admin'))
+    } finally {
+      setMemberSaving(false)
+    }
+  }
+
   return (
     <div>
       <PageHeader title="Settings" description="Company details and data management" />
@@ -400,6 +421,21 @@ export function SettingsPage() {
               {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save Changes'}
             </Button>
             {saveError && <p className="text-sm text-destructive">{saveError}</p>}
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader><CardTitle className="text-base">Company Admins</CardTitle></CardHeader>
+          <CardContent className="space-y-3">
+            <p className="text-sm text-muted-foreground">Add an existing KhataERP user to this company as an Admin.</p>
+            <div className="space-y-1.5">
+              <Label>User Email</Label>
+              <Input type="email" value={memberEmail} onChange={event => setMemberEmail(event.target.value)} placeholder="admin@example.com" />
+            </div>
+            <Button variant="outline" onClick={handleAddCompanyAdmin} disabled={memberSaving}>
+              {memberSaving ? 'Adding...' : 'Add Admin'}
+            </Button>
+            {memberError && <p className="text-sm text-destructive">{memberError}</p>}
           </CardContent>
         </Card>
 

@@ -207,7 +207,6 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setManualVatRate(vatEnabled ? 13 : 0)
         setReason('')
         setError('')
-        window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`)) } finally { submissionLock.release(); setSaving(false) }
   }
@@ -250,7 +249,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
+            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
 

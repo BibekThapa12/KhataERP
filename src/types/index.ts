@@ -196,6 +196,60 @@ export interface Company {
   created_at?: string
 }
 
+export interface CompanyMembership {
+  company_id: string
+  role: 'Admin'
+  status: 'active' | 'inactive'
+  member_since?: string
+  company: Company
+}
+
+export interface CompanyCreationLicense {
+  user_id: string
+  current_companies: number
+  max_companies: number
+  unlimited_companies: boolean
+  company_creation_enabled: boolean
+  license_status: 'active' | 'expired' | 'suspended'
+  expires_at?: string | null
+  remaining_companies?: number | null
+  can_create_company: boolean
+}
+
+export interface MyCompaniesResponse {
+  active_company_id?: string | null
+  memberships: CompanyMembership[]
+  license: CompanyCreationLicense
+}
+
+export interface CompanyCreateInput {
+  name: string
+  address?: string
+  pan_vat?: string
+  phone?: string
+  vat_enabled?: boolean
+  inventory_valuation_method?: InventoryValuationMethod
+  fiscal_year_start?: string
+  fiscal_year_configured?: boolean
+  sales_prefix?: string
+  purchase_prefix?: string
+  receipt_prefix?: string
+  payment_prefix?: string
+  sales_return_prefix?: string
+  purchase_return_prefix?: string
+  journal_numbering_mode?: 'auto' | 'manual'
+  print_format?: 'A5' | 'A4'
+  invoice_terms?: string
+  payment_qr_text?: string
+}
+
+export interface DeveloperUserCompanyLicense {
+  user_id: string
+  email?: string | null
+  license: CompanyCreationLicense
+  companies: Pick<Company, 'id' | 'name' | 'created_at'>[]
+}
+
 export interface AccountCategory {
   id: string
   company_id: string

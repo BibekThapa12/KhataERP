@@ -6,8 +6,10 @@ import {
   deleteDeveloperCompany,
   fetchDeveloperDashboardData,
   fetchDeveloperSchemaStatus,
+  fetchDeveloperUserCompanyLicenses,
   isDeveloperAdmin,
   updateDeveloperCompany,
+  updateUserCompanyLimit,
   upsertCompanyModule,
   type DeveloperSchemaStatusItem,
 } from '@/lib/supabase'
@@ -23,7 +25,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge, Textarea } from '@/components/ui/misc'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { Account, AppModule, Company, CompanyModule, Item, Party, Voucher } from '@/types'
+import type { Account, AppModule, Company, CompanyModule, DeveloperUserCompanyLicense, Item, Party, Voucher } from '@/types'
 import { notifySuccess } from '@/lib/notifications'
 
 type DeveloperEvent = {
@@ -43,6 +45,7 @@ interface DeveloperData {
   events: DeveloperEvent[]
   modules: AppModule[]
   companyModules: CompanyModule[]
+  userLicenses: DeveloperUserCompanyLicense[]
 }
 
 type SupabaseStatus = Awaited<ReturnType<typeof checkSupabaseConnectionStatus>>
@@ -244,6 +247,57 @@ function CompanyModulesDialog({company,modules,entitlements,open,onClose,onSaved
   return <Dialog open={open} onOpenChange={value=>!value&&onClose()}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{company.name} · Modules</DialogTitle></DialogHeader>{!module?<p className="text-sm text-destructive">Run the Cheque Management migration to create the module catalogue.</p>:<div className="grid gap-3 sm:grid-cols-2"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={e=>{setEnabled(e.target.checked);if(e.target.checked&&status==='disabled')setStatus('active')}}/>Enable Cheque Management</label><div/><div><Label>Status</Label><SearchableSelect value={status} onValueChange={value=>setStatus(value as CompanyModule['status'])} options={['active','trial','grace_period','read_only','disabled'].map(value=>({value,label:value.replaceAll('_',' ')}))}/></div><div><Label>Payment</Label><SearchableSelect value={payment} onValueChange={value=>setPayment(value as CompanyModule['payment_status'])} options={['paid','pending','overdue','waived','cancelled'].map(value=>({value,label:value}))}/></div><div><Label>Billing</Label><SearchableSelect value={billing} onValueChange={value=>setBilling(value as CompanyModule['billing_type'])} options={['included','monthly','yearly','one_time','custom'].map(value=>({value,label:value.replaceAll('_',' ')}))}/></div><div><Label>Price</Label><Input type="number" min="0" value={price} onChange={e=>setPrice(e.target.value)}/></div><div><Label>Starts</Label><Input type="date" value={starts} onChange={e=>setStarts(e.target.value)}/></div><div><Label>Expires</Label><Input type="date" value={expires} onChange={e=>setExpires(e.target.value)}/></div><div className="sm:col-span-2"><Label>Module settings (JSON)</Label><Textarea rows={5} value={settings} onChange={e=>setSettings(e.target.value)}/></div><div className="sm:col-span-2"><Label>Internal notes</Label><Textarea rows={2} value={notes} onChange={e=>setNotes(e.target.value)}/></div>{error&&<p className="sm:col-span-2 text-sm text-destructive">{error}</p>}</div>}<DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button disabled={!module||saving} onClick={save}>{saving?'Saving…':'Save Module'}</Button></DialogFooter></DialogContent></Dialog>
 }
 
+function UserCompanyLicenseRow({ row, onSaved }: { row: DeveloperUserCompanyLicense; onSaved: () => void }) {
+  const license = row.license
+  const [maxCompanies, setMaxCompanies] = useState(String(license.max_companies ?? 1))
+  const [unlimited, setUnlimited] = useState(!!license.unlimited_companies)
+  const [enabled, setEnabled] = useState(license.company_creation_enabled !== false)
+  const [status, setStatus] = useState(license.license_status || 'active')
+  const [expiresAt, setExpiresAt] = useState(license.expires_at || '')
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    setMaxCompanies(String(license.max_companies ?? 1))
+    setUnlimited(!!license.unlimited_companies)
+    setEnabled(license.company_creation_enabled !== false)
+    setStatus(license.license_status || 'active')
+    setExpiresAt(license.expires_at || '')
+    setError('')
+  }, [license])
+  const save = async () => {
+    setSaving(true)
+    setError('')
+    try {
+      await updateUserCompanyLimit({ user_id: row.user_id, max_companies: Number(maxCompanies) || 0, unlimited_companies: unlimited, company_creation_enabled: enabled, license_status: status as 'active' | 'expired' | 'suspended', expires_at: expiresAt || null })
+      notifySuccess('Company license saved', row.email || row.user_id)
+      onSaved()
+    } catch (err) {
+      setError(publicErrorMessage(err, 'saving company license'))
+    } finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <tr className="border-t align-top">
+      <td className="px-3 py-3">
+        <p className="font-medium">{row.email || row.user_id}</p>
+        <p className="text-xs text-muted-foreground">{row.companies.map(company => company.name).join(', ') || 'No owned companies'}</p>
+      </td>
+      <td className="px-3 py-3 text-sm num">{license.current_companies}</td>
+      <td className="px-3 py-3"><Input type="number" min="0" value={maxCompanies} onChange={event => setMaxCompanies(event.target.value)} className="w-24" disabled={unlimited} /></td>
+      <td className="px-3 py-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={unlimited} onChange={event => setUnlimited(event.target.checked)} /> Unlimited</label></td>
+      <td className="px-3 py-3"><label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={event => setEnabled(event.target.checked)} /> Enabled</label></td>
+      <td className="px-3 py-3"><SearchableSelect value={status} onValueChange={setStatus} options={['active','expired','suspended'].map(value => ({ value, label: value }))} className="w-32" /></td>
+      <td className="px-3 py-3"><Input type="date" value={expiresAt} onChange={event => setExpiresAt(event.target.value)} className="w-36" /></td>
+      <td className="px-3 py-3">
+        <p className="mb-2 text-xs text-muted-foreground">{license.unlimited_companies ? 'Unlimited' : `${license.remaining_companies ?? 0} remaining`}</p>
+        <Button size="sm" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save'}</Button>
+        {error && <p className="mt-1 text-xs text-destructive">{error}</p>}
+      </td>
+    </tr>
+  )
+}
+
 export function DeveloperDashboard() {
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [data, setData] = useState<DeveloperData | null>(null)
@@ -266,11 +320,12 @@ export function DeveloperDashboard() {
       const isAdmin = await isDeveloperAdmin()
       setAllowed(isAdmin)
       if (!isAdmin) return
-      const [next, schema] = await Promise.all([
+      const [next, schema, userLicenses] = await Promise.all([
         fetchDeveloperDashboardData(),
         fetchDeveloperSchemaStatus(),
+        fetchDeveloperUserCompanyLicenses(),
       ])
-      setData(next as DeveloperData)
+      setData({ ...(next as DeveloperData), userLicenses })
       setSchemaStatus(schema)
       setLastSync(new Date().toLocaleString())
     } catch (e: unknown) {
@@ -369,6 +424,13 @@ export function DeveloperDashboard() {
         .filter(Boolean)
         .some(value => String(value).toLowerCase().includes(q))
     )
+  }, [data, query])
+
+  const filteredUserLicenses = useMemo(() => {
+    const rows = data?.userLicenses || []
+    const q = query.trim().toLowerCase()
+    if (!q) return rows
+    return rows.filter(row => [row.email, row.user_id, row.license.license_status, ...row.companies.map(company => company.name)].filter(Boolean).some(value => String(value).toLowerCase().includes(q)))
   }, [data, query])
 
   if (allowed === null) {
@@ -534,6 +596,35 @@ export function DeveloperDashboard() {
             </CardContent>
           </Card>
         </div>
+
+        <Card>
+          <CardHeader>
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <CardTitle className="text-base">Company Licensing</CardTitle>
+              <Input value={query} onChange={e => setQuery(e.target.value)} placeholder="Search users, companies, status..." className="max-w-sm" />
+            </div>
+          </CardHeader>
+          <CardContent className="p-0 pb-2 overflow-x-auto">
+            <table className="w-full min-w-[980px] text-sm border-collapse">
+              <thead>
+                <tr className="bg-muted/50">
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">User / Companies</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Current</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Maximum</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Unlimited</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Creation</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Status</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Expires</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {filteredUserLicenses.map(row => <UserCompanyLicenseRow key={row.user_id} row={row} onSaved={load} />)}
+                {!filteredUserLicenses.length && <tr><td colSpan={8} className="px-3 py-5 text-center text-sm text-muted-foreground">No user licenses found.</td></tr>}
+              </tbody>
+            </table>
+          </CardContent>
+        </Card>
 
         <Card>
           <CardHeader>

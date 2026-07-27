@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import type { WritePerformanceTrace } from '@/lib/writePerformance'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
@@ -300,16 +300,76 @@ async function clearSignupCompanyMetadata(metadata: Record<string, unknown>) {
   } })
 }
 
+export async function fetchMyCompanies(): Promise<MyCompaniesResponse> {
+  const { data, error } = await supabase.rpc('get_my_companies')
+  if (error) throw error
+  const response = (data || {}) as Partial<MyCompaniesResponse>
+  return {
+    active_company_id: response.active_company_id || null,
+    memberships: Array.isArray(response.memberships) ? response.memberships : [],
+    license: response.license || {
+      user_id: '',
+      current_companies: 0,
+      max_companies: 1,
+      unlimited_companies: false,
+      company_creation_enabled: true,
+      license_status: 'active',
+      expires_at: null,
+      remaining_companies: 1,
+      can_create_company: true,
+    },
+  }
+}
+
+export async function createCompanyAtomic(company: CompanyCreateInput): Promise<Company> {
+  const { data, error } = await supabase.rpc('create_company_atomic', { p_company: company })
+  if (error) throw error
+  return data as Company
+}
+
+export async function setActiveCompanyRemote(companyId: string): Promise<Company> {
+  const { data, error } = await supabase.rpc('set_active_company', { target_company: companyId })
+  if (error) throw error
+  return data as Company
+}
+
+export async function addExistingCompanyAdmin(companyId: string, email: string) {
+  const { data, error } = await supabase.rpc('add_existing_company_admin', { target_company: companyId, target_email: email })
+  if (error) throw error
+  return data
+}
+
+export async function fetchDeveloperUserCompanyLicenses(): Promise<DeveloperUserCompanyLicense[]> {
+  const { data, error } = await supabase.rpc('developer_user_company_licenses')
+  if (error) throw error
+  return Array.isArray(data) ? data as DeveloperUserCompanyLicense[] : []
+}
+
+export async function updateUserCompanyLimit(value: {
+  user_id: string
+  max_companies: number
+  unlimited_companies: boolean
+  company_creation_enabled: boolean
+  license_status: 'active' | 'expired' | 'suspended'
+  expires_at?: string | null
+}) {
+  const { data, error } = await supabase.rpc('update_user_company_limit', {
+    target_user: value.user_id,
+    p_max_companies: value.max_companies,
+    p_unlimited_companies: value.unlimited_companies,
+    p_company_creation_enabled: value.company_creation_enabled,
+    p_license_status: value.license_status,
+    p_expires_at: value.expires_at || null,
+  })
+  if (error) throw error
+  return data
+}
+
 async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
-  const [{ data: userData }, { data: companies, error: companyError }] = await Promise.all([
+  const [{ data: userData }, companyResponse] = await Promise.all([
     supabase.auth.getUser(),
-    supabase
-      .from('companies')
-      .select(COMPANY_FIELDS)
-      .eq('user_id', user_id)
-      .order('created_at', { ascending: true }),
+    fetchMyCompanies(),
   ])
-  if (companyError) throw companyError
 
   const metadata = userData.user?.user_metadata ?? {}
   const metadataCompany = {
@@ -321,8 +381,8 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     vat_enabled: metadata.company_vat_enabled !== false,
   }
 
-  const existingCompanies = companies || []
-  if (existingCompanies.length) {
+  const existingMemberships = companyResponse.memberships || []
+  if (existingMemberships.length) {
     const scoreCompany = (company: Company) => {
       let score = 0
       if (company.name && company.name !== 'My Trading Co.') score += 5
@@ -333,7 +393,8 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
       return score
     }
 
-    const selected = [...existingCompanies].sort((a, b) => scoreCompany(b) - scoreCompany(a))[0]
+    const activeCompany = existingMemberships.find(entry => entry.company_id === companyResponse.active_company_id)?.company
+    const selected = activeCompany || [...existingMemberships.map(entry => entry.company)].sort((a, b) => scoreCompany(b) - scoreCompany(a))[0]
     const updates: Partial<Company> = {}
 
     if (!selected.fiscal_year_start) {
@@ -360,13 +421,12 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
       await clearSignupCompanyMetadata(metadata)
       return { ...selected, ...updates }
     }
+    const active = companyResponse.active_company_id === selected.id ? selected : await setActiveCompanyRemote(selected.id)
     await clearSignupCompanyMetadata(metadata)
-    return selected
+    return active
   }
 
   const company = {
-    user_id,
-    owner_email: metadataCompany.owner_email,
     name: metadataCompany.name || 'My Trading Co.',
     address: metadataCompany.address,
     pan_vat: metadataCompany.pan_vat,
@@ -382,31 +442,10 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     reset_numbering_fiscal_year: true,
     print_format: 'A5',
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
+    fiscal_year_configured: true,
   }
 
-  const { data: newCompany, error } = await supabase
-    .from('companies')
-    .insert(company)
-    .select(COMPANY_FIELDS)
-    .single()
-  if (error) {
-    // A second browser context may have created the company after our initial
-    // SELECT. The database singleton constraint makes that race harmless.
-    if (error.code === '23505') {
-      const { data: concurrentCompany, error: concurrentError } = await supabase
-        .from('companies')
-        .select(COMPANY_FIELDS)
-        .eq('user_id', user_id)
-        .order('created_at', { ascending: true })
-        .limit(1)
-        .single()
-      if (!concurrentError && concurrentCompany) {
-        await clearSignupCompanyMetadata(metadata)
-        return concurrentCompany
-      }
-    }
-    throw error
-  }
+  const newCompany = await createCompanyAtomic(company)
   await clearSignupCompanyMetadata(metadata)
   return newCompany
 }
@@ -460,7 +499,7 @@ export async function updateDeveloperCompany(id: string, updates: Partial<Compan
 }
 
 export async function deleteDeveloperCompany(id: string) {
-  const { error } = await supabase.from('companies').delete().eq('id', id)
+  const { error } = await supabase.rpc('delete_developer_company', { target_company: id })
   if (error) throw error
 }
 

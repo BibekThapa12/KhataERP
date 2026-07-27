@@ -208,7 +208,6 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setError('')
         itemTriggerRefs.current = []
         pendingLineFocus.current = null
-        window.requestAnimationFrame(() => partyTriggerRef.current?.focus())
       }
     } catch (e: unknown) {
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
@@ -266,16 +265,16 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             <div className="flex flex-wrap items-start gap-3">
               <div className="w-full space-y-1.5 sm:w-40">
                 <Label>Date</Label>
-                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} />
+                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} />
               </div>
               <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
               {!isSales && <div className="w-full space-y-1.5 sm:w-48">
                 <Label>Supplier Invoice No.</Label>
-                <Input value={supplierInvoiceNo} onChange={event => setSupplierInvoiceNo(event.target.value)} maxLength={100} placeholder="Physical bill number" />
+                <Input value={supplierInvoiceNo} onChange={event => setSupplierInvoiceNo(event.target.value)} maxLength={100} placeholder="Physical bill number" tabIndex={-1} />
               </div>}
               <div className="flex h-8 items-center sm:mt-[1.2rem]">
                 <div className="flex items-center gap-2">
-                  <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} className="h-4 w-4 shrink-0 rounded accent-primary" />
+                  <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} tabIndex={-1} className="h-4 w-4 shrink-0 rounded accent-primary" />
                   <Label htmlFor={`${type.toLowerCase()}-cash-mode`} className="cursor-pointer font-normal">{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
                 </div>
               </div>
