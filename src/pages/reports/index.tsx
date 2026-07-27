@@ -8,7 +8,7 @@ import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearOptions as
 import { dashboardFiscalYearRange, dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
-import { formatStockQuantity } from '@/lib/units'
+import { alternateQtyText, formatStockQuantity } from '@/lib/units'
 import { publicErrorMessage } from '@/lib/security'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -696,7 +696,7 @@ export function StockReportPage() {
   const totals = rows.reduce((sum, row) => ({ opening: sum.opening + row.movement.opening_qty, inward: sum.inward + row.movement.inward_qty, outward: sum.outward + row.movement.outward_qty, closing: sum.closing + row.movement.closing_qty }), { opening: 0, inward: 0, outward: 0, closing: 0 })
   const methodLabel = method === 'fifo' ? 'FIFO' : method === 'lifo' ? 'LIFO' : 'Weighted Average'
   const conditionLabel = stockCondition === 'saleable' ? 'Saleable Stock' : stockCondition === 'damaged' ? 'Damaged Stock' : 'Expired Stock'
-  const qty = (value: number, item: typeof items[number]) => <><span className="block whitespace-nowrap num">{value.toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.unit}</span>{item.alternate_unit && <span className="block whitespace-nowrap text-[11px] text-muted-foreground">({(value * Number(item.alternate_conversion || 0)).toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.alternate_unit})</span>}</>
+  const qty = (value: number, item: typeof items[number]) => <><span className="block whitespace-nowrap num">{value.toLocaleString('en-NP', { maximumFractionDigits: 4 })} {item.unit}</span>{item.alternate_unit && <span className="block whitespace-nowrap text-[11px] text-muted-foreground">({alternateQtyText(value * Number(item.alternate_conversion || 0))} {item.alternate_unit})</span>}</>
   const badge = (value: 'in' | 'low' | 'out') => value === 'in' ? <Badge className={stockCondition === 'saleable' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : stockCondition === 'damaged' ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-red-200 bg-red-50 text-red-700'}>{stockCondition === 'saleable' ? 'In Stock' : stockCondition === 'damaged' ? 'Damaged' : 'Expired'}</Badge> : value === 'low' ? <Badge className="border-amber-200 bg-amber-50 text-amber-700">Low</Badge> : <Badge className="border-red-200 bg-red-50 text-red-700">Out</Badge>
   const changeMethod = async (value: string) => {
     const next = value as InventoryValuationMethod

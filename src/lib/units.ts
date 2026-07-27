@@ -25,10 +25,11 @@ export function fromBaseRate(rate: number, factor: number) {
 }
 
 const qtyText = (qty: number) => Number(qty.toFixed(4)).toLocaleString('en-NP', { maximumFractionDigits: 4 })
+export const alternateQtyText = (qty: number) => Math.round(qty).toLocaleString('en-NP', { maximumFractionDigits: 0 })
 
 export function formatStockQuantity(baseQty: number, item: Item) {
   const main = `${qtyText(baseQty)} ${item.unit}`
   const factor = Number(item.alternate_conversion || 0)
   if (!item.alternate_unit || factor <= 1 || baseQty < 0) return main
-  return `${main} (${qtyText(baseQty * factor)} ${item.alternate_unit})`
+  return `${main} (${alternateQtyText(baseQty * factor)} ${item.alternate_unit})`
 }

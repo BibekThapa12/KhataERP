@@ -401,7 +401,7 @@ begin
       select 1 from public.invoice_items item
       where item.voucher_id = target_voucher_id
         and (item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
-          or (item.base_qty is not null and abs(item.base_qty - item.qty * coalesce(item.conversion_factor, 1)) > 0.0001))
+          or (item.base_qty is not null and abs(item.base_qty - item.qty / nullif(coalesce(item.conversion_factor, 1), 0)) > 0.0001))
     ) then raise exception 'Invoice items require positive quantities and non-negative rates'; end if;
 
     if voucher_record.type in ('Sales','Purchase') then
@@ -450,7 +450,7 @@ begin
         with invoice_quantity as (
           select invoice_item.item_id,
                  sum(coalesce(invoice_item.base_qty,
-                   invoice_item.qty * coalesce(invoice_item.conversion_factor, 1))) as qty
+                   invoice_item.qty / nullif(coalesce(invoice_item.conversion_factor, 1), 0))) as qty
           from public.invoice_items invoice_item
           where invoice_item.voucher_id = target_voucher_id
           group by invoice_item.item_id

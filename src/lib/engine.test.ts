@@ -363,6 +363,7 @@ describe('accounting engine integrity', () => {
     expect(fromBaseRate(600, 6)).toBe(100)
     expect(formatStockQuantity(2.5, item)).toBe('2.5 cs (15 pcs)')
     expect(formatStockQuantity(4, item)).toBe('4 cs (24 pcs)')
+    expect(formatStockQuantity(190.3332, item)).toBe('190.3332 cs (1,142 pcs)')
   })
 
   it.each([1, 10, 50, 100])('builds and validates a %i-line sales payload within the client budget', lineCount => {

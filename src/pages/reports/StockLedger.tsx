@@ -8,6 +8,7 @@ import { downloadCsv } from '@/lib/csv'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { normalizeSearch } from '@/lib/search'
+import { alternateQtyText } from '@/lib/units'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportActions } from '@/components/reports/ReportActions'
 import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
@@ -30,13 +31,13 @@ function number(value: number) {
 
 function quantityLabel(value: number, item: Item) {
   const equivalent = item.alternate_unit && item.alternate_conversion
-    ? ` (${number(value * item.alternate_conversion)} ${item.alternate_unit})`
+    ? ` (${alternateQtyText(value * item.alternate_conversion)} ${item.alternate_unit})`
     : ''
   return `${number(value)} ${item.unit}${equivalent}`
 }
 
 function QuantityCell({ value, item }: { value: number; item: Item }) {
-  return <><span className="block whitespace-nowrap num">{number(value)} {item.unit}</span>{item.alternate_unit && item.alternate_conversion && <span className="stock-ledger-alt-unit block whitespace-nowrap text-[11px] text-muted-foreground">({number(value * item.alternate_conversion)} {item.alternate_unit})</span>}</>
+  return <><span className="block whitespace-nowrap num">{number(value)} {item.unit}</span>{item.alternate_unit && item.alternate_conversion && <span className="stock-ledger-alt-unit block whitespace-nowrap text-[11px] text-muted-foreground">({alternateQtyText(value * item.alternate_conversion)} {item.alternate_unit})</span>}</>
 }
 
 export function StockLedgerPage() {
