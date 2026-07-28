@@ -465,16 +465,52 @@ export async function updateCompany(id: string, updates: Partial<Company>) {
   if (error) throw error
 }
 
-export async function fetchDeveloperDashboardData() {
+export async function fetchDeveloperDashboardData(companyIds?: string[]) {
+  const scoped = Array.isArray(companyIds)
+  if (scoped && companyIds.length === 0) {
+    const [modulesRes, companyModulesRes] = await Promise.all([
+      supabase.from('modules').select(MODULE_FIELDS).order('name'),
+      supabase.from('company_modules').select(COMPANY_MODULE_FIELDS).limit(0),
+    ])
+    return {
+      companies: [],
+      accounts: [],
+      parties: [],
+      items: [],
+      vouchers: [],
+      events: [],
+      modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
+      companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+    }
+  }
+
+  let companiesQuery = supabase.from('companies').select(DEVELOPER_COMPANY_FIELDS).order('created_at', { ascending: false })
+  let accountsQuery = supabase.from('accounts').select(ACCOUNT_FIELDS)
+  let partiesQuery = supabase.from('parties').select(PARTY_FIELDS)
+  let itemsQuery = supabase.from('items').select(ITEM_FIELDS)
+  let vouchersQuery = supabase.from('vouchers').select(VOUCHER_WITH_CHILDREN_FIELDS).order('date_bs_key', { ascending: false })
+  let eventsQuery = supabase.from('app_events').select('id,company_id,user_id,event_type,metadata,created_at').order('created_at', { ascending: false }).limit(1000)
+  let companyModulesQuery = supabase.from('company_modules').select(COMPANY_MODULE_FIELDS)
+
+  if (scoped) {
+    companiesQuery = companiesQuery.in('id', companyIds)
+    accountsQuery = accountsQuery.in('company_id', companyIds)
+    partiesQuery = partiesQuery.in('company_id', companyIds)
+    itemsQuery = itemsQuery.in('company_id', companyIds)
+    vouchersQuery = vouchersQuery.in('company_id', companyIds)
+    eventsQuery = eventsQuery.in('company_id', companyIds)
+    companyModulesQuery = companyModulesQuery.in('company_id', companyIds)
+  }
+
   const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes, modulesRes, companyModulesRes] = await Promise.all([
-    supabase.from('companies').select(DEVELOPER_COMPANY_FIELDS).order('created_at', { ascending: false }),
-    supabase.from('accounts').select(ACCOUNT_FIELDS),
-    supabase.from('parties').select(PARTY_FIELDS),
-    supabase.from('items').select(ITEM_FIELDS),
-    supabase.from('vouchers').select(VOUCHER_WITH_CHILDREN_FIELDS).order('date_bs_key', { ascending: false }),
-    supabase.from('app_events').select('id,company_id,user_id,event_type,metadata,created_at').order('created_at', { ascending: false }).limit(1000),
+    companiesQuery,
+    accountsQuery,
+    partiesQuery,
+    itemsQuery,
+    vouchersQuery,
+    eventsQuery,
     supabase.from('modules').select(MODULE_FIELDS).order('name'),
-    supabase.from('company_modules').select(COMPANY_MODULE_FIELDS),
+    companyModulesQuery,
   ])
 
   for (const res of [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes]) {
