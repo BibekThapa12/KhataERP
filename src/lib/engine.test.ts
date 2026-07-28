@@ -356,6 +356,25 @@ describe('accounting engine integrity', () => {
     expect(purchase.stock_lines[0]).toMatchObject({ qty: 1, rate: 1200, direction: 'in' })
   })
 
+  it('keeps service invoice rows out of inventory movement and valuation', () => {
+    const stockItem = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'pc', sell_rate: 0, opening_qty: 10, opening_rate: 20 } as Item
+    const serviceItem = { id: 'delivery', company_id: 'c', name: 'Delivery', unit: 'Service', sell_rate: 0, opening_qty: 999, opening_rate: 999, is_service: true } as Item
+    const sale = buildSalesVoucherData({
+      party_account_id: null,
+      is_cash: true,
+      items: [
+        { item_id: stockItem.id, qty: 2, rate: 100 },
+        { item_id: serviceItem.id, qty: 1, rate: 50, is_service: true },
+      ],
+      vat_rate: 0,
+      system_accounts: accounts,
+    })
+    expect(sale.invoice_items).toHaveLength(2)
+    expect(sale.stock_lines).toEqual([{ item_id: stockItem.id, qty: 2, rate: 100, direction: 'out', stock_condition: 'saleable' }])
+    expect(recomputeStock([stockItem, serviceItem], [])).toEqual([{ id: stockItem.id, name: stockItem.name, unit: stockItem.unit, qty: 10, avg_cost: 20, value: 200 }])
+    expect(computeStockSummary([stockItem, serviceItem], [])).toHaveLength(1)
+  })
+
   it('converts quantities and rates and formats equivalent stock', () => {
     const item = { id: 'tea', company_id: 'c', name: 'Tea', unit: 'cs', alternate_unit: 'pcs', alternate_conversion: 6, sell_rate: 600, opening_qty: 0, opening_rate: 0 } as Item
     expect(toBaseQty(15, 6)).toBe(2.5)

@@ -52,27 +52,30 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const [sku, setSku] = useState('')
   const [barcode, setBarcode] = useState('')
   const [vatApplicable, setVatApplicable] = useState(true)
+  const [isService, setIsService] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const submissionLock = useRef(new SubmissionLock()).current
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
     if (!name.trim()) { setError('Enter an item name.'); return }
-    const mainUnit = unit.trim()
-    const altUnit = alternateUnit.trim()
-    const unitError = validateItemUnits(mainUnit, altUnit)
-    if (unitError) { setError(unitError); return }
-    if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
-    const factor = openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
+    const mainUnit = isService ? 'Service' : unit.trim()
+    const altUnit = isService ? '' : alternateUnit.trim()
+    if (!isService) {
+      const unitError = validateItemUnits(mainUnit, altUnit)
+      if (unitError) { setError(unitError); return }
+      if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
+    }
+    const factor = !isService && openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: name.trim(), unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: toBaseQty(openingQty, factor), opening_rate: toBaseRate(openingRate, factor), reorder_level: reorderLevel ? Number(reorderLevel) : undefined, category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable })
+      const item = await addItem({ name: name.trim(), unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(openingRate, factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -99,17 +102,18 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
               </Button>
             </div>
           </div>
+          <label className="flex items-center gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isService} onChange={e => setIsService(e.target.checked)} className="h-4 w-4 accent-primary" />This item is a service</label>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5">
+            {!isService && <div className="space-y-1.5">
               <Label>Main Unit</Label>
               <UnitCombobox value={unit} onValueChange={setUnit} exclude={[alternateUnit]} />
-            </div>
+            </div>}
             <div className="space-y-1.5">
               <Label>Default Sell Rate / Main Unit (Rs)</Label>
               <Input type="number" step="any" value={sellRate || ''} onChange={e => setSellRate(Number(e.target.value))} placeholder="0" />
             </div>
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {!isService && <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><UnitCombobox value={alternateUnit} onValueChange={value => { setAlternateUnit(value); if (!value) { setAlternateConversion(0); setOpeningUnitMode('main') } }} optional exclude={[unit]} /></div>
             <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder={alternateUnit ? 'Enter manually' : 'Select alternative unit first'} disabled={!alternateUnit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
           </div>
@@ -129,7 +133,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             <Label>Reorder Level (optional)</Label>
             <Input type="number" step="any" value={reorderLevel} onChange={e => setReorderLevel(e.target.value)} placeholder="Alert when stock falls below…" />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          </>}<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={e => setSku(e.target.value)} placeholder="Optional" /></div>
             <div className="space-y-1.5"><Label>Barcode</Label><Input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Optional" /></div>
           </div>

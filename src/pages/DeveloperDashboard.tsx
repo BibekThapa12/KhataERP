@@ -102,7 +102,7 @@ function downloadJson(filename: string, data: unknown) {
   URL.revokeObjectURL(url)
 }
 
-function DeveloperCompanyRow({
+function DeveloperCompanyPanel({
   company,
   data,
   voucherCount,
@@ -194,33 +194,32 @@ function DeveloperCompanyRow({
   }
 
   return (
-    <tr className="border-t border-border align-top">
-      <td className="px-3 py-3">
+    <div className="grid gap-3 border-b border-border px-3 py-3 last:border-b-0 lg:grid-cols-[1.4fr_1fr_1fr_1.2fr_1.1fr_1.8fr]">
+      <div>
         <p className="font-semibold">{company.name}</p>
-        <p className="text-xs text-muted-foreground">{company.owner_email || company.user_id}</p>
         <p className="text-xs text-muted-foreground">{company.phone || company.address || ''}</p>
-      </td>
-      <td className="px-3 py-3 text-sm">
+      </div>
+      <div className="text-sm">
         <p>{voucherCount} voucher(s)</p>
         <p>{partyCount} parties</p>
         <p>{itemCount} items</p>
-      </td>
-      <td className="px-3 py-3 text-sm">
+      </div>
+      <div className="text-sm">
         <p>{lastActivity ? fmtDate(lastActivity) : 'No activity'}</p>
         <p className="text-xs text-muted-foreground">{lastActivity ? `${daysAgo(lastActivity)} day(s) ago` : 'Signed up only'}</p>
-      </td>
-      <td className="px-3 py-3">
+      </div>
+      <div>
         <SearchableSelect value={plan} onValueChange={setPlan} className="h-8 text-xs" options={[{ value: 'free', label: 'Free' }, { value: 'trial', label: 'Trial' }, { value: 'paid', label: 'Paid' }, { value: 'expired', label: 'Expired' }]} />
         <Input type="date" value={trialEndsAt} onChange={e => setTrialEndsAt(e.target.value)} className="mt-2 h-8 text-xs" />
-      </td>
-      <td className="px-3 py-3">
+      </div>
+      <div>
         <SearchableSelect value={support} onValueChange={setSupport} className="h-8 text-xs" options={[{ value: 'normal', label: 'Normal' }, { value: 'needs_help', label: 'Needs help' }, { value: 'blocked', label: 'Blocked' }]} />
         <label className="mt-2 flex items-center gap-2 text-xs">
           <input type="checkbox" checked={suspended} onChange={e => setSuspended(e.target.checked)} />
           Suspended
         </label>
-      </td>
-      <td className="px-3 py-3 min-w-[220px]">
+      </div>
+      <div className="min-w-[220px]">
         <Textarea value={notes} onChange={e => setNotes(e.target.value)} rows={2} placeholder="Developer/support notes" />
         <div className="mt-2 flex flex-wrap gap-2">
           <Button size="sm" onClick={save} disabled={saving || deleting}>{saving ? 'Saving...' : 'Save'}</Button>
@@ -230,6 +229,71 @@ function DeveloperCompanyRow({
           </Button>
         </div>
         <CompanyModulesDialog company={company} modules={data.modules} entitlements={data.companyModules.filter(entry=>entry.company_id===company.id)} open={modulesOpen} onClose={()=>setModulesOpen(false)} onSaved={onSaved} />
+      </div>
+    </div>
+  )
+}
+
+const DeveloperCompanyRow = DeveloperCompanyPanel
+
+type DeveloperCompanyGroup = {
+  key: string
+  ownerEmail: string
+  ownerId: string
+  companies: Company[]
+}
+
+function companyOwnerKey(company: Company) {
+  return (company.owner_email || company.user_id || 'unknown').toLowerCase()
+}
+
+function DeveloperCompanyGroupRow({
+  group,
+  data,
+  metrics,
+  onSaved,
+}: {
+  group: DeveloperCompanyGroup
+  data: DeveloperData
+  metrics: {
+    voucherByCompany: Record<string, number>
+    partyByCompany: Record<string, number>
+    itemByCompany: Record<string, number>
+    lastActivityByCompany: Record<string, string>
+  }
+  onSaved: () => void
+}) {
+  const companyCount = group.companies.length
+  return (
+    <tr className="border-t border-border align-top">
+      <td className="w-64 px-3 py-3">
+        <p className="font-semibold">{group.ownerEmail || group.ownerId}</p>
+        {group.ownerEmail && group.ownerId && group.ownerEmail !== group.ownerId && <p className="text-xs text-muted-foreground">{group.ownerId}</p>}
+        <p className="mt-2 text-xs text-muted-foreground">{companyCount} compan{companyCount === 1 ? 'y' : 'ies'}</p>
+      </td>
+      <td className="p-0">
+        <div className="min-w-[980px]">
+          <div className="grid gap-3 border-b border-border bg-muted/30 px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground lg:grid-cols-[1.4fr_1fr_1fr_1.2fr_1.1fr_1.8fr]">
+            <span>Company</span>
+            <span>Usage</span>
+            <span>Last Activity</span>
+            <span>Plan</span>
+            <span>Support</span>
+            <span>Developer Notes</span>
+          </div>
+          {group.companies.map(company => (
+            <DeveloperCompanyPanel
+              key={company.id}
+              company={company}
+              data={data}
+              voucherCount={metrics.voucherByCompany[company.id] || 0}
+              partyCount={metrics.partyByCompany[company.id] || 0}
+              itemCount={metrics.itemByCompany[company.id] || 0}
+              lastActivity={metrics.lastActivityByCompany[company.id]}
+              onSaved={onSaved}
+            />
+          ))}
+        </div>
       </td>
     </tr>
   )
@@ -415,12 +479,35 @@ export function DeveloperDashboard() {
     }
   }, [data])
 
-  const filteredCompanies = useMemo(() => {
+  const filteredCompanyGroups = useMemo(() => {
     const companies = data?.companies || []
+    const groups = Array.from(companies.reduce<Map<string, DeveloperCompanyGroup>>((map, company) => {
+      const key = companyOwnerKey(company)
+      const existing = map.get(key)
+      if (existing) {
+        existing.companies.push(company)
+      } else {
+        map.set(key, {
+          key,
+          ownerEmail: company.owner_email || '',
+          ownerId: company.user_id || '',
+          companies: [company],
+        })
+      }
+      return map
+    }, new Map()).values()).map(group => ({
+      ...group,
+      companies: group.companies.sort((a, b) => a.name.localeCompare(b.name)),
+    })).sort((a, b) => (a.ownerEmail || a.ownerId).localeCompare(b.ownerEmail || b.ownerId))
+
     const q = query.trim().toLowerCase()
-    if (!q) return companies
-    return companies.filter(c =>
-      [c.name, c.owner_email, c.phone, c.address, c.plan_status, c.support_status]
+    if (!q) return groups
+    return groups.filter(group =>
+      [
+        group.ownerEmail,
+        group.ownerId,
+        ...group.companies.flatMap(c => [c.name, c.owner_email, c.phone, c.address, c.plan_status, c.support_status]),
+      ]
         .filter(Boolean)
         .some(value => String(value).toLowerCase().includes(q))
     )
@@ -637,27 +724,21 @@ export function DeveloperDashboard() {
             <table className="w-full text-sm border-collapse">
               <thead>
                 <tr className="bg-muted/50">
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Company</th>
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Usage</th>
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Last Activity</th>
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Plan</th>
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Support</th>
-                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Developer Notes</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">User</th>
+                  <th className="text-left px-3 py-2 text-xs uppercase tracking-wider text-muted-foreground">Companies</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredCompanies.map(company => (
-                  <DeveloperCompanyRow
-                    key={company.id}
-                    company={company}
+                {filteredCompanyGroups.map(group => (
+                  <DeveloperCompanyGroupRow
+                    key={group.key}
+                    group={group}
                     data={data as DeveloperData}
-                    voucherCount={metrics.voucherByCompany[company.id] || 0}
-                    partyCount={metrics.partyByCompany[company.id] || 0}
-                    itemCount={metrics.itemByCompany[company.id] || 0}
-                    lastActivity={metrics.lastActivityByCompany[company.id]}
+                    metrics={metrics}
                     onSaved={load}
                   />
                 ))}
+                {!filteredCompanyGroups.length && <tr><td colSpan={2} className="px-3 py-5 text-center text-sm text-muted-foreground">No companies found.</td></tr>}
               </tbody>
             </table>
           </CardContent>

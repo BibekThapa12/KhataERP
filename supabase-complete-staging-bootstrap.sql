@@ -305,6 +305,7 @@ create table if not exists items (
   opening_qty      numeric(14,4) not null default 0,
   opening_rate     numeric(14,2) not null default 0,
   reorder_level    numeric(14,4),
+  is_service        boolean not null default false,
   created_at       timestamptz not null default now()
 );
 
@@ -324,6 +325,7 @@ alter table items add column if not exists category_id uuid references item_cate
 alter table items add column if not exists sku text;
 alter table items add column if not exists barcode text;
 alter table items add column if not exists vat_applicable boolean not null default true;
+alter table items add column if not exists is_service boolean not null default false;
 alter table items add column if not exists is_archived boolean not null default false;
 
 create table if not exists master_change_logs (
@@ -714,6 +716,7 @@ alter table items add column if not exists category_id uuid references item_cate
 alter table items add column if not exists sku text;
 alter table items add column if not exists barcode text;
 alter table items add column if not exists vat_applicable boolean not null default true;
+alter table items add column if not exists is_service boolean not null default false;
 alter table items add column if not exists is_archived boolean not null default false;
 
 insert into account_categories (company_id, name, account_type, is_system)
@@ -1094,7 +1097,7 @@ begin
     if p.company_id <> new.company_id or p.account_type <> new.account_type then raise exception 'Parent must belong to the same company and account type'; end if;
     if p.id = new.id then raise exception 'Category hierarchy cycle detected'; end if;
     levels := levels + 1;
-    if levels > 3 then raise exception 'Category hierarchy cannot exceed three levels'; end if;
+    if levels > 4 then raise exception 'Category hierarchy cannot exceed four levels'; end if;
     exit when p.parent_category_id is null;
     cursor_id := p.parent_category_id;
   end loop;
@@ -1103,7 +1106,7 @@ begin
     union all
     select c.id, d.depth + 1 from public.account_categories c join descendants d on c.parent_category_id = d.id
   ) select coalesce(max(depth), 1) into descendant_height from descendants;
-  if levels + descendant_height - 1 > 3 then raise exception 'Moving this category would exceed three levels'; end if;
+  if levels + descendant_height - 1 > 4 then raise exception 'Moving this category would exceed four levels'; end if;
   return new;
 end $$;
 
@@ -1122,7 +1125,7 @@ begin
     if p.company_id <> new.company_id then raise exception 'Parent must belong to the same company'; end if;
     if p.id = new.id then raise exception 'Category hierarchy cycle detected'; end if;
     levels := levels + 1;
-    if levels > 3 then raise exception 'Category hierarchy cannot exceed three levels'; end if;
+    if levels > 4 then raise exception 'Category hierarchy cannot exceed four levels'; end if;
     exit when p.parent_category_id is null;
     cursor_id := p.parent_category_id;
   end loop;
@@ -1131,7 +1134,7 @@ begin
     union all
     select c.id, d.depth + 1 from public.item_categories c join descendants d on c.parent_category_id = d.id
   ) select coalesce(max(depth), 1) into descendant_height from descendants;
-  if levels + descendant_height - 1 > 3 then raise exception 'Moving this category would exceed three levels'; end if;
+  if levels + descendant_height - 1 > 4 then raise exception 'Moving this category would exceed four levels'; end if;
   return new;
 end $$;
 
@@ -1378,6 +1381,15 @@ begin
    and parent.account_type = child.account_type
   on conflict (company_id, name, account_type) do update
   set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
+
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, 'Employees / Staffs', 'Asset', parent.id, true, false
+  from public.account_categories parent
+  where parent.company_id = target_company_id
+    and parent.name = 'Loans & Advances (Asset)'
+    and parent.account_type = 'Asset'
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
 end;
 $$;
 
@@ -1548,6 +1560,75 @@ commit;
 notify pgrst, 'reload schema';
 
 -- END INCLUDED FILE: supabase-system-account-groups-migration.sql
+
+-- =============================================================================
+-- BEGIN INCLUDED FILE: supabase-employee-staff-account-category-migration.sql
+-- =============================================================================
+-- Default Employee/Staff loan and advance account category.
+-- Adds a system Asset group under Loans & Advances (Asset) for every company.
+
+begin;
+
+do $$
+declare
+  fn text;
+begin
+  select pg_get_functiondef('public.validate_account_category_hierarchy()'::regprocedure) into fn;
+  if fn is not null then
+    fn := replace(fn, 'levels > 3', 'levels > 4');
+    fn := replace(fn, 'three levels', 'four levels');
+    fn := replace(fn, 'levels + descendant_height - 1 > 3', 'levels + descendant_height - 1 > 4');
+    execute fn;
+  end if;
+
+  select pg_get_functiondef('public.validate_item_category_hierarchy()'::regprocedure) into fn;
+  if fn is not null then
+    fn := replace(fn, 'levels > 3', 'levels > 4');
+    fn := replace(fn, 'three levels', 'four levels');
+    fn := replace(fn, 'levels + descendant_height - 1 > 3', 'levels + descendant_height - 1 > 4');
+    execute fn;
+  end if;
+end $$;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger trigger_row
+    where trigger_row.tgrelid = 'public.account_categories'::regclass
+      and trigger_row.tgname = 'account_category_system_guard'
+  ) then
+    execute 'alter table public.account_categories disable trigger account_category_system_guard';
+  end if;
+end $$;
+
+insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+select company.id, 'Employees / Staffs', 'Asset', parent.id, true, false
+from public.companies company
+join public.account_categories parent
+  on parent.company_id = company.id
+ and parent.name = 'Loans & Advances (Asset)'
+ and parent.account_type = 'Asset'
+on conflict (company_id, name, account_type) do update
+set parent_category_id = excluded.parent_category_id,
+    is_system = true,
+    is_archived = false;
+
+do $$
+begin
+  if exists (
+    select 1
+    from pg_trigger trigger_row
+    where trigger_row.tgrelid = 'public.account_categories'::regclass
+      and trigger_row.tgname = 'account_category_system_guard'
+  ) then
+    execute 'alter table public.account_categories enable trigger account_category_system_guard';
+  end if;
+end $$;
+
+commit;
+
+-- END INCLUDED FILE: supabase-employee-staff-account-category-migration.sql
 
 
 -- =============================================================================
@@ -3444,6 +3525,15 @@ begin
       and (stock_line.qty <= 0 or stock_line.rate < 0)
   ) then raise exception 'Stock movements require positive quantities and non-negative rates'; end if;
 
+  if exists (
+    select 1
+    from public.stock_lines stock_line
+    join public.items item
+      on item.id = stock_line.item_id
+    where stock_line.voucher_id = target_voucher_id
+      and coalesce(item.is_service, false)
+  ) then raise exception 'Service items cannot create stock movements'; end if;
+
   if voucher_record.party_account_id is not null and not exists (
     select 1 from public.accounts account
     where account.id = voucher_record.party_account_id
@@ -3569,6 +3659,10 @@ begin
                  sum(coalesce(invoice_item.base_qty,
                    invoice_item.qty / nullif(coalesce(invoice_item.conversion_factor, 1), 0))) as qty
           from public.invoice_items invoice_item
+          join public.items tracked_item
+            on tracked_item.id = invoice_item.item_id
+           and tracked_item.company_id = voucher_record.company_id
+           and not coalesce(tracked_item.is_service, false)
           where invoice_item.voucher_id = target_voucher_id
           group by invoice_item.item_id
         ), movement_quantity as (
@@ -4266,6 +4360,103 @@ commit;
 notify pgrst, 'reload schema';
 
 -- END INCLUDED FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
+
+-- =============================================================================
+-- BEGIN INCLUDED FILE: supabase-service-items-migration.sql
+-- =============================================================================
+-- Service Item Support
+-- Service items are invoiceable but must never create inventory movement.
+
+begin;
+
+alter table public.items
+  add column if not exists is_service boolean not null default false;
+
+update public.items
+set is_service = false
+where is_service is null;
+
+create or replace function public.prevent_service_item_stock_line()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (
+    select 1
+    from public.items item
+    where item.id = new.item_id
+      and coalesce(item.is_service, false)
+  ) then
+    raise exception 'Service items cannot create stock movements';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists stock_lines_reject_service_items on public.stock_lines;
+create trigger stock_lines_reject_service_items
+before insert or update of item_id on public.stock_lines
+for each row
+execute function public.prevent_service_item_stock_line();
+
+do $service_items$
+declare
+  fn text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into fn;
+
+  if fn is null then
+    raise exception 'validate_voucher_financial_integrity() is missing';
+  end if;
+
+  if fn not like '%Service items cannot create stock movements%' then
+    fn := replace(fn,
+      $$  if exists (
+    select 1 from public.stock_lines stock_line
+    where stock_line.voucher_id = target_voucher_id
+      and (stock_line.qty <= 0 or stock_line.rate < 0)
+  ) then raise exception 'Stock movements require positive quantities and non-negative rates'; end if;$$,
+      $$  if exists (
+    select 1 from public.stock_lines stock_line
+    where stock_line.voucher_id = target_voucher_id
+      and (stock_line.qty <= 0 or stock_line.rate < 0)
+  ) then raise exception 'Stock movements require positive quantities and non-negative rates'; end if;
+
+  if exists (
+    select 1
+    from public.stock_lines stock_line
+    join public.items item
+      on item.id = stock_line.item_id
+    where stock_line.voucher_id = target_voucher_id
+      and coalesce(item.is_service, false)
+  ) then raise exception 'Service items cannot create stock movements'; end if;$$);
+  end if;
+
+  if fn not like '%tracked_item.id = invoice_item.item_id%' then
+    fn := replace(fn,
+      $$          from public.invoice_items invoice_item
+          where invoice_item.voucher_id = target_voucher_id
+          group by invoice_item.item_id$$,
+      $$          from public.invoice_items invoice_item
+          join public.items tracked_item
+            on tracked_item.id = invoice_item.item_id
+           and tracked_item.company_id = voucher_record.company_id
+           and not coalesce(tracked_item.is_service, false)
+          where invoice_item.voucher_id = target_voucher_id
+          group by invoice_item.item_id$$);
+  end if;
+
+  execute fn;
+end $service_items$;
+
+revoke all on function public.prevent_service_item_stock_line() from public, anon, authenticated;
+
+commit;
+
+-- END INCLUDED FILE: supabase-service-items-migration.sql
 
 
 -- =============================================================================
@@ -5195,7 +5386,8 @@ begin
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'created_by')
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'updated_by')
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'completed_by')
-    or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'completed_at') then
+    or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'completed_at')
+    or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'is_service') then
     raise exception 'Bootstrap verification failed: current release columns are missing';
   end if;
 

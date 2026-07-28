@@ -69,6 +69,15 @@ begin
    and parent.account_type = child.account_type
   on conflict (company_id, name, account_type) do update
   set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
+
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, 'Employees / Staffs', 'Asset', parent.id, true, false
+  from public.account_categories parent
+  where parent.company_id = target_company_id
+    and parent.name = 'Loans & Advances (Asset)'
+    and parent.account_type = 'Asset'
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
 end;
 $$;
 

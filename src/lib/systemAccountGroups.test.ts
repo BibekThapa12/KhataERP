@@ -2,14 +2,14 @@ import { describe, expect, it } from 'vitest'
 import { SYSTEM_ACCOUNT_DESTINATIONS, SYSTEM_ACCOUNT_GROUPS, systemAccountGroupLevels } from './systemAccountGroups'
 
 describe('protected system account groups', () => {
-  it('defines a unique, parent-first hierarchy no deeper than three levels', () => {
+  it('defines a unique, parent-first hierarchy no deeper than four levels', () => {
     const keys = new Set<string>()
     const depths = new Map<string, number>()
     for (const group of SYSTEM_ACCOUNT_GROUPS) {
       expect(keys.has(group.key)).toBe(false)
       const depth = group.parent_key ? (depths.get(group.parent_key) || 0) + 1 : 1
       if (group.parent_key) expect(keys.has(group.parent_key)).toBe(true)
-      expect(depth).toBeLessThanOrEqual(3)
+      expect(depth).toBeLessThanOrEqual(4)
       keys.add(group.key)
       depths.set(group.key, depth)
     }
@@ -17,6 +17,7 @@ describe('protected system account groups', () => {
       'assets', 'liabilities', 'equity', 'incomes', 'expenses',
       'bank-accounts', 'cash-in-hand', 'bank-od', 'duties-taxes',
       'sundry-debtors', 'sundry-creditors', 'sales-accounts', 'purchase-accounts',
+      'employees-staffs',
     ]))
   })
 
@@ -29,7 +30,7 @@ describe('protected system account groups', () => {
 
   it('batches hierarchy writes by level while keeping every parent earlier', () => {
     const levels = systemAccountGroupLevels()
-    expect(levels).toHaveLength(3)
+    expect(levels).toHaveLength(4)
     const levelByKey = new Map(levels.flatMap((level, index) => level.map(group => [group.key, index] as const)))
     for (const group of SYSTEM_ACCOUNT_GROUPS) {
       if (group.parent_key) expect(levelByKey.get(group.parent_key)).toBeLessThan(levelByKey.get(group.key)!)

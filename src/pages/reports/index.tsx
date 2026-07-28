@@ -680,7 +680,8 @@ export function StockReportPage() {
   const movementByItem = useMemo(() => new Map(movements.map(entry => [entry.id, entry])), [movements])
   const allowedCategories = useMemo(() => categoryId === 'all' ? null : new Set([categoryId, ...categoryDescendantIds(itemCategories, categoryId)]), [categoryId, itemCategories])
   const query = normalizeSearch(search)
-  const rows = items.map(item => {
+  const stockItems = items.filter(item => !item.is_service)
+  const rows = stockItems.map(item => {
     const movement = movementByItem.get(item.id) || { id: item.id, opening_qty: 0, opening_value: 0, inward_qty: 0, inward_value: 0, outward_qty: 0, outward_value: 0, closing_qty: 0, closing_rate: 0, closing_value: 0 }
     const rowStatus: 'in' | 'low' | 'out' = movement.closing_qty <= 0 ? 'out' : stockCondition === 'saleable' && item.reorder_level != null && movement.closing_qty <= item.reorder_level ? 'low' : 'in'
     return { item, movement, category: categoryPath(itemCategories, item.category_id), status: rowStatus }
@@ -750,8 +751,9 @@ export function LegacyStockReportPage() {
   const [showDetails, setShowDetails] = useState(false)
   const [search, setSearch] = useState('')
   const q = normalizeSearch(search)
-  const movements = useMemo(() => computeStockSummary(items, vouchers), [items, vouchers])
-  const rows = items
+  const stockItems = items.filter(item => !item.is_service)
+  const movements = useMemo(() => computeStockSummary(stockItems, vouchers), [stockItems, vouchers])
+  const rows = stockItems
     .filter(item => !q || normalizeSearch(`${item.name} ${categoryPath(itemCategories, item.category_id)} ${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}`).includes(q))
     .map(item => ({
       item,

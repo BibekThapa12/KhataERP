@@ -161,7 +161,7 @@ export function Dashboard() {
   const topItems = useMemo(() => topSellingItems(postedVouchers, items, from, to), [postedVouchers, items, from, to])
   const stockMap = useMemo(() => new Map(saleableStockAsOf.map(row => [row.id, { ...row, qty: row.closing_qty }])), [saleableStockAsOf])
   const lowStock = useMemo(() => items
-    .filter(item => !item.is_archived && item.reorder_level != null && (stockMap.get(item.id)?.qty || 0) <= Number(item.reorder_level))
+    .filter(item => !item.is_service && !item.is_archived && item.reorder_level != null && (stockMap.get(item.id)?.qty || 0) <= Number(item.reorder_level))
     .map(item => ({ item, qty: stockMap.get(item.id)?.qty || 0 }))
     .sort((left, right) => left.qty - right.qty || left.item.name.localeCompare(right.item.name))
     .slice(0, 5), [items, stockMap])

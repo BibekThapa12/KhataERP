@@ -138,7 +138,7 @@ interface AppState {
   refreshChequeData: () => Promise<void>
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
-  addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean }) => Promise<Item>
+  addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number | null; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean; is_service?: boolean }) => Promise<Item>
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number; address?: string | null; contact_no?: string | null; pan_no?: string | null; credit_days?: number | null; bank_account_no?: string | null; bank_branch?: string | null }) => Promise<Account>
   addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
@@ -238,16 +238,22 @@ function recomputeVoucherEffects(
 function invoiceItemSnapshots(lines: InvoiceEntryInput[], items: Item[], stock: StockEntry[], isSales: boolean) {
   return lines.map(line => {
     const item = items.find(entry => entry.id === line.item_id)
+    const isService = !!item?.is_service || !!line.is_service
     return {
       ...line,
       item_name: item?.name,
       unit: line.entry_unit || item?.unit,
       entry_unit: line.entry_unit || item?.unit,
-      conversion_factor: line.conversion_factor || 1,
-      base_qty: toBaseQty(line.qty, line.conversion_factor || 1),
-      cost_rate: line.cost_rate ?? (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : toBaseRate(line.rate, line.conversion_factor || 1)),
+      conversion_factor: isService ? 1 : (line.conversion_factor || 1),
+      base_qty: isService ? line.qty : toBaseQty(line.qty, line.conversion_factor || 1),
+      cost_rate: line.cost_rate ?? (isService ? 0 : (isSales ? (stock.find(entry => entry.id === line.item_id)?.avg_cost || 0) : toBaseRate(line.rate, line.conversion_factor || 1))),
     }
   })
+}
+
+function markServiceInvoiceItems<T extends InvoiceEntryInput | ReturnItemInput>(lines: T[], items: Item[]): T[] {
+  const itemById = new Map(items.map(item => [item.id, item]))
+  return lines.map(line => ({ ...line, is_service: !!itemById.get(line.item_id)?.is_service }))
 }
 
 function systemAccountsFor(company: Company, accounts: Account[]) {
@@ -338,7 +344,11 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
 
   if (params.type === 'Purchase Return') {
     const requestedByItem = new Map<string, number>()
-    for (const item of params.items) requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + toBaseQty(item.qty, item.conversion_factor || 1))
+    const serviceItemIds = new Set(items.filter(item => item.is_service).map(item => item.id))
+    for (const item of params.items) {
+      if (serviceItemIds.has(item.item_id)) continue
+      requestedByItem.set(item.item_id, (requestedByItem.get(item.item_id) || 0) + toBaseQty(item.qty, item.conversion_factor || 1))
+    }
     const editing = editingId ? vouchers.find(voucher => voucher.id === editingId) : undefined
     for (const [itemId, qty] of requestedByItem) {
       const currentReturnQty = editing?.stock_lines?.filter(line => line.item_id === itemId && line.direction === 'out' && (line.stock_condition || 'saleable') === params.stock_condition).reduce((sum, line) => sum + line.qty, 0) || 0
@@ -702,13 +712,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
-    const unit = canonicalItemUnit(data.unit) || data.unit.trim()
-    const alternateUnit = data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null
-    const unitError = validateItemUnits(unit, alternateUnit)
-    if (unitError) throw new Error(unitError)
-    if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
+    const isService = !!data.is_service
+    const unit = isService ? 'Service' : (canonicalItemUnit(data.unit) || data.unit.trim())
+    const alternateUnit = isService ? null : (data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null)
+    if (!isService) {
+      const unitError = validateItemUnits(unit, alternateUnit)
+      if (unitError) throw new Error(unitError)
+      if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
+    }
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
+    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
     const nextState = trace.sync('client_stock_recompute', () => {
       const items = [...get().items, newItem]
       return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }
@@ -743,7 +756,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const parent = parent_category_id ? get().accountCategories.find(category => category.id === parent_category_id) : undefined
     if (!parent) throw new Error('Parent account group not found')
     if (parent && parent.account_type !== account_type) throw new Error('Parent category must use the same account type')
-    if (parent && categoryDepth(get().accountCategories, parent.id) >= 3) throw new Error('Category hierarchy cannot exceed three levels')
+    if (parent && categoryDepth(get().accountCategories, parent.id) >= 4) throw new Error('Category hierarchy cannot exceed four levels')
     const category = await insertAccountCategory({ company_id: company.id, name, account_type, parent_category_id, is_system: false, is_archived: false })
     set({ accountCategories: [...get().accountCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record account category audit'))
@@ -763,7 +776,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (updates.parent_category_id === id || descendants.has(updates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
       const parent = get().accountCategories.find(category => category.id === updates.parent_category_id)
       if (!parent || parent.account_type !== (updates.account_type || existing.account_type)) throw new Error('Parent category must use the same account type')
-      if (categoryDepth(get().accountCategories, parent.id) + subtreeHeight(get().accountCategories, id) > 3) throw new Error('Category hierarchy cannot exceed three levels')
+      if (categoryDepth(get().accountCategories, parent.id) + subtreeHeight(get().accountCategories, id) > 4) throw new Error('Category hierarchy cannot exceed four levels')
     }
     await updateAccountCategory(id, updates)
     const accountCategories = get().accountCategories.map(category => category.id === id ? { ...category, ...updates } : category)
@@ -789,7 +802,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!company) throw new Error('No company')
     const parent = parent_category_id ? get().itemCategories.find(category => category.id === parent_category_id) : undefined
-    if (parent && categoryDepth(get().itemCategories, parent.id) >= 3) throw new Error('Category hierarchy cannot exceed three levels')
+    if (parent && categoryDepth(get().itemCategories, parent.id) >= 4) throw new Error('Category hierarchy cannot exceed four levels')
     const category = await insertItemCategory({ company_id: company.id, name, parent_category_id, is_archived: false })
     set({ itemCategories: [...get().itemCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record item category audit'))
@@ -808,7 +821,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (updates.parent_category_id === id || descendants.has(updates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
       const parent = get().itemCategories.find(category => category.id === updates.parent_category_id)
       if (!parent) throw new Error('Parent category not found')
-      if (categoryDepth(get().itemCategories, parent.id) + subtreeHeight(get().itemCategories, id) > 3) throw new Error('Category hierarchy cannot exceed three levels')
+      if (categoryDepth(get().itemCategories, parent.id) + subtreeHeight(get().itemCategories, id) > 4) throw new Error('Category hierarchy cannot exceed four levels')
     }
     await updateItemCategory(id, updates)
     set({ itemCategories: get().itemCategories.map(category => category.id === id ? { ...category, ...updates } : category) })
@@ -970,7 +983,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_sales_invoice', companyId: company.id, recordType: 'Sales', lineItems: params.items.length }, async trace => {
     const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
-      const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+      const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
       const data = buildSalesVoucherData(effectiveParams)
       if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
       return { effectiveParams, data }
@@ -1000,7 +1013,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_purchase_invoice', companyId: company.id, recordType: 'Purchase', lineItems: params.items.length }, async trace => {
     const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
-      const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+      const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
       return { effectiveParams, data: buildPurchaseVoucherData(effectiveParams) }
     })
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
@@ -1119,7 +1132,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories)
     }
     const partyAccountId = original?.party_account_id || params.party_account_id || null
-    const data = buildReturnVoucherData({ ...params, original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
+    const data = buildReturnVoucherData({ ...params, items: markServiceInvoiceItems(params.items, get().items), original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     return { original, partyAccountId, data }
     })
@@ -1162,7 +1175,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     return measuredWrite({ operation: 'update_sales_invoice', companyId: company.id, recordType: 'Sales', lineItems: params.items.length }, async trace => {
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('This invoice has an active return and can no longer be edited')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+    const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
@@ -1194,7 +1207,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     return measuredWrite({ operation: 'update_purchase_invoice', companyId: company.id, recordType: 'Purchase', lineItems: params.items.length }, async trace => {
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('This bill has an active return and can no longer be edited')
-    const effectiveParams = { ...params, vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
+    const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
@@ -1253,6 +1266,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const quantity = Math.abs(qty_delta)
     const sourceCondition: StockCondition = transfer_to ? 'saleable' : stock_condition
     if (transfer_to && transfer_to === sourceCondition) throw new Error('Select a different destination for the transfer')
+    const selectedItem = get().items.find(item => item.id === item_id)
+    if (!selectedItem || selectedItem.is_service) throw new Error('Select a stock item for stock adjustments')
     if ((transfer_to || qty_delta < 0) && quantity > stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition) + 0.0001) throw new Error(`Only ${stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition)} units are available in ${sourceCondition} stock`)
     })
     const quantity = Math.abs(qty_delta)
@@ -1355,7 +1370,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       validateMoneyAccount(params.settlement_account_id, company, get().rawAccounts, get().accountCategories, true)
     }
     const partyAccountId = original?.party_account_id || params.party_account_id || null
-    const data = buildReturnVoucherData({ ...params, original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
+    const data = buildReturnVoucherData({ ...params, items: markServiceInvoiceItems(params.items, get().items), original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     const updated = await updateVoucher({
       id,

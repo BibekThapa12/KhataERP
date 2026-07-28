@@ -290,6 +290,7 @@ create table if not exists items (
   opening_qty      numeric(14,4) not null default 0,
   opening_rate     numeric(14,2) not null default 0,
   reorder_level    numeric(14,4),
+  is_service        boolean not null default false,
   created_at       timestamptz not null default now()
 );
 
@@ -309,6 +310,7 @@ alter table items add column if not exists category_id uuid references item_cate
 alter table items add column if not exists sku text;
 alter table items add column if not exists barcode text;
 alter table items add column if not exists vat_applicable boolean not null default true;
+alter table items add column if not exists is_service boolean not null default false;
 alter table items add column if not exists is_archived boolean not null default false;
 
 create table if not exists master_change_logs (
@@ -445,6 +447,33 @@ create table if not exists stock_lines (
   stock_condition  text not null default 'saleable' check (stock_condition in ('saleable','damaged','expired')),
   is_transfer      boolean not null default false
 );
+
+create or replace function public.prevent_service_item_stock_line()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (
+    select 1
+    from public.items item
+    where item.id = new.item_id
+      and coalesce(item.is_service, false)
+  ) then
+    raise exception 'Service items cannot create stock movements';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists stock_lines_reject_service_items on public.stock_lines;
+create trigger stock_lines_reject_service_items
+before insert or update of item_id on public.stock_lines
+for each row
+execute function public.prevent_service_item_stock_line();
+
+revoke all on function public.prevent_service_item_stock_line() from public, anon, authenticated;
 
 -- ── Invoice Items (human-readable line items for invoice display) ─────────────
 create table if not exists invoice_items (

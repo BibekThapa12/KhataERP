@@ -65,7 +65,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
   const allCategories = kind === 'account' ? accountCategories : itemCategories
   const descendants = category ? categoryDescendantIds(allCategories, category.id) : new Set<string>()
   const ownHeight = category ? subtreeHeight(allCategories, category.id) : 1
-  const parentOptions = allCategories.filter(candidate => !candidate.is_archived && candidate.id !== category?.id && !descendants.has(candidate.id) && categoryDepth(allCategories, candidate.id) + ownHeight <= 3 && (kind === 'item' || (candidate as AccountCategory).account_type === type))
+  const parentOptions = allCategories.filter(candidate => !candidate.is_archived && candidate.id !== category?.id && !descendants.has(candidate.id) && categoryDepth(allCategories, candidate.id) + ownHeight <= 4 && (kind === 'item' || (candidate as AccountCategory).account_type === type))
   const selectedParent = parentId === 'root' ? undefined : allCategories.find(candidate => candidate.id === parentId)
   const systemCategory = kind === 'account' && !!(category as AccountCategory | undefined)?.is_system
 
@@ -224,20 +224,23 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   }, [open, item])
 
   if (!item) return null
+  const isService = !!item.is_service
   const unitChanged = form.unit.trim() !== item.unit
   const stockBasisChanged = Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate
   const save = async () => {
     if (!form.name.trim()) return setError('Item name is required.')
     const altUnit = form.alternate_unit.trim()
     const altFactor = Number(form.alternate_conversion)
-    const unitError = validateItemUnits(form.unit, altUnit, [item.unit, item.alternate_unit || ''])
-    if (unitError) return setError(unitError)
-    if (altUnit && altFactor <= 1) return setError('Alternative units per main unit must be greater than 1.')
-    if (used && (unitChanged || stockBasisChanged) && !confirmUnit) return setError('Confirm the stock-basis change. Historical vouchers will not be rewritten.')
+    if (!isService) {
+      const unitError = validateItemUnits(form.unit, altUnit, [item.unit, item.alternate_unit || ''])
+      if (unitError) return setError(unitError)
+      if (altUnit && altFactor <= 1) return setError('Alternative units per main unit must be greater than 1.')
+      if (used && (unitChanged || stockBasisChanged) && !confirmUnit) return setError('Confirm the stock-basis change. Historical vouchers will not be rewritten.')
+    }
     setSaving(true)
     try {
       const openingFactor = openingUnitMode === 'alternate' && altUnit ? altFactor : 1
-      await alterItem(item.id, { name: form.name.trim(), category_id: form.category_id || undefined, unit: form.unit.trim(), alternate_unit: altUnit || null, alternate_conversion: altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: form.reorder_level === '' ? null : Number(form.reorder_level), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable })
+      await alterItem(item.id, { name: form.name.trim(), category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
       onClose()
     } catch (e: unknown) { setError(publicErrorMessage(e, 'saving item')) } finally { setSaving(false) }
   }
@@ -247,15 +250,16 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></div>
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
-        <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>
+        {isService && <div className="sm:col-span-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">Service item</div>}
+        {!isService && <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>}
         <div className="space-y-1.5"><Label>Sell Rate</Label><Input type="number" value={form.sell_rate} onChange={event => setForm({ ...form, sell_rate: event.target.value })} /></div>
-        <div className="space-y-1.5"><Label>Alternative Unit</Label><UnitCombobox value={form.alternate_unit} onValueChange={value => { setForm({ ...form, alternate_unit: value, alternate_conversion: value ? form.alternate_conversion : '' }); if (!value) setOpeningUnitMode('main') }} optional exclude={[form.unit]} /></div>
+        {!isService && <><div className="space-y-1.5"><Label>Alternative Unit</Label><UnitCombobox value={form.alternate_unit} onValueChange={value => { setForm({ ...form, alternate_unit: value, alternate_conversion: value ? form.alternate_conversion : '' }); if (!value) setOpeningUnitMode('main') }} optional exclude={[form.unit]} /></div>
         <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" placeholder={form.alternate_unit ? 'Enter manually' : 'Select alternative unit first'} value={form.alternate_conversion} onChange={event => setForm({ ...form, alternate_conversion: event.target.value })} disabled={!form.alternate_unit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
         {form.alternate_unit.trim() && Number(form.alternate_conversion) > 1 && <p className="text-xs text-muted-foreground sm:col-span-2">1 {form.unit.trim()} = {form.alternate_conversion} {form.alternate_unit.trim()}</p>}
         <div className="space-y-1.5"><Label>Opening Qty</Label><Input type="number" value={form.opening_qty} onChange={event => setForm({ ...form, opening_qty: event.target.value })} /></div>
         <div className="space-y-1.5"><Label>Opening Rate</Label><Input type="number" value={form.opening_rate} onChange={event => setForm({ ...form, opening_rate: event.target.value })} /></div>
         {form.alternate_unit.trim() && Number(form.alternate_conversion) > 1 && <div className="space-y-1.5 sm:col-span-2"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: form.unit }, { value: 'alternate', label: form.alternate_unit }]} /><p className="text-xs text-muted-foreground">Values are currently shown in the selected unit. Switching this selector does not convert already entered values.</p></div>}
-        <div className="space-y-1.5"><Label>Reorder Level</Label><Input type="number" value={form.reorder_level} onChange={event => setForm({ ...form, reorder_level: event.target.value })} /></div>
+        <div className="space-y-1.5"><Label>Reorder Level</Label><Input type="number" value={form.reorder_level} onChange={event => setForm({ ...form, reorder_level: event.target.value })} /></div></>}
         <div className="space-y-1.5"><Label>SKU</Label><Input value={form.sku} onChange={event => setForm({ ...form, sku: event.target.value })} /></div>
         <div className="space-y-1.5"><Label>Barcode</Label><Input value={form.barcode} onChange={event => setForm({ ...form, barcode: event.target.value })} /></div>
         <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={form.vat_applicable} onChange={event => setForm({ ...form, vat_applicable: event.target.checked })} className="h-4 w-4 accent-primary" />VAT applicable</label>
@@ -344,7 +348,7 @@ function CategoryIcon({ kind, row, childCount = row.children.length, className =
   if (childCount) return <Folder className={iconClass} />
   if (kind === 'item') {
     if (/repair|maintenance|service/.test(name)) return <Wrench className={iconClass} />
-    if (row.depth >= 3 || /accessor/.test(name)) return <Tag className={iconClass} />
+    if (row.depth >= 4 || /accessor/.test(name)) return <Tag className={iconClass} />
     return <Package className={iconClass} />
   }
   if (/bank/.test(name)) return <Landmark className={iconClass} />
@@ -365,7 +369,7 @@ export function CategoryLegend({ kind }: { kind: 'account' | 'item' }) {
 function CategoryActions({ row, onAddChild, onEdit, onArchive, onDelete, onError }: { row: CategoryRow; onAddChild: (category: AccountCategory | ItemCategory) => void; onEdit: (category: AccountCategory | ItemCategory) => void; onArchive: (category: AccountCategory | ItemCategory) => Promise<void> | void; onDelete?: (category: AccountCategory | ItemCategory) => Promise<void> | void; onError: (message: string) => void }) {
   const category = row.category
   const system = 'is_system' in category && category.is_system
-  const canAddChild = row.depth < 3 && !category.is_archived
+  const canAddChild = row.depth < 4 && !category.is_archived
   const deleteBlocked = system ? 'System-created account groups cannot be deleted.' : row.totalCount > 0 ? 'Delete every ledger in this group and its subgroups first.' : row.children.length > 0 ? 'Delete child account groups first.' : null
   const runArchive = async () => {
     try { await onArchive(category) } catch (error: unknown) { onError(publicErrorMessage(error, 'archiving category')) }

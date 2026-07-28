@@ -5,25 +5,27 @@ const categories = [
   { id: 'assets', name: 'Assets', parent_category_id: null },
   { id: 'current', name: 'Current Assets', parent_category_id: 'assets' },
   { id: 'debtors', name: 'Sundry Debtors', parent_category_id: 'current' },
+  { id: 'employee', name: 'Employees / Staffs', parent_category_id: 'debtors' },
 ]
 
 describe('category hierarchy', () => {
-  it('builds three levels and includes direct and descendant records in totals', () => {
+  it('builds four levels and includes direct and descendant records in totals', () => {
     const tree = buildCategoryTree(categories, [
       { id: 'root-ledger', category_id: 'assets' },
-      { id: 'customer', category_id: 'debtors' },
+      { id: 'employee-advance', category_id: 'employee' },
     ])
     expect(tree[0].path).toBe('Assets')
     expect(tree[0].directCount).toBe(1)
     expect(tree[0].totalCount).toBe(2)
-    expect(tree[0].children[0].children[0]).toMatchObject({ depth: 3, path: 'Assets › Current Assets › Sundry Debtors', totalCount: 1 })
+    expect(tree[0].children[0].children[0].children[0]).toMatchObject({ depth: 4, totalCount: 1 })
+    expect(tree[0].children[0].children[0].children[0].path).toContain('Employees / Staffs')
   })
 
   it('calculates paths, depth, descendants, and subtree height', () => {
-    expect(categoryPath(categories, 'debtors')).toBe('Assets › Current Assets › Sundry Debtors')
-    expect(categoryDepth(categories, 'debtors')).toBe(3)
-    expect(categoryDescendantIds(categories, 'assets')).toEqual(new Set(['current', 'debtors']))
-    expect(subtreeHeight(categories, 'assets')).toBe(3)
+    expect(categoryPath(categories, 'employee')).toContain('Employees / Staffs')
+    expect(categoryDepth(categories, 'employee')).toBe(4)
+    expect(categoryDescendantIds(categories, 'assets')).toEqual(new Set(['current', 'debtors', 'employee']))
+    expect(subtreeHeight(categories, 'assets')).toBe(4)
   })
 
   it('uses concise selector labels and adds only the context needed for duplicates', () => {

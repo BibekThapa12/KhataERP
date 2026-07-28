@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Boxes, Edit2, Eye, PackageMinus, PackageOpen, PackagePlus, Printer, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
-import { computeStockLedger } from '@/lib/engine'
+import { computeStockLedger, isCompletedVoucher, round2 } from '@/lib/engine'
 import { categoryPath } from '@/lib/categoryHierarchy'
 import { downloadCsv } from '@/lib/csv'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
@@ -23,7 +23,7 @@ import { Card, CardContent } from '@/components/ui/card'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
-import type { Item, Voucher } from '@/types'
+import type { Item, StockLedgerReport, Voucher } from '@/types'
 
 function number(value: number) {
   return value.toLocaleString('en-NP', { maximumFractionDigits: 4 })
@@ -38,6 +38,81 @@ function quantityLabel(value: number, item: Item) {
 
 function QuantityCell({ value, item }: { value: number; item: Item }) {
   return <><span className="block whitespace-nowrap num">{number(value)} {item.unit}</span>{item.alternate_unit && item.alternate_conversion && <span className="stock-ledger-alt-unit block whitespace-nowrap text-[11px] text-muted-foreground">({alternateQtyText(value * item.alternate_conversion)} {item.alternate_unit})</span>}</>
+}
+
+function computeServiceLedger(item: Item, vouchers: Voucher[], from: string, to: string): StockLedgerReport {
+  const fromKey = Number(from.replaceAll('-', ''))
+  const toKey = Number(to.replaceAll('-', ''))
+  const rows = vouchers
+    .filter(voucher => isCompletedVoucher(voucher) && ['Sales', 'Purchase', 'Sales Return', 'Purchase Return'].includes(voucher.type))
+    .flatMap(voucher => (voucher.invoice_items || [])
+      .filter(line => line.item_id === item.id)
+      .map(line => {
+        const direction = voucher.type === 'Purchase' || voucher.type === 'Sales Return' ? 'in' : 'out'
+        const qty = Number(line.qty || 0)
+        const rate = Number(line.rate || 0)
+        const value = round2(qty * rate)
+        return { voucher, direction, qty, rate, value, key: voucher.date_bs_key || Number(voucher.date_bs.replaceAll('-', '')) }
+      }))
+    .sort((left, right) => left.key - right.key || left.voucher.seq - right.voucher.seq)
+
+  let openingQty = 0
+  let openingValue = 0
+  let balanceQty = 0
+  let balanceValue = 0
+  const movements: StockLedgerReport['movements'] = []
+
+  for (const row of rows) {
+    const signedQty = row.direction === 'in' ? row.qty : -row.qty
+    const signedValue = row.direction === 'in' ? row.value : -row.value
+    if (row.key < fromKey) {
+      openingQty = round2(openingQty + signedQty)
+      openingValue = round2(openingValue + signedValue)
+      balanceQty = openingQty
+      balanceValue = openingValue
+      continue
+    }
+    if (row.key > toKey) continue
+    balanceQty = round2(balanceQty + signedQty)
+    balanceValue = round2(balanceValue + signedValue)
+    movements.push({
+      voucher_id: row.voucher.id,
+      date_bs: row.voucher.date_bs,
+      date_bs_key: row.key,
+      seq: row.voucher.seq,
+      voucher_type: row.voucher.type,
+      voucher_no: row.voucher.invoice_no || row.voucher.draft_no || String(row.voucher.seq),
+      narration: row.voucher.narration || row.voucher.return_reason || '',
+      inward_qty: row.direction === 'in' ? row.qty : 0,
+      inward_rate: row.direction === 'in' ? row.rate : 0,
+      inward_value: row.direction === 'in' ? row.value : 0,
+      outward_qty: row.direction === 'out' ? row.qty : 0,
+      outward_rate: row.direction === 'out' ? row.rate : 0,
+      outward_value: row.direction === 'out' ? row.value : 0,
+      balance_qty: balanceQty,
+      balance_rate: balanceQty ? round2(Math.abs(balanceValue / balanceQty)) : 0,
+      balance_value: balanceValue,
+    })
+  }
+
+  const inward_qty = round2(movements.reduce((sum, row) => sum + row.inward_qty, 0))
+  const inward_value = round2(movements.reduce((sum, row) => sum + row.inward_value, 0))
+  const outward_qty = round2(movements.reduce((sum, row) => sum + row.outward_qty, 0))
+  const outward_value = round2(movements.reduce((sum, row) => sum + row.outward_value, 0))
+
+  return {
+    opening_qty: openingQty,
+    opening_rate: openingQty ? round2(Math.abs(openingValue / openingQty)) : 0,
+    opening_value: openingValue,
+    inward_qty,
+    inward_value,
+    outward_qty,
+    outward_value,
+    closing_qty: balanceQty,
+    closing_rate: balanceQty ? round2(Math.abs(balanceValue / balanceQty)) : 0,
+    closing_value: balanceValue,
+    movements,
+  }
 }
 
 export function StockLedgerPage() {
@@ -55,7 +130,7 @@ export function StockLedgerPage() {
   const [printRequest, setPrintRequest] = useState(0)
   const method = company?.inventory_valuation_method || 'weighted_average'
   const methodLabel = method === 'fifo' ? 'FIFO' : method === 'lifo' ? 'LIFO' : 'Weighted Average'
-  const sortedItems = useMemo(() => [...items].sort((left, right) => Number(left.is_archived) - Number(right.is_archived) || left.name.localeCompare(right.name)), [items])
+  const sortedItems = useMemo(() => [...items].sort((left, right) => Number(left.is_archived) - Number(right.is_archived) || Number(left.is_service) - Number(right.is_service) || left.name.localeCompare(right.name)), [items])
 
   useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   useEffect(() => {
@@ -65,7 +140,8 @@ export function StockLedgerPage() {
   }, [selectedId, setSearchParams, sortedItems])
 
   const item = sortedItems.find(candidate => candidate.id === selectedId) || null
-  const ledger = useMemo(() => item ? computeStockLedger(item, vouchers, from, to, method) : null, [item, vouchers, from, to, method])
+  const isServiceLedger = !!item?.is_service
+  const ledger = useMemo(() => item ? (item.is_service ? computeServiceLedger(item, vouchers, from, to) : computeStockLedger(item, vouchers, from, to, method)) : null, [item, vouchers, from, to, method])
   const voucherById = useMemo(() => new Map(vouchers.map(voucher => [voucher.id, voucher])), [vouchers])
   const partyByAccount = useMemo(() => new Map(parties.map(party => [party.account_id, party])), [parties])
   const particulars = (voucherId: string) => {
@@ -111,24 +187,24 @@ export function StockLedgerPage() {
   const selectItem = (value: string) => setSearchParams(value ? { item: value } : {}, { replace: true })
   const exportCsv = () => {
     if (!item || !ledger) return
-    downloadCsv(`stock-ledger-${item.name}-${from}-to-${to}.csv`, ['S.No.', 'Date', 'Voucher Type', 'Voucher No.', 'Particulars', 'Narration', 'Inward Qty', 'Inward Rate', 'Inward Value', 'Outward Qty', 'Outward Rate', 'Outward Value', 'Balance Qty', 'Balance Rate', 'Balance Value'], filteredMovements.map((row, index) => [index + 1, row.date_bs, row.voucher_type, row.voucher_no, particulars(row.voucher_id), row.narration, row.inward_qty || '', row.inward_rate || '', row.inward_value || '', row.outward_qty || '', row.outward_rate || '', row.outward_value || '', row.balance_qty, row.balance_rate, row.balance_value]))
+    downloadCsv(`${isServiceLedger ? 'service-ledger' : 'stock-ledger'}-${item.name}-${from}-to-${to}.csv`, ['S.No.', 'Date', 'Voucher Type', 'Voucher No.', 'Particulars', 'Narration', 'Inward Qty', 'Inward Rate', 'Inward Value', 'Outward Qty', 'Outward Rate', 'Outward Value', 'Balance Qty', 'Balance Rate', 'Balance Value'], filteredMovements.map((row, index) => [index + 1, row.date_bs, row.voucher_type, row.voucher_no, particulars(row.voucher_id), row.narration, row.inward_qty || '', row.inward_rate || '', row.inward_value || '', row.outward_qty || '', row.outward_rate || '', row.outward_value || '', row.balance_qty, row.balance_rate, row.balance_value]))
   }
 
   return <div className="report-page stock-ledger-report-page">
-    <PageHeader title="Stock Ledger" description={`Item-wise inventory movements with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
+    <PageHeader title="Stock Ledger" description={isServiceLedger ? 'Service item delivery and purchase history from vouchers' : `Item-wise inventory movements with ${methodLabel} valuation`} action={<ReportActions onExport={exportCsv} />} />
     <PageContent className="report-content space-y-4">
-      <FormalReportPrintHeader company={company} title="Stock Ledger Statement" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={`${item?.name || 'No item selected'} · ${methodLabel}`} />
+      <FormalReportPrintHeader company={company} title={isServiceLedger ? 'Service Ledger Statement' : 'Stock Ledger Statement'} periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={`${item?.name || 'No item selected'} · ${isServiceLedger ? 'Service' : methodLabel}`} />
       <Card className="report-controls"><CardContent className="space-y-4 p-4">
-        <div className="max-w-2xl space-y-1.5"><Label>Stock Item</Label><SearchableSelect value={selectedId} onValueChange={selectItem} placeholder="Select stock item" searchPlaceholder="Search name, SKU, barcode, category or unit…" emptyMessage="No matching stock items" options={sortedItems.map(candidate => ({ value: candidate.id, label: `${candidate.name}${candidate.is_archived ? ' (Archived)' : ''}`, searchText: `${candidate.sku || ''} ${candidate.barcode || ''} ${categoryPath(itemCategories, candidate.category_id)} ${candidate.unit} ${candidate.alternate_unit || ''}` }))} /></div>
-        <div className="flex flex-wrap items-end justify-between gap-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /><div className="relative min-w-[240px] flex-1 sm:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search stock movements..." className="pl-8" /></div></div>
+        <div className="max-w-2xl space-y-1.5"><Label>Item / Service</Label><SearchableSelect value={selectedId} onValueChange={selectItem} placeholder="Select item or service" searchPlaceholder="Search name, SKU, barcode, category or unit…" emptyMessage="No matching items" options={sortedItems.map(candidate => ({ value: candidate.id, label: `${candidate.name}${candidate.is_service ? ' (Service)' : ''}${candidate.is_archived ? ' (Archived)' : ''}`, searchText: `${candidate.sku || ''} ${candidate.barcode || ''} ${categoryPath(itemCategories, candidate.category_id)} ${candidate.unit} ${candidate.alternate_unit || ''} ${candidate.is_service ? 'service' : 'stock'}` }))} /></div>
+        <div className="flex flex-wrap items-end justify-between gap-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /><div className="relative min-w-[240px] flex-1 sm:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={isServiceLedger ? 'Search service activity...' : 'Search stock movements...'} className="pl-8" /></div></div>
       </CardContent></Card>
 
       {item && ledger ? <>
         <div className="report-summary grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 xl:grid-cols-4">
-          <StatCard label="Opening Stock" value={quantityLabel(ledger.opening_qty, item)} sub={`${fmtMoney(ledger.opening_value)} @ ${fmtMoney(ledger.opening_rate)}`} Icon={PackageOpen} />
-          <StatCard label="Total Inward" value={quantityLabel(ledger.inward_qty, item)} sub={fmtMoney(ledger.inward_value)} color="positive" Icon={PackagePlus} />
-          <StatCard label="Total Outward" value={quantityLabel(ledger.outward_qty, item)} sub={fmtMoney(ledger.outward_value)} color="negative" Icon={PackageMinus} />
-          <StatCard label="Closing Stock" value={quantityLabel(ledger.closing_qty, item)} sub={`${fmtMoney(ledger.closing_value)} @ ${fmtMoney(ledger.closing_rate)}`} Icon={Boxes} />
+          <StatCard label={isServiceLedger ? 'Opening Activity' : 'Opening Stock'} value={quantityLabel(ledger.opening_qty, item)} sub={`${fmtMoney(ledger.opening_value)} @ ${fmtMoney(ledger.opening_rate)}`} Icon={PackageOpen} />
+          <StatCard label={isServiceLedger ? 'Service Purchased' : 'Total Inward'} value={quantityLabel(ledger.inward_qty, item)} sub={fmtMoney(ledger.inward_value)} color="positive" Icon={PackagePlus} />
+          <StatCard label={isServiceLedger ? 'Service Delivered' : 'Total Outward'} value={quantityLabel(ledger.outward_qty, item)} sub={fmtMoney(ledger.outward_value)} color="negative" Icon={PackageMinus} />
+          <StatCard label={isServiceLedger ? 'Net Activity' : 'Closing Stock'} value={quantityLabel(ledger.closing_qty, item)} sub={`${fmtMoney(ledger.closing_value)} @ ${fmtMoney(ledger.closing_rate)}`} Icon={Boxes} />
         </div>
         <Card className="report-table-card overflow-hidden">
           <div className="overflow-x-auto"><table className="w-full min-w-[1450px] border-collapse text-sm">

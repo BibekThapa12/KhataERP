@@ -33,6 +33,7 @@ export const SYSTEM_ACCOUNT_GROUPS: SystemAccountGroupSpec[] = [
   { key: 'deposits-asset', name: 'Deposits (Asset)', account_type: 'Asset', parent_key: 'current-assets' },
   { key: 'loans-advances-asset', name: 'Loans & Advances (Asset)', account_type: 'Asset', parent_key: 'current-assets' },
   { key: 'sundry-debtors', name: 'Sundry Debtors', account_type: 'Asset', parent_key: 'current-assets' },
+  { key: 'employees-staffs', name: 'Employees / Staffs', account_type: 'Asset', parent_key: 'loans-advances-asset' },
   { key: 'duties-taxes', name: 'Duties & Taxes', account_type: 'Liability', parent_key: 'current-liabilities' },
   { key: 'provisions', name: 'Provisions', account_type: 'Liability', parent_key: 'current-liabilities' },
   { key: 'sundry-creditors', name: 'Sundry Creditors', account_type: 'Liability', parent_key: 'current-liabilities' },

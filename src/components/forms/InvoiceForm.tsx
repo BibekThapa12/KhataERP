@@ -172,7 +172,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
-      for (const line of validLines) requestedByItem.set(line.item_id, (requestedByItem.get(line.item_id) || 0) + toBaseQty(line.qty, line.conversion_factor || 1))
+      for (const line of validLines) {
+        if (items.find(item => item.id === line.item_id)?.is_service) continue
+        requestedByItem.set(line.item_id, (requestedByItem.get(line.item_id) || 0) + toBaseQty(line.qty, line.conversion_factor || 1))
+      }
       for (const [itemId, requestedBaseQty] of requestedByItem) {
         const s = getStockEntry(itemId)
         const currentVoucherQty = voucher?.stock_lines
@@ -316,20 +319,22 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               <div className="space-y-2">
                 {lines.map((line, idx) => {
                   const amt = round2Local(line.qty * line.rate)
+                  const selectedItem = items.find(item => item.id === line.item_id)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
+                  const isServiceLine = !!selectedItem?.is_service
                   return (
                     <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
                       <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
-                        <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''}` }))} />
+                        <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: i.is_service ? `${i.name} (Service)` : `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''} ${i.is_service ? 'service' : ''}` }))} />
                         <Button type="button" variant="outline" size="icon" tabIndex={-1} className="h-8 w-8 flex-shrink-0 bg-white hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
                           <Plus className="h-3.5 w-3.5" />
                         </Button>
                       </div>
-                      <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={stock && items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : undefined}>{stock && items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : '—'}</div></div>
+                      <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${!isServiceLine && stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={!isServiceLine && stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : undefined}>{isServiceLine ? 'Service' : stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : '—'}</div></div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Qty</Label>
                         <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" className="invoice-entry-value h-8 px-2" />
-                        {isSales && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
-                          <p className="text-xs text-destructive mt-0.5">Only {items.find(item => item.id === line.item_id) ? formatStockQuantity(stock.qty, items.find(item => item.id === line.item_id)!) : stock.qty} in stock</p>
+                        {isSales && !isServiceLine && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
+                          <p className="text-xs text-destructive mt-0.5">Only {selectedItem ? formatStockQuantity(stock.qty, selectedItem) : stock.qty} in stock</p>
                         )}
                       </div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Unit</Label>{(() => {
@@ -337,7 +342,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                         const snapshotMatchesCurrent = line.unit_mode === 'main'
                           ? !line.entry_unit || line.entry_unit === item?.unit
                           : line.entry_unit === item?.alternate_unit
-                        return item?.alternate_unit && snapshotMatchesCurrent
+                        return item?.alternate_unit && !item.is_service && snapshotMatchesCurrent
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>

@@ -60,6 +60,7 @@ export interface Item {
   sku?: string
   barcode?: string
   vat_applicable?: boolean
+  is_service?: boolean
   is_archived?: boolean
   created_at?: string
   // computed

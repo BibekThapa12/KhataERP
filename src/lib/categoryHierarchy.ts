@@ -9,7 +9,7 @@ export interface CategorizedRecord { category_id?: string }
 
 export interface CategoryTreeNode<C extends CategoryLike, R extends CategorizedRecord> {
   category: C
-  depth: 1 | 2 | 3
+  depth: 1 | 2 | 3 | 4
   path: string
   directRecords: R[]
   children: CategoryTreeNode<C, R>[]
@@ -88,7 +88,7 @@ export function buildCategoryTree<C extends CategoryLike, R extends CategorizedR
     const path = parentPath ? `${parentPath} › ${category.name}` : category.name
     const directRecords = records.filter(record => record.category_id === category.id)
     const children = categories.filter(child => child.parent_category_id === category.id).sort((a, b) => a.name.localeCompare(b.name)).map(child => build(child, depth + 1, path))
-    return { category, depth: Math.min(depth, 3) as 1 | 2 | 3, path, directRecords, children, directCount: directRecords.length, totalCount: directRecords.length + children.reduce((sum, child) => sum + child.totalCount, 0) }
+    return { category, depth: Math.min(depth, 4) as 1 | 2 | 3 | 4, path, directRecords, children, directCount: directRecords.length, totalCount: directRecords.length + children.reduce((sum, child) => sum + child.totalCount, 0) }
   }
   return categories.filter(category => !category.parent_category_id || !categories.some(parent => parent.id === category.parent_category_id)).sort((a, b) => a.name.localeCompare(b.name)).map(category => build(category, 1, ''))
 }
