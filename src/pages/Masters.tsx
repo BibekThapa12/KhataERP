@@ -29,6 +29,33 @@ import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterC
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
 
+function ledgerDialogError(error: unknown) {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message || '')
+        : ''
+  if (/ledger\b.*already exists?/i.test(message) || /duplicate ledger/i.test(message)) return 'Ledger already exist'
+  return publicErrorMessage(error, 'saving ledger')
+}
+
+function masterDialogError(error: unknown, operation: string) {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message || '')
+        : ''
+  if (/stock item\b.*already exists?/i.test(message) || /duplicate item/i.test(message)) return 'Stock item already exist'
+  if (/stock item category\b.*already exists?|item category\b.*already exists?/i.test(message) || /duplicate item category/i.test(message)) return 'Stock item category already exist'
+  if (/account category\b.*already exists?|account group\b.*already exists?/i.test(message) || /duplicate account category|account_categories_company_id_name_account_type_key/i.test(message)) return 'Account category already exist'
+  if (/unit\b.*already exists?|main and alternative units must be different/i.test(message)) return 'Unit already exist'
+  return publicErrorMessage(error, operation)
+}
+
 export function CategoryDialog({ kind, category, parentCategory, open, onClose, onCreated }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void; onCreated?: (category: ItemCategory) => void }) {
   const { accountCategories, itemCategories, addAccountCategory, alterAccountCategory, addItemCategory, alterItemCategory } = useAppStore()
   const [name, setName] = useState('')
@@ -59,7 +86,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
         onCreated?.(created)
       }
       onClose()
-    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving category')) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(masterDialogError(e, 'saving category')) } finally { setSaving(false) }
   }
 
   const allCategories = kind === 'account' ? accountCategories : itemCategories
@@ -165,7 +192,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
         onCreated?.(createdAccount, createdParty)
       }
       onClose()
-    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving ledger')) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(ledgerDialogError(e)) } finally { setSaving(false) }
   }
 
   return (
@@ -242,7 +269,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       const openingFactor = openingUnitMode === 'alternate' && altUnit ? altFactor : 1
       await alterItem(item.id, { name: form.name.trim(), category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
       onClose()
-    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving item')) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(masterDialogError(e, 'saving item')) } finally { setSaving(false) }
   }
 
   return (

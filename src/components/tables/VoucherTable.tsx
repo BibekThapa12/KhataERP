@@ -226,10 +226,11 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
 interface VoucherTableProps {
   vouchers: Voucher[]
   showActions?: boolean
+  alwaysShowFilters?: boolean
   onEdit?: (voucher: Voucher) => void
 }
 
-export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTableProps) {
+export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters = false, onEdit }: VoucherTableProps) {
   const cancelV = useAppStore(s => s.cancelV)
   const deleteDraftVoucher = useAppStore(s => s.deleteDraftVoucher)
   const company = useAppStore(s => s.company)
@@ -242,7 +243,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
   const [statusFilter, setStatusFilter] = useState<'all' | 'Draft' | 'Completed'>('all')
   const [query, setQuery] = useState('')
   const journalTable = vouchers.length > 0 && vouchers.every(voucher => voucher.type === 'Journal')
-  const showFilterBar = vouchers.length > 1
+  const showFilterBar = alwaysShowFilters || vouchers.length > 1
   const filteredVouchers = vouchers.filter(voucher => {
     const status = voucher.status === 'Draft' ? 'Draft' : 'Completed'
     if (statusFilter !== 'all' && status !== statusFilter) return false
@@ -422,7 +423,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
     win.print()
   }
 
-  if (vouchers.length === 0) {
+  if (!alwaysShowFilters && vouchers.length === 0) {
     return (
       <div className="text-center py-16 text-muted-foreground">
         <p className="text-3xl mb-3 opacity-30">◇</p>
@@ -553,7 +554,7 @@ export function VoucherTable({ vouchers, showActions = true, onEdit }: VoucherTa
             })}
           </tbody>
         </table>
-        {filteredVouchers.length === 0 && <div className="px-4 py-10 text-center text-sm text-muted-foreground">No vouchers match this filter.</div>}
+        {filteredVouchers.length === 0 && <div className="px-4 py-10 text-center text-sm text-muted-foreground">{vouchers.length === 0 ? 'No transactions yet. Transactions will appear here once added.' : 'No vouchers match this filter.'}</div>}
       </div>
 
       {/* Detail dialog */}

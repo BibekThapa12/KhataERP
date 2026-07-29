@@ -58,7 +58,7 @@ export function UnitCombobox({ value, onValueChange, optional = false, exclude =
       return
     }
     if (exclude.some(unit => unit.trim().toLowerCase() === next.toLowerCase())) {
-      setCustomError('Main and alternative units must be different.')
+      setCustomError('Unit already exist')
       return
     }
     onValueChange(next)

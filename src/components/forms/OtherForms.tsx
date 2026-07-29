@@ -27,6 +27,19 @@ import type { VoucherLine } from '@/types'
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 const CategoryDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.CategoryDialog })))
 
+function itemFormError(error: unknown) {
+  const message = error instanceof Error
+    ? error.message
+    : typeof error === 'string'
+      ? error
+      : error && typeof error === 'object' && 'message' in error
+        ? String((error as { message?: unknown }).message || '')
+        : ''
+  if (/stock item\b.*already exists?|duplicate item/i.test(message)) return 'Stock item already exist'
+  if (/unit\b.*already exists?|main and alternative units must be different/i.test(message)) return 'Unit already exist'
+  return publicErrorMessage(error, 'saving item')
+}
+
 // ─── Item Form ────────────────────────────────────────────────────────────────
 
 interface ItemFormProps {
@@ -79,7 +92,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
-      setError(publicErrorMessage(e, 'saving item'))
+      setError(itemFormError(e))
     } finally { submissionLock.release(); setSaving(false) }
   }
 

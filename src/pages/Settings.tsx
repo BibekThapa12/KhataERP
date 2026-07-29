@@ -1,8 +1,9 @@
-import { useEffect, useState } from 'react'
-import { Download, Trash2 } from 'lucide-react'
+import { useEffect, useMemo, useState } from 'react'
+import { Download, FileSpreadsheet, Trash2, Upload } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { deleteOwnAccount, logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
-import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, parseBsDate } from '@/lib/nepaliDate'
+import { downloadImportTemplate, executeImport, importModuleOptions, previewImportWorkbook, templateFor, type ImportModule, type ImportPreview } from '@/lib/importData'
+import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, makeBsKey, parseBsDate } from '@/lib/nepaliDate'
 import { todayISO } from '@/lib/utils'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
@@ -12,21 +13,225 @@ import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
-import type { InventoryValuationMethod } from '@/types'
+import type { Account, AccountCategory, InventoryValuationMethod, InvoiceItem, Item, ItemCategory, Party, Voucher } from '@/types'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 
+type PortableCompanyBackup = {
+  format?: 'khataerp-portable-company-v1'
+  exported_at?: string
+  company?: Partial<Record<keyof typeof portableCompanyFields[number], unknown>> & Record<string, unknown>
+  accountCategories?: AccountCategory[]
+  itemCategories?: ItemCategory[]
+  accounts?: Account[]
+  parties?: Party[]
+  items?: Item[]
+  vouchers?: Voucher[]
+  // legacy backup keys
+  account_categories?: AccountCategory[]
+  item_categories?: ItemCategory[]
+}
+
+type RestoreProgress = {
+  active: boolean
+  startedAt: number
+  completed: number
+  total: number
+  step: string
+  detail: string
+  counts: { label: string; value: number }[]
+}
+
+const portableCompanyFields = [
+  'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
+  'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
+  'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
+  'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
+  'fiscal_year_configured',
+] as const
+
+function cleanCompanyBackup(company: unknown) {
+  if (!company || typeof company !== 'object') return null
+  const source = company as Record<string, unknown>
+  return Object.fromEntries(portableCompanyFields.filter(field => field in source).map(field => [field, source[field]]))
+}
+
+function withoutMeta<T extends Record<string, unknown>>(row: T, omit: string[] = []) {
+  const blocked = new Set(['created_at', 'updated_at', 'company', 'account', 'party', 'stock_qty', 'avg_cost', 'stock_value', ...omit])
+  return Object.fromEntries(Object.entries(row).filter(([key]) => !blocked.has(key)))
+}
+
+function mapDeepIds(value: unknown, idMap: Map<string, string>): unknown {
+  if (typeof value === 'string') return idMap.get(value) || value
+  if (Array.isArray(value)) return value.map(entry => mapDeepIds(entry, idMap))
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value as Record<string, unknown>).map(([key, entry]) => [key, mapDeepIds(entry, idMap)]))
+  return value
+}
+
+function samePortableName(a: unknown, b: unknown) {
+  return String(a || '').trim().toLowerCase() === String(b || '').trim().toLowerCase()
+}
+
+function portableNameKey(value: unknown) {
+  return String(value || '').trim().toLowerCase()
+}
+
+function portableScopedKey(...parts: unknown[]) {
+  return parts.map(portableNameKey).join('::')
+}
+
+function portableNumber(value: unknown, fallback: number) {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function portablePositiveNumber(value: unknown, fallback: number) {
+  const parsed = portableNumber(value, fallback)
+  return parsed > 0 ? parsed : fallback
+}
+
+function portableRound(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100
+}
+
+function allocatePortableAmount(total: number, weight: number, used: number, isLast: boolean) {
+  return isLast ? portableRound(total - used) : portableRound(total * weight)
+}
+
+function portableInvoiceItemsForRestore(voucher: Voucher, originalVoucher?: Voucher): InvoiceItem[] {
+  if (voucher.invoice_items?.length) return voucher.invoice_items
+  if (!['Sales', 'Purchase', 'Sales Return', 'Purchase Return'].includes(voucher.type) || !voucher.stock_lines?.length) return []
+
+  const stockLines = voucher.stock_lines.filter(line => line.item_id)
+  const originalItems = originalVoucher ? portableInvoiceItemsForRestore(originalVoucher) : []
+  const quantityTotal = stockLines.reduce((sum, line) => sum + Math.abs(portableNumber(line.qty, 0)), 0)
+  const sourceGrossTotal = stockLines.reduce((sum, line) => {
+    const qty = Math.abs(portableNumber(line.qty, 0))
+    const source = originalItems.find(item => item.item_id === line.item_id)
+    return sum + qty * portableNumber(source?.rate, portableNumber(line.rate, 0))
+  }, 0)
+  const grossTotal = portableRound(sourceGrossTotal || portableNumber(voucher.subtotal, portableNumber(voucher.total, 0) - portableNumber(voucher.vat_amount, 0) + portableNumber(voucher.discount, 0)))
+  const discountTotal = portableRound(portableNumber(voucher.discount, 0))
+  const vatTotal = portableRound(portableNumber(voucher.vat_amount, 0))
+  let usedGross = 0
+  let usedDiscount = 0
+  let usedVat = 0
+
+  return stockLines.map((line, index) => {
+    const qty = Math.abs(portableNumber(line.qty, 0))
+    const source = originalItems.find(item => item.item_id === line.item_id)
+    const isLast = index === stockLines.length - 1
+    const weight = quantityTotal > 0 ? qty / quantityTotal : 1 / stockLines.length
+    const gross = source ? portableRound(qty * portableNumber(source.rate, portableNumber(line.rate, 0))) : allocatePortableAmount(grossTotal, weight, usedGross, isLast)
+    usedGross = portableRound(usedGross + gross)
+    const discount = allocatePortableAmount(discountTotal, weight, usedDiscount, isLast)
+    usedDiscount = portableRound(usedDiscount + discount)
+    const taxable = portableRound(gross - discount)
+    const vat = allocatePortableAmount(vatTotal, weight, usedVat, isLast)
+    usedVat = portableRound(usedVat + vat)
+    return {
+      item_id: line.item_id,
+      qty,
+      rate: source ? portableNumber(source.rate, qty ? gross / qty : gross) : (qty ? gross / qty : gross),
+      source_invoice_item_id: source?.id,
+      entry_unit: line.item?.unit,
+      unit: line.item?.unit,
+      conversion_factor: 1,
+      base_qty: qty,
+      discount_amount: discount,
+      taxable_amount: taxable,
+      vat_amount: vat,
+      cost_rate: portableNumber(line.rate, 0),
+    }
+  })
+}
+
+function portableVoucherSortValue(voucher: Voucher) {
+  return [
+    String(voucher.date_bs_key || 0).padStart(8, '0'),
+    String(voucher.seq || 0).padStart(12, '0'),
+    voucher.invoice_no || voucher.draft_no || voucher.id,
+  ].join(':')
+}
+
+function lockedFiscalStartFromVouchers(companyFiscalStartBs: string, vouchers: Voucher[]) {
+  if (!vouchers.length) return companyFiscalStartBs
+  const monthDay = companyFiscalStartBs.slice(5)
+  const earliestVoucher = [...vouchers]
+    .filter(voucher => voucher.date_bs)
+    .sort((left, right) => (left.date_bs_key || makeBsKey(left.date_bs)) - (right.date_bs_key || makeBsKey(right.date_bs)))[0]
+  if (!earliestVoucher?.date_bs) return companyFiscalStartBs
+  const voucherYear = Number(earliestVoucher.date_bs.slice(0, 4))
+  const startYear = earliestVoucher.date_bs.slice(5) >= monthDay ? voucherYear : voucherYear - 1
+  return `${startYear}-${monthDay}`
+}
+
+function formatDuration(ms: number) {
+  if (!Number.isFinite(ms) || ms <= 0) return 'calculating...'
+  const seconds = Math.ceil(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  return `${minutes}m ${remainingSeconds}s`
+}
+
+function restorePercent(progress: RestoreProgress) {
+  if (progress.total <= 0) return 0
+  return Math.min(100, Math.round((progress.completed / progress.total) * 100))
+}
+
+function RestoreProgressBox({ progress }: { progress: RestoreProgress }) {
+  const percent = restorePercent(progress)
+  const elapsed = Date.now() - progress.startedAt
+  const remaining = progress.completed > 0 ? (elapsed / progress.completed) * Math.max(0, progress.total - progress.completed) : 0
+  return (
+    <div className="rounded-md border border-primary/20 bg-primary/5 p-3">
+      <div className="flex gap-3">
+        <div className="h-44 w-3 overflow-hidden rounded-full bg-background">
+          <div className="w-full rounded-full bg-primary transition-all" style={{ height: `${percent}%`, marginTop: `${100 - percent}%` }} />
+        </div>
+        <div className="min-w-0 flex-1 space-y-3">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <p className="text-sm font-semibold">Restoring portable backup</p>
+              <p className="text-xs text-muted-foreground">{progress.step}</p>
+            </div>
+            <span className="num font-serif text-2xl font-bold text-primary">{percent}%</span>
+          </div>
+          <div className="h-2 overflow-hidden rounded-full bg-background">
+            <div className="h-full rounded-full bg-primary transition-all" style={{ width: `${percent}%` }} />
+          </div>
+          <div className="grid gap-2 text-xs sm:grid-cols-3">
+            <div><span className="block text-muted-foreground">Progress</span><span className="font-semibold">{progress.completed} / {progress.total}</span></div>
+            <div><span className="block text-muted-foreground">Elapsed</span><span className="font-semibold">{formatDuration(elapsed)}</span></div>
+            <div><span className="block text-muted-foreground">Time left</span><span className="font-semibold">{progress.completed > 0 ? formatDuration(remaining) : 'calculating...'}</span></div>
+          </div>
+          {progress.detail && <p className="text-xs text-muted-foreground">{progress.detail}</p>}
+          <div className="grid gap-1 text-[11px] text-muted-foreground sm:grid-cols-2">
+            {progress.counts.map(row => <div key={row.label} className="flex justify-between gap-2"><span>{row.label}</span><span className="num font-semibold text-foreground">{row.value}</span></div>)}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 export function SettingsPage() {
-  const { company, saveCompany, accounts, vouchers, parties, items, loadAll, userId, error: loadError, addCompanyAdmin } = useAppStore()
+  const {
+    company, saveCompany, accounts, rawAccounts, accountCategories, vouchers, parties, items, itemCategories, loadAll, userId, error: loadError,
+    addCompanyAdmin, addAccountCategory, addAccount, addParty, addItemCategory, addItem, saveDraftVoucher,
+  } = useAppStore()
+  const storedFiscalYearStartBs = company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS
+  const effectiveFiscalYearStartBs = vouchers.length ? lockedFiscalStartFromVouchers(storedFiscalYearStartBs, vouchers) : storedFiscalYearStartBs
   const [name, setName] = useState(company?.name ?? '')
   const [address, setAddress] = useState(company?.address ?? '')
   const [panVat, setPanVat] = useState(company?.pan_vat ?? '')
   const [phone, setPhone] = useState(company?.phone ?? '')
   const [vatEnabled, setVatEnabled] = useState(company?.vat_enabled ?? true)
   const [valuationMethod, setValuationMethod] = useState<InventoryValuationMethod>(company?.inventory_valuation_method || 'weighted_average')
-  const [fiscalYearStartBs, setFiscalYearStartBs] = useState(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
-  const [financialYear, setFinancialYear] = useState((company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS).slice(0, 4))
+  const [fiscalYearStartBs, setFiscalYearStartBs] = useState(effectiveFiscalYearStartBs)
+  const [financialYear, setFinancialYear] = useState(effectiveFiscalYearStartBs.slice(0, 4))
   const [salesPrefix, setSalesPrefix] = useState(company?.sales_prefix ?? 'INV-')
   const [purchasePrefix, setPurchasePrefix] = useState(company?.purchase_prefix ?? 'PB-')
   const [receiptPrefix, setReceiptPrefix] = useState(company?.receipt_prefix ?? 'RCPT-')
@@ -42,12 +247,19 @@ export function SettingsPage() {
   const [saved, setSaved] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [restoreMessage, setRestoreMessage] = useState('')
+  const [restoreProgress, setRestoreProgress] = useState<RestoreProgress | null>(null)
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deletingAccount, setDeletingAccount] = useState(false)
   const [deleteError, setDeleteError] = useState('')
   const [memberEmail, setMemberEmail] = useState('')
   const [memberSaving, setMemberSaving] = useState(false)
   const [memberError, setMemberError] = useState('')
+  const [importModule, setImportModule] = useState<ImportModule>('account-groups')
+  const [importPreview, setImportPreview] = useState<ImportPreview | null>(null)
+  const [importFileName, setImportFileName] = useState('')
+  const [importing, setImporting] = useState(false)
+  const [importMessage, setImportMessage] = useState('')
+  const [importError, setImportError] = useState('')
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
   const fiscalYearLocked = vouchers.length > 0
   const currentFiscalYear = Number(currentFiscalYearStartBs(company).slice(0, 4))
@@ -56,6 +268,21 @@ export function SettingsPage() {
     value: String(year),
     label: `${String(year).slice(-2)}/${String(year + 1).slice(-2)}`,
   }))
+  const selectedImportTemplate = templateFor(importModule)
+  const importContext = useMemo(() => ({
+    company: company!,
+    accounts: rawAccounts.length ? rawAccounts : accounts,
+    accountCategories,
+    parties,
+    items,
+    itemCategories,
+    addAccountCategory,
+    addAccount,
+    addParty,
+    addItemCategory,
+    addItem,
+    saveDraftVoucher,
+  }), [company, rawAccounts, accounts, accountCategories, parties, items, itemCategories, addAccountCategory, addAccount, addParty, addItemCategory, addItem, saveDraftVoucher])
 
   useEffect(() => {
     setName(company?.name ?? '')
@@ -64,8 +291,8 @@ export function SettingsPage() {
     setPhone(company?.phone ?? '')
     setVatEnabled(company?.vat_enabled ?? true)
     setValuationMethod(company?.inventory_valuation_method || 'weighted_average')
-    setFiscalYearStartBs(company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS)
-    setFinancialYear((company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS).slice(0, 4))
+    setFiscalYearStartBs(effectiveFiscalYearStartBs)
+    setFinancialYear(effectiveFiscalYearStartBs.slice(0, 4))
     setSalesPrefix(company?.sales_prefix ?? 'INV-')
     setPurchasePrefix(company?.purchase_prefix ?? 'PB-')
     setReceiptPrefix(company?.receipt_prefix ?? 'RCPT-')
@@ -77,7 +304,7 @@ export function SettingsPage() {
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
     setLogoUrl(company?.logo_url ?? '')
-  }, [company])
+  }, [company, effectiveFiscalYearStartBs])
 
   const handleSave = async () => {
     setSaveError('')
@@ -129,15 +356,25 @@ export function SettingsPage() {
   }
 
   const handleExport = () => {
-    const data = { company, accounts, vouchers, parties, items, exported_at: new Date().toISOString() }
+    const data = {
+      format: 'khataerp-portable-company-v1',
+      exported_at: new Date().toISOString(),
+      company: cleanCompanyBackup(company),
+      accountCategories,
+      itemCategories,
+      accounts: rawAccounts.length ? rawAccounts : accounts,
+      parties,
+      items,
+      vouchers,
+    }
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = `khata-backup-${todayISO()}.json`
+    a.download = `khata-portable-company-backup-${todayISO()}.json`
     a.click()
     URL.revokeObjectURL(url)
-    logAppEvent('export_backup', company?.id, { vouchers: vouchers.length, parties: parties.length, items: items.length })
+    logAppEvent('export_portable_company_backup', company?.id, { vouchers: vouchers.length, parties: parties.length, items: items.length })
   }
 
   const handleClosingSnapshot = () => {
@@ -166,93 +403,322 @@ export function SettingsPage() {
 
   const handleRestore = async (file: File | undefined) => {
     if (!file || !userId || !company) return
-    if (import.meta.env.PROD) {
-      setRestoreMessage('Browser-based restore is disabled in production because a complete accounting backup must be restored atomically by an administrator.')
-      return
-    }
     const fileError = backupFileValidationError(file)
     if (fileError) {
+      setRestoreProgress(null)
       setRestoreMessage(fileError)
       return
     }
-    setRestoreMessage('Reading backup...')
+    const restoreStartedAt = Date.now()
+    let completedStages = 0
+    let totalStages = 1
+    let restoreCounts: RestoreProgress['counts'] = []
+    const showRestoreProgress = (step: string, detail = '', completed = completedStages) => {
+      setRestoreProgress({
+        active: true,
+        startedAt: restoreStartedAt,
+        completed,
+        total: totalStages,
+        step,
+        detail,
+        counts: restoreCounts,
+      })
+    }
+    const finishRestoreStage = (step: string, detail = '') => {
+      completedStages = Math.min(totalStages, completedStages + 1)
+      showRestoreProgress(step, detail, completedStages)
+    }
+    setRestoreMessage('')
+    showRestoreProgress('Reading backup file', 'Checking the JSON backup before importing.')
     try {
       const text = await file.text()
-      const backup = JSON.parse(text)
+      const backup = JSON.parse(text) as PortableCompanyBackup
       if (!backup || typeof backup !== 'object') throw new Error('Invalid backup file.')
 
-      setRestoreMessage('Restoring company data...')
-      if (backup.company) {
-        const { id, user_id, created_at, ...companyUpdates } = backup.company
-        void id; void user_id; void created_at
-        await saveCompany({ ...companyUpdates, inventory_valuation_method: companyUpdates.inventory_valuation_method || 'weighted_average' })
+      const targetHasData = vouchers.length > 0
+      if (targetHasData) throw new Error('Portable company restore cannot be imported into a company that already has vouchers. Create a new company first, then restore this backup there.')
+      if (!window.confirm('Restore this portable backup into the active company? Existing company settings may be updated. Continue?')) {
+        setRestoreProgress(null)
+        return
       }
 
-      const normalizedAccounts = Array.isArray(backup.accounts)
-        ? backup.accounts.map((a: Record<string, unknown>) => {
-            const { balance, created_at, ...rest } = a
-            void balance; void created_at
-            return { ...rest, company_id: company.id }
-          })
-        : []
-      if (normalizedAccounts.length) {
-        const { error } = await supabase.from('accounts').upsert(normalizedAccounts)
+      const sourceAccountCategories = Array.isArray(backup.accountCategories) ? backup.accountCategories : Array.isArray(backup.account_categories) ? backup.account_categories : []
+      const sourceItemCategories = Array.isArray(backup.itemCategories) ? backup.itemCategories : Array.isArray(backup.item_categories) ? backup.item_categories : []
+      const sourceAccounts = Array.isArray(backup.accounts) ? backup.accounts : []
+      const sourceParties = Array.isArray(backup.parties) ? backup.parties : []
+      const sourceItems = Array.isArray(backup.items) ? backup.items : []
+      const sourceVouchers = Array.isArray(backup.vouchers) ? backup.vouchers : []
+      const orderedSourceVouchers = [...sourceVouchers].sort((a, b) => portableVoucherSortValue(a).localeCompare(portableVoucherSortValue(b)))
+      const sourceVoucherById = new Map(sourceVouchers.map(voucher => [voucher.id, voucher]))
+      const sourceVoucherLineCount = orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.lines?.length || 0), 0)
+      const sourceStockLineCount = orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.stock_lines?.length || 0), 0)
+      const sourceInvoiceItemCount = orderedSourceVouchers.reduce((sum, voucher) => sum + portableInvoiceItemsForRestore(voucher, voucher.original_voucher_id ? sourceVoucherById.get(voucher.original_voucher_id) : undefined).length, 0)
+      restoreCounts = [
+        { label: 'Account groups', value: sourceAccountCategories.length },
+        { label: 'Item groups', value: sourceItemCategories.length },
+        { label: 'Ledgers', value: sourceAccounts.length },
+        { label: 'Parties', value: sourceParties.length },
+        { label: 'Items', value: sourceItems.length },
+        { label: 'Vouchers', value: sourceVouchers.length },
+        { label: 'Voucher lines', value: sourceVoucherLineCount },
+        { label: 'Stock lines', value: sourceStockLineCount },
+        { label: 'Invoice items', value: sourceInvoiceItemCount },
+      ]
+      totalStages = 15
+      finishRestoreStage('Backup read', 'Preparing fresh IDs for the active company.')
+      showRestoreProgress('Updating company settings', 'Applying fiscal-year and company settings before importing vouchers.')
+      const companyUpdates = cleanCompanyBackup(backup.company)
+      if (companyUpdates) await saveCompany({ ...companyUpdates, inventory_valuation_method: companyUpdates.inventory_valuation_method || 'weighted_average' })
+      finishRestoreStage('Company settings updated', companyUpdates ? 'Company settings were updated from the backup.' : 'No company settings were changed.')
+      const targetAccounts = rawAccounts.length ? rawAccounts : accounts
+      const idMap = new Map<string, string>()
+      const accountCategoryIdByKey = new Map(accountCategories.map(category => [portableScopedKey(category.account_type, category.name), category.id]))
+      const itemCategoryIdByKey = new Map(itemCategories.map(category => [portableNameKey(category.name), category.id]))
+      const accountIdByKey = new Map(targetAccounts.map(account => [portableScopedKey(account.type, account.name), account.id]))
+      const itemIdByKey = new Map(items.map(item => [portableNameKey(item.name), item.id]))
+      const partyIdByKey = new Map(parties.map(party => [portableScopedKey(party.type, party.name), party.id]))
+
+      showRestoreProgress('Mapping existing system records', 'Reusing matching default ledgers and groups where possible.')
+      for (const category of sourceAccountCategories) {
+        const targetId = accountCategoryIdByKey.get(portableScopedKey(category.account_type, category.name))
+        if (targetId) idMap.set(category.id, targetId)
+      }
+      for (const category of sourceItemCategories.filter(category => !category.is_archived)) {
+        const targetId = itemCategoryIdByKey.get(portableNameKey(category.name))
+        if (targetId) idMap.set(category.id, targetId)
+      }
+      for (const account of sourceAccounts) {
+        const targetId = accountIdByKey.get(portableScopedKey(account.type, account.name))
+        if (targetId) idMap.set(account.id, targetId)
+      }
+      for (const item of sourceItems) {
+        const targetId = itemIdByKey.get(portableNameKey(item.name))
+        if (targetId) idMap.set(item.id, targetId)
+      }
+      for (const party of sourceParties) {
+        const targetId = partyIdByKey.get(portableScopedKey(party.type, party.name))
+        if (targetId) idMap.set(party.id, targetId)
+      }
+      finishRestoreStage('Existing records mapped', `${idMap.size} reference(s) are ready for import.`)
+
+      showRestoreProgress('Importing account groups', 'Creating missing account group hierarchy.')
+      const accountCategoryRows: Record<string, unknown>[] = []
+      const pendingAccountCategories = sourceAccountCategories.filter(category => !category.is_system && !idMap.has(category.id))
+      while (pendingAccountCategories.length) {
+        const readyIndex = pendingAccountCategories.findIndex(category => !category.parent_category_id || idMap.has(category.parent_category_id))
+        if (readyIndex < 0) throw new Error('Could not resolve account group hierarchy in the backup.')
+        const category = pendingAccountCategories.splice(readyIndex, 1)[0]
+        const categoryKey = portableScopedKey(category.account_type, category.name)
+        const existingCategoryId = accountCategoryIdByKey.get(categoryKey)
+        if (existingCategoryId) {
+          idMap.set(category.id, existingCategoryId)
+          continue
+        }
+        const nextId = crypto.randomUUID()
+        idMap.set(category.id, nextId)
+        accountCategoryIdByKey.set(categoryKey, nextId)
+        accountCategoryRows.push({ ...withoutMeta(category as unknown as Record<string, unknown>), id: nextId, company_id: company.id, parent_category_id: category.parent_category_id ? idMap.get(category.parent_category_id) || null : null })
+      }
+      if (accountCategoryRows.length) {
+        const { error } = await supabase.from('account_categories').insert(accountCategoryRows)
         if (error) throw error
       }
+      finishRestoreStage('Account groups imported', `${accountCategoryRows.length} new account group(s) created.`)
 
-      const normalizedItems = Array.isArray(backup.items)
-        ? backup.items.map((i: Record<string, unknown>) => {
-            const { stock_qty, avg_cost, stock_value, created_at, ...rest } = i
-            void stock_qty; void avg_cost; void stock_value; void created_at
-            return { ...rest, company_id: company.id }
-          })
-        : []
-      if (normalizedItems.length) {
-        const { error } = await supabase.from('items').upsert(normalizedItems)
+      showRestoreProgress('Importing item groups', 'Creating missing item category hierarchy.')
+      const itemCategoryRows: Record<string, unknown>[] = []
+      const pendingItemCategories = sourceItemCategories.filter(category => !idMap.has(category.id))
+      while (pendingItemCategories.length) {
+        const readyIndex = pendingItemCategories.findIndex(category => !category.parent_category_id || idMap.has(category.parent_category_id))
+        if (readyIndex < 0) throw new Error('Could not resolve item category hierarchy in the backup.')
+        const category = pendingItemCategories.splice(readyIndex, 1)[0]
+        const categoryKey = portableNameKey(category.name)
+        const existingCategoryId = itemCategoryIdByKey.get(categoryKey)
+        if (existingCategoryId) {
+          idMap.set(category.id, existingCategoryId)
+          continue
+        }
+        const nextId = crypto.randomUUID()
+        idMap.set(category.id, nextId)
+        itemCategoryIdByKey.set(categoryKey, nextId)
+        itemCategoryRows.push({ ...withoutMeta(category as unknown as Record<string, unknown>), id: nextId, company_id: company.id, parent_category_id: category.parent_category_id ? idMap.get(category.parent_category_id) || null : null })
+      }
+      if (itemCategoryRows.length) {
+        const { error } = await supabase.from('item_categories').insert(itemCategoryRows)
         if (error) throw error
       }
+      finishRestoreStage('Item groups imported', `${itemCategoryRows.length} new item group(s) created.`)
 
-      const normalizedParties = Array.isArray(backup.parties)
-        ? backup.parties.map((p: Record<string, unknown>) => {
-            const { account, created_at, ...rest } = p
-            void account; void created_at
-            return { ...rest, company_id: company.id }
-          })
-        : []
-      if (normalizedParties.length) {
-        const { error } = await supabase.from('parties').upsert(normalizedParties)
+      showRestoreProgress('Importing ledgers', 'Creating non-system accounts with remapped groups.')
+      const accountRows = sourceAccounts.filter(account => !account.is_system && !idMap.has(account.id)).flatMap(account => {
+        const accountKey = portableScopedKey(account.type, account.name)
+        const existingAccountId = accountIdByKey.get(accountKey)
+        if (existingAccountId) {
+          idMap.set(account.id, existingAccountId)
+          return []
+        }
+        const nextId = crypto.randomUUID()
+        idMap.set(account.id, nextId)
+        accountIdByKey.set(accountKey, nextId)
+        return [{ ...withoutMeta(account as unknown as Record<string, unknown>, ['balance']), id: nextId, company_id: company.id, category_id: account.category_id ? idMap.get(account.category_id) || null : null }]
+      })
+      if (accountRows.length) {
+        const { error } = await supabase.from('accounts').insert(accountRows)
         if (error) throw error
       }
+      finishRestoreStage('Ledgers imported', `${accountRows.length} new ledger(s) created.`)
 
-      if (Array.isArray(backup.vouchers)) {
-        for (const voucher of backup.vouchers as Record<string, unknown>[]) {
-          const { lines, stock_lines, invoice_items, party, created_at, ...voucherRow } = voucher
-          void party; void created_at
-          const { error: voucherError } = await supabase.from('vouchers').upsert({ ...voucherRow, company_id: company.id })
-          if (voucherError) throw voucherError
-          const voucherId = String(voucherRow.id)
-          await supabase.from('voucher_lines').delete().eq('voucher_id', voucherId)
-          await supabase.from('stock_lines').delete().eq('voucher_id', voucherId)
-          await supabase.from('invoice_items').delete().eq('voucher_id', voucherId)
-          if (Array.isArray(lines) && lines.length) {
-            const { error } = await supabase.from('voucher_lines').insert(lines.map((l: Record<string, unknown>) => ({ ...l, voucher_id: voucherId })))
-            if (error) throw error
-          }
-          if (Array.isArray(stock_lines) && stock_lines.length) {
-            const { error } = await supabase.from('stock_lines').insert(stock_lines.map((l: Record<string, unknown>) => ({ ...l, voucher_id: voucherId })))
-            if (error) throw error
-          }
-          if (Array.isArray(invoice_items) && invoice_items.length) {
-            const { error } = await supabase.from('invoice_items').insert(invoice_items.map((l: Record<string, unknown>) => ({ ...l, voucher_id: voucherId })))
-            if (error) throw error
-          }
+      showRestoreProgress('Importing items', 'Creating stock and service items with fresh IDs.')
+      const itemRows = sourceItems.filter(item => !idMap.has(item.id)).flatMap(item => {
+        const itemKey = portableNameKey(item.name)
+        const existingItemId = itemIdByKey.get(itemKey)
+        if (existingItemId) {
+          idMap.set(item.id, existingItemId)
+          return []
+        }
+        const nextId = crypto.randomUUID()
+        idMap.set(item.id, nextId)
+        itemIdByKey.set(itemKey, nextId)
+        return [{ ...withoutMeta(item as unknown as Record<string, unknown>), id: nextId, company_id: company.id, category_id: item.category_id ? idMap.get(item.category_id) || null : null }]
+      })
+      if (itemRows.length) {
+        const { error } = await supabase.from('items').insert(itemRows)
+        if (error) throw error
+      }
+      finishRestoreStage('Items imported', `${itemRows.length} new item(s) created.`)
+
+      showRestoreProgress('Importing parties', 'Creating customers and suppliers with remapped ledgers.')
+      const partyRows = sourceParties.filter(party => !idMap.has(party.id)).flatMap(party => {
+        const partyKey = portableScopedKey(party.type, party.name)
+        const existingPartyId = partyIdByKey.get(partyKey)
+        if (existingPartyId) {
+          idMap.set(party.id, existingPartyId)
+          return []
+        }
+        const nextId = crypto.randomUUID()
+        idMap.set(party.id, nextId)
+        partyIdByKey.set(partyKey, nextId)
+        return [{ ...withoutMeta(party as unknown as Record<string, unknown>, ['account']), id: nextId, company_id: company.id, account_id: idMap.get(party.account_id) || party.account_id }]
+      })
+      if (partyRows.length) {
+        const { error } = await supabase.from('parties').insert(partyRows)
+        if (error) throw error
+      }
+      finishRestoreStage('Parties imported', `${partyRows.length} new party record(s) created.`)
+
+      showRestoreProgress('Importing voucher headers', 'Saving vouchers safely before attaching lines.')
+      const voucherRows = orderedSourceVouchers.map(voucher => {
+        const nextId = crypto.randomUUID()
+        idMap.set(voucher.id, nextId)
+        return {
+          ...withoutMeta(voucher as unknown as Record<string, unknown>, ['lines', 'stock_lines', 'invoice_items', 'settlements', 'party']),
+          id: nextId,
+          company_id: company.id,
+          original_voucher_id: null,
+          settlement_account_id: voucher.settlement_account_id ? idMap.get(voucher.settlement_account_id) || null : null,
+          party_account_id: voucher.party_account_id ? idMap.get(voucher.party_account_id) || null : null,
+          created_by: null,
+          updated_by: null,
+          completed_by: null,
+          completed_at: null,
+          status: 'Draft',
+          draft_payload: mapDeepIds(voucher.draft_payload || null, idMap),
+        }
+      })
+      if (voucherRows.length) {
+        const { error } = await supabase.from('vouchers').insert(voucherRows)
+        if (error) throw error
+      }
+      finishRestoreStage('Voucher headers imported', `${voucherRows.length} voucher header(s) created.`)
+
+      showRestoreProgress('Linking related vouchers', 'Restoring return and source voucher references.')
+      const voucherUpdates = orderedSourceVouchers
+        .filter(voucher => voucher.original_voucher_id && idMap.has(voucher.original_voucher_id))
+        .map(voucher => supabase.from('vouchers').update({ original_voucher_id: idMap.get(voucher.original_voucher_id!) }).eq('id', idMap.get(voucher.id)!))
+      for (const update of voucherUpdates) {
+        const { error } = await update
+        if (error) throw error
+      }
+      finishRestoreStage('Voucher links restored', `${voucherUpdates.length} voucher link(s) updated.`)
+
+      showRestoreProgress('Importing ledger lines', 'Attaching debit and credit rows to vouchers.')
+      const voucherLineRows = orderedSourceVouchers.flatMap(voucher => (voucher.lines || []).map(line => ({ ...withoutMeta(line as unknown as Record<string, unknown>), id: crypto.randomUUID(), voucher_id: idMap.get(voucher.id), account_id: idMap.get(line.account_id) || line.account_id })))
+      if (voucherLineRows.length) {
+        const { error } = await supabase.from('voucher_lines').insert(voucherLineRows)
+        if (error) throw error
+      }
+      finishRestoreStage('Ledger lines imported', `${voucherLineRows.length} voucher line(s) created.`)
+
+      showRestoreProgress('Importing stock lines', 'Restoring inventory movement rows for stock items.')
+      const stockLineRows = orderedSourceVouchers.flatMap(voucher => (voucher.stock_lines || []).map(line => ({ ...withoutMeta(line as unknown as Record<string, unknown>), id: crypto.randomUUID(), voucher_id: idMap.get(voucher.id), item_id: idMap.get(line.item_id) || line.item_id })))
+      if (stockLineRows.length) {
+        const { error } = await supabase.from('stock_lines').insert(stockLineRows)
+        if (error) throw error
+      }
+      finishRestoreStage('Stock lines imported', `${stockLineRows.length} stock line(s) created.`)
+
+      showRestoreProgress('Importing invoice items', 'Restoring invoice item details and source links.')
+      const invoiceItemIdMap = new Map<string, string>()
+      const invoiceItemPlans = orderedSourceVouchers.flatMap(voucher => portableInvoiceItemsForRestore(voucher, voucher.original_voucher_id ? sourceVoucherById.get(voucher.original_voucher_id) : undefined).map((item, lineIndex) => {
+        const nextId = crypto.randomUUID()
+        if (item.id) invoiceItemIdMap.set(item.id, nextId)
+        const conversionFactor = portablePositiveNumber(item.conversion_factor, 1)
+        const qty = portableNumber(item.qty, 0)
+        const baseQty = qty / conversionFactor
+        const row = {
+          ...withoutMeta(item as unknown as Record<string, unknown>),
+          id: nextId,
+          voucher_id: idMap.get(voucher.id),
+          item_id: idMap.get(item.item_id) || item.item_id,
+          qty,
+          conversion_factor: conversionFactor,
+          base_qty: baseQty,
+          source_invoice_item_id: null,
+        }
+        return { voucher, item, lineIndex, row }
+      }))
+      const invoiceItemRows = invoiceItemPlans.map(plan => plan.row)
+      if (invoiceItemRows.length) {
+        const { error } = await supabase.from('invoice_items').insert(invoiceItemRows)
+        if (error) throw error
+      }
+      for (const plan of invoiceItemPlans) {
+        if (!['Sales Return', 'Purchase Return'].includes(plan.voucher.type) || !plan.voucher.original_voucher_id) continue
+        const originalVoucher = sourceVoucherById.get(plan.voucher.original_voucher_id)
+        const sourcePlan = invoiceItemPlans.find(source =>
+          source.voucher.id === originalVoucher?.id &&
+          source.row.item_id === plan.row.item_id &&
+          Math.abs(portableNumber(source.row.rate, 0) - portableNumber(plan.row.rate, 0)) <= 0.01
+        )
+        const sourceIdFromBackup = plan.item.source_invoice_item_id ? invoiceItemIdMap.get(plan.item.source_invoice_item_id) : null
+        const sourceInvoiceItemId = sourcePlan?.row.id || sourceIdFromBackup
+        if (sourceInvoiceItemId) {
+          const { error } = await supabase.from('invoice_items').update({ source_invoice_item_id: sourceInvoiceItemId }).eq('id', plan.row.id as string)
+          if (error) throw error
         }
       }
+      finishRestoreStage('Invoice items imported', `${invoiceItemRows.length} invoice item(s) created.`)
 
+      showRestoreProgress('Restoring voucher status', 'Completing imported vouchers in date and serial order.')
+      for (const voucher of orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')) {
+        const { error } = await supabase
+          .from('vouchers')
+          .update({ status: voucher.status || 'Completed', completed_at: voucher.completed_at || new Date().toISOString() })
+          .eq('id', idMap.get(voucher.id)!)
+        if (error) {
+          throw new Error(`Could not restore completed status for ${voucher.type} ${voucher.invoice_no || voucher.draft_no || voucher.id}: ${error.message}`)
+        }
+      }
+      finishRestoreStage('Voucher statuses restored', 'Completed vouchers were restored in serial order.')
+
+      showRestoreProgress('Reloading company data', 'Refreshing the active company after import.')
       await loadAll(userId)
-      logAppEvent('restore_backup', company.id, { vouchers: Array.isArray(backup.vouchers) ? backup.vouchers.length : 0 })
-      setRestoreMessage('Backup restored.')
+      finishRestoreStage('Restore complete', 'Imported data is now loaded in this company.')
+      logAppEvent('restore_portable_company_backup', company.id, { vouchers: sourceVouchers.length, parties: sourceParties.length, items: sourceItems.length })
+      setRestoreMessage('Portable company backup restored with fresh IDs for this company.')
+      window.setTimeout(() => setRestoreProgress(null), 3000)
     } catch (e: unknown) {
+      setRestoreProgress(current => current ? { ...current, active: false, step: 'Restore failed', detail: 'Fix the reported issue and try again.' } : null)
       setRestoreMessage(publicErrorMessage(e, 'restoring backup'))
     }
   }
@@ -289,10 +755,71 @@ export function SettingsPage() {
     }
   }
 
+  const handleDownloadImportTemplate = () => {
+    if (!company) return
+    downloadImportTemplate(importModule, importContext)
+    logAppEvent('download_import_template', company.id, { module: importModule })
+  }
+
+  const handleImportFile = async (file: File | undefined) => {
+    setImportPreview(null)
+    setImportMessage('')
+    setImportError('')
+    setImportFileName(file?.name || '')
+    if (!file || !company) return
+    try {
+      const preview = await previewImportWorkbook(file, importModule, importContext)
+      setImportPreview(preview)
+      logAppEvent('preview_import_data', company.id, { module: importModule, rows: preview.totalRows, errors: preview.errors.length, warnings: preview.warnings.length })
+    } catch (error: unknown) {
+      setImportError(publicErrorMessage(error, 'previewing import file'))
+    }
+  }
+
+  const handleRunImport = async () => {
+    if (!company || !userId || !importPreview || importPreview.errors.length) return
+    setImporting(true)
+    setImportError('')
+    setImportMessage('')
+    try {
+      const result = await executeImport(importPreview, importContext)
+      await loadAll(userId)
+      logAppEvent('import_data_completed', company.id, { module: importModule, created: result.created, skipped: result.skipped, vouchers: result.vouchers })
+      setImportMessage(result.vouchers
+        ? `Imported ${result.vouchers} draft voucher(s). Review them from Draft Vouchers before completing.`
+        : `Imported ${result.created} row(s). ${result.skipped ? `${result.skipped} duplicate row(s) skipped.` : ''}`)
+      setImportPreview(null)
+      setImportFileName('')
+    } catch (error: unknown) {
+      setImportError(publicErrorMessage(error, 'importing data'))
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  const handleDownloadImportIssues = () => {
+    if (!importPreview) return
+    const rows = [
+      ['Type', 'Row', 'Field', 'Message'],
+      ...importPreview.errors.map(issue => ['Error', issue.row, issue.field || '', issue.message]),
+      ...importPreview.warnings.map(issue => ['Warning', issue.row, issue.field || '', issue.message]),
+    ]
+    const csv = rows.map(row => row.map(value => `"${String(value).replace(/"/g, '""')}"`).join(',')).join('\n')
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `khata-import-${importModule}-issues.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
+
   return (
     <div>
       <PageHeader title="Settings" description="Company details and data management" />
-      <PageContent className="max-w-xl space-y-5">
+      <PageContent className="max-w-none">
+        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
+          <div className="space-y-5">
         <Card>
           <CardHeader><CardTitle className="text-base">Account Diagnostic</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-xs text-muted-foreground">
@@ -355,6 +882,11 @@ export function SettingsPage() {
                   ? 'Locked because the company has posted transactions.'
                   : `Stored as AD internally: ${fiscalYearStartAd || 'Enter a valid BS date'}`}
               </p>
+              {fiscalYearLocked && effectiveFiscalYearStartBs !== storedFiscalYearStartBs && (
+                <p className="text-xs text-amber-700">
+                  Corrected from earliest transaction: stored {storedFiscalYearStartBs}, effective {effectiveFiscalYearStartBs}. Click Save Changes to update the company record.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>Inventory Valuation Method</Label>
@@ -438,6 +970,9 @@ export function SettingsPage() {
             {memberError && <p className="text-sm text-destructive">{memberError}</p>}
           </CardContent>
         </Card>
+          </div>
+
+          <div className="space-y-5">
 
         <Card>
           <CardHeader><CardTitle className="text-base">Data</CardTitle></CardHeader>
@@ -450,18 +985,101 @@ export function SettingsPage() {
             </p>
             <Button variant="outline" onClick={handleExport}>
               <Download className="h-4 w-4 mr-2" />
-              Export backup (JSON)
+              Export portable company backup (JSON)
             </Button>
             <Button variant="outline" onClick={handleClosingSnapshot}>
               <Download className="h-4 w-4 mr-2" />
               Export fiscal closing snapshot
             </Button>
             <div className="space-y-1.5">
-              <Label>Restore backup</Label>
-              <Input type="file" accept="application/json,.json" disabled={import.meta.env.PROD} onChange={e => handleRestore(e.target.files?.[0])} />
-              {import.meta.env.PROD && <p className="text-xs text-muted-foreground">Production restores require an atomic, administrator-controlled database restore.</p>}
+              <Label>Restore portable backup into this company</Label>
+              <Input type="file" accept="application/json,.json" disabled={!!restoreProgress?.active} onChange={e => handleRestore(e.target.files?.[0])} />
+              <p className="text-xs text-muted-foreground">Use a clean target company. System ledgers/groups are reused and imported records receive fresh IDs.</p>
+              {restoreProgress && <RestoreProgressBox progress={restoreProgress} />}
               {restoreMessage && <p className="text-xs text-muted-foreground">{restoreMessage}</p>}
             </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2 text-base">
+              <FileSpreadsheet className="h-4 w-4" />
+              Import Of Data
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="rounded-md border border-border bg-muted/20 p-3">
+              <p className="text-sm font-semibold">Recommended import flow</p>
+              <div className="mt-2 grid gap-1 text-xs text-muted-foreground sm:grid-cols-2">
+                {importModuleOptions().map(option => (
+                  <button
+                    key={option.value}
+                    type="button"
+                    onClick={() => { setImportModule(option.value as ImportModule); setImportPreview(null); setImportFileName(''); setImportMessage(''); setImportError('') }}
+                    className={`rounded-md px-2 py-1 text-left transition-colors ${importModule === option.value ? 'bg-primary text-primary-foreground' : 'hover:bg-background'}`}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Import Type</Label>
+              <SearchableSelect value={importModule} onValueChange={value => { setImportModule(value as ImportModule); setImportPreview(null); setImportFileName(''); setImportMessage(''); setImportError('') }} options={importModuleOptions()} />
+              <p className="text-xs text-muted-foreground">{selectedImportTemplate.description}</p>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <Button variant="outline" onClick={handleDownloadImportTemplate} disabled={!company}>
+                <Download className="mr-2 h-4 w-4" />
+                Download sample Excel
+              </Button>
+              <label className="inline-flex h-9 cursor-pointer items-center justify-center rounded-md border border-input bg-background px-4 py-2 text-sm font-semibold hover:bg-accent hover:text-accent-foreground">
+                <Upload className="mr-2 h-4 w-4" />
+                Upload filled Excel
+                <input
+                  type="file"
+                  accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                  className="sr-only"
+                  onChange={event => handleImportFile(event.target.files?.[0])}
+                />
+              </label>
+            </div>
+
+            {importFileName && <p className="text-xs text-muted-foreground">Selected file: <span className="font-medium text-foreground">{importFileName}</span></p>}
+
+            {importPreview && (
+              <div className="space-y-3 rounded-md border border-border p-3">
+                <div className="grid gap-2 text-sm sm:grid-cols-4">
+                  <div><span className="block text-xs text-muted-foreground">Rows</span><span className="font-semibold">{importPreview.totalRows}</span></div>
+                  <div><span className="block text-xs text-muted-foreground">Valid</span><span className="font-semibold">{importPreview.validRows}</span></div>
+                  <div><span className="block text-xs text-muted-foreground">Errors</span><span className={importPreview.errors.length ? 'font-semibold text-destructive' : 'font-semibold'}>{importPreview.errors.length}</span></div>
+                  <div><span className="block text-xs text-muted-foreground">Warnings</span><span className="font-semibold">{importPreview.warnings.length}</span></div>
+                </div>
+                {importPreview.voucherCount > 0 && <p className="text-xs text-muted-foreground">Will create {importPreview.voucherCount} draft voucher(s). Imported vouchers will not affect ledgers, stock, reports, or dashboard until completed.</p>}
+                {(importPreview.errors.length > 0 || importPreview.warnings.length > 0) && (
+                  <div className="max-h-44 overflow-auto rounded-md bg-muted/30 p-2 text-xs">
+                    {[...importPreview.errors.slice(0, 10), ...importPreview.warnings.slice(0, 10)].map((issue, index) => (
+                      <p key={`${issue.row}-${issue.field}-${index}`} className={index < importPreview.errors.length ? 'text-destructive' : 'text-muted-foreground'}>
+                        Row {issue.row}{issue.field ? ` (${issue.field})` : ''}: {issue.message}
+                      </p>
+                    ))}
+                    {importPreview.errors.length + importPreview.warnings.length > 20 && <p className="text-muted-foreground">Download the issue report to view all messages.</p>}
+                  </div>
+                )}
+                <div className="flex flex-wrap gap-2">
+                  <Button onClick={handleRunImport} disabled={importing || importPreview.errors.length > 0 || importPreview.totalRows === 0}>
+                    {importing ? 'Importing...' : 'Import'}
+                  </Button>
+                  {(importPreview.errors.length > 0 || importPreview.warnings.length > 0) && <Button variant="outline" onClick={handleDownloadImportIssues}>Download issue report</Button>}
+                </div>
+              </div>
+            )}
+
+            {importMessage && <p className="text-sm text-forest">{importMessage}</p>}
+            {importError && <p className="text-sm text-destructive">{importError}</p>}
           </CardContent>
         </Card>
 
@@ -492,6 +1110,8 @@ export function SettingsPage() {
             </AlertDialog>
           </CardContent>
         </Card>
+          </div>
+        </div>
       </PageContent>
     </div>
   )

@@ -81,6 +81,6 @@ export function validateItemUnits(mainUnit: string, alternateUnit?: string | nul
   if (!main) return 'Select a main unit.'
   if (!permitted(main)) return 'Main unit must be 1–20 characters and contain only letters, numbers, spaces, or standard unit symbols.'
   if (alternate && !permitted(alternate)) return 'Alternative unit must be 1–20 characters and contain only letters, numbers, spaces, or standard unit symbols.'
-  if (alternate && alternate.toLowerCase() === main.toLowerCase()) return 'Main and alternative units must be different.'
+  if (alternate && alternate.toLowerCase() === main.toLowerCase()) return 'Unit already exist'
   return null
 }

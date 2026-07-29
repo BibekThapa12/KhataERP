@@ -14,7 +14,7 @@ describe('ERP item units', () => {
   })
 
   it('rejects duplicate main and alternative units', () => {
-    expect(validateItemUnits('Box', 'box')).toBe('Main and alternative units must be different.')
+    expect(validateItemUnits('Box', 'box')).toBe('Unit already exist')
   })
 
   it('accepts safe custom units and rejects reserved or unsafe values', () => {

@@ -672,6 +672,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
+    const partyName = name.trim()
+    if (!partyName) throw new Error('Enter a party name.')
+    if (rawAccounts.some(account => account.name.trim().toLowerCase() === partyName.toLowerCase())) throw new Error('Ledger already exist')
     const accountId = crypto.randomUUID()
     const terminology = partyTerminology(type)
     const categoryName = terminology.category
@@ -681,7 +684,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const newAccount = {
       id: accountId,
       company_id: company.id,
-      name,
+      name: partyName,
       type: accountType,
       group: categoryName,
       category_id: category?.id,
@@ -697,13 +700,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       bank_branch: null,
     }
     await trace.measure('party_ledger_insert', () => insertAccount(newAccount), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
-    const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
+    const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name: partyName, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
     const nextState = trace.sync('affected_ledger_recompute', () => {
       const updatedRawAccounts = [...rawAccounts, { ...newAccount, balance: 0 }]
       return { rawAccounts: updatedRawAccounts, accounts: recomputeAffectedBalances(updatedRawAccounts, get().accounts, vouchers, [accountId]), parties: [...get().parties, newParty] }
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
-    notifySuccess('Party created', name)
+    notifySuccess('Party created', partyName)
     return newParty
     })
   },
@@ -712,6 +715,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
+    const itemName = data.name.trim()
+    if (!itemName) throw new Error('Enter an item name.')
+    if (get().items.some(item => item.name.trim().toLowerCase() === itemName.toLowerCase())) throw new Error('Stock item already exist')
     const isService = !!data.is_service
     const unit = isService ? 'Service' : (canonicalItemUnit(data.unit) || data.unit.trim())
     const alternateUnit = isService ? null : (data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null)
@@ -721,7 +727,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
     }
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
+    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, name: itemName, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
     const nextState = trace.sync('client_stock_recompute', () => {
       const items = [...get().items, newItem]
       return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }
@@ -736,15 +742,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
+    const ledgerName = name.trim()
+    if (!ledgerName) throw new Error('Enter a ledger name.')
+    if (rawAccounts.some(account => account.name.trim().toLowerCase() === ledgerName.toLowerCase())) throw new Error('Ledger already exist')
     const category = get().accountCategories.find(entry => entry.id === category_id)
     const partyType = partyTypeForCategory(category)
-    const newAcc = { id: crypto.randomUUID(), company_id: company.id, name, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance, address, contact_no, pan_no, credit_days, bank_account_no, bank_branch }
+    const newAcc = { id: crypto.randomUUID(), company_id: company.id, name: ledgerName, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance, address, contact_no, pan_no, credit_days, bank_account_no, bank_branch }
     await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
     const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, phone: contact_no, pan_vat: pan_no, address, default_credit_days: credit_days || 0, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
     const accounts = recomputeAffectedBalances(updatedRaw, get().accounts, vouchers, [newAcc.id])
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })
-    notifySuccess('Ledger created', name)
+    notifySuccess('Ledger created', ledgerName)
     return { ...newAcc, balance: 0 }
     })
   },
@@ -752,12 +761,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   addAccountCategory: async ({ name, account_type, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
+    const categoryName = name.trim()
+    if (!categoryName) throw new Error('Enter a category name.')
+    if (get().accountCategories.some(category => category.account_type === account_type && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Account category already exist')
     if (!parent_category_id) throw new Error('Select a parent account group')
     const parent = parent_category_id ? get().accountCategories.find(category => category.id === parent_category_id) : undefined
     if (!parent) throw new Error('Parent account group not found')
     if (parent && parent.account_type !== account_type) throw new Error('Parent category must use the same account type')
     if (parent && categoryDepth(get().accountCategories, parent.id) >= 4) throw new Error('Category hierarchy cannot exceed four levels')
-    const category = await insertAccountCategory({ company_id: company.id, name, account_type, parent_category_id, is_system: false, is_archived: false })
+    const category = await insertAccountCategory({ company_id: company.id, name: categoryName, account_type, parent_category_id, is_system: false, is_archived: false })
     set({ accountCategories: [...get().accountCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record account category audit'))
     notifySuccess('Account group created', category.name)
@@ -768,22 +780,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().accountCategories.find(category => category.id === id)
     if (!company || !existing) throw new Error('Category not found')
     if (existing.is_system) throw new Error('System account groups cannot be changed')
+    const normalizedUpdates = { ...updates }
+    if (typeof updates.name === 'string') {
+      const categoryName = updates.name.trim()
+      if (!categoryName) throw new Error('Enter a category name.')
+      const effectiveType = updates.account_type || existing.account_type
+      if (get().accountCategories.some(category => category.id !== id && category.account_type === effectiveType && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Account category already exist')
+      normalizedUpdates.name = categoryName
+    }
     const descendants = categoryDescendantIds(get().accountCategories, id)
-    if (updates.is_archived && get().rawAccounts.some(account => (account.category_id === id || descendants.has(account.category_id || '')) && !account.is_archived)) throw new Error('Move or archive active ledgers in this category tree first')
-    if (updates.is_archived && get().accountCategories.some(category => descendants.has(category.id) && !category.is_archived)) throw new Error('Archive child categories first')
-    if (updates.account_type && updates.account_type !== existing.account_type && (descendants.size || get().rawAccounts.some(account => account.category_id === id))) throw new Error('Cannot change the type of a category with children or ledgers')
-    if (updates.parent_category_id) {
-      if (updates.parent_category_id === id || descendants.has(updates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
-      const parent = get().accountCategories.find(category => category.id === updates.parent_category_id)
-      if (!parent || parent.account_type !== (updates.account_type || existing.account_type)) throw new Error('Parent category must use the same account type')
+    if (normalizedUpdates.is_archived && get().rawAccounts.some(account => (account.category_id === id || descendants.has(account.category_id || '')) && !account.is_archived)) throw new Error('Move or archive active ledgers in this category tree first')
+    if (normalizedUpdates.is_archived && get().accountCategories.some(category => descendants.has(category.id) && !category.is_archived)) throw new Error('Archive child categories first')
+    if (normalizedUpdates.account_type && normalizedUpdates.account_type !== existing.account_type && (descendants.size || get().rawAccounts.some(account => account.category_id === id))) throw new Error('Cannot change the type of a category with children or ledgers')
+    if (normalizedUpdates.parent_category_id) {
+      if (normalizedUpdates.parent_category_id === id || descendants.has(normalizedUpdates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
+      const parent = get().accountCategories.find(category => category.id === normalizedUpdates.parent_category_id)
+      if (!parent || parent.account_type !== (normalizedUpdates.account_type || existing.account_type)) throw new Error('Parent category must use the same account type')
       if (categoryDepth(get().accountCategories, parent.id) + subtreeHeight(get().accountCategories, id) > 4) throw new Error('Category hierarchy cannot exceed four levels')
     }
-    await updateAccountCategory(id, updates)
-    const accountCategories = get().accountCategories.map(category => category.id === id ? { ...category, ...updates } : category)
-    const rawAccounts = get().rawAccounts.map(account => account.category_id === id && updates.name ? { ...account, group: updates.name } : account)
+    await updateAccountCategory(id, normalizedUpdates)
+    const accountCategories = get().accountCategories.map(category => category.id === id ? { ...category, ...normalizedUpdates } : category)
+    const rawAccounts = get().rawAccounts.map(account => account.category_id === id && normalizedUpdates.name ? { ...account, group: normalizedUpdates.name } : account)
     set({ accountCategories, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, []) })
-    logMasterChange(company.id, 'account_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record account category audit'))
-    notifySuccess(updates.is_archived === true ? 'Account group archived' : updates.is_archived === false ? 'Account group restored' : 'Account group updated', updates.name || existing.name)
+    logMasterChange(company.id, 'account_category', id, 'update', existing, normalizedUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record account category audit'))
+    notifySuccess(normalizedUpdates.is_archived === true ? 'Account group archived' : normalizedUpdates.is_archived === false ? 'Account group restored' : 'Account group updated', normalizedUpdates.name || existing.name)
   },
 
   deleteAccountCategory: async (id) => {
@@ -801,9 +821,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   addItemCategory: async ({ name, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
+    const categoryName = name.trim()
+    if (!categoryName) throw new Error('Enter a category name.')
+    if (get().itemCategories.some(category => category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Stock item category already exist')
     const parent = parent_category_id ? get().itemCategories.find(category => category.id === parent_category_id) : undefined
     if (parent && categoryDepth(get().itemCategories, parent.id) >= 4) throw new Error('Category hierarchy cannot exceed four levels')
-    const category = await insertItemCategory({ company_id: company.id, name, parent_category_id, is_archived: false })
+    const category = await insertItemCategory({ company_id: company.id, name: categoryName, parent_category_id, is_archived: false })
     set({ itemCategories: [...get().itemCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'item_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record item category audit'))
     notifySuccess('Item category created', category.name)
@@ -814,19 +837,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     const existing = get().itemCategories.find(category => category.id === id)
     if (!company || !existing) throw new Error('Category not found')
+    const normalizedUpdates = { ...updates }
+    if (typeof updates.name === 'string') {
+      const categoryName = updates.name.trim()
+      if (!categoryName) throw new Error('Enter a category name.')
+      if (get().itemCategories.some(category => category.id !== id && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Stock item category already exist')
+      normalizedUpdates.name = categoryName
+    }
     const descendants = categoryDescendantIds(get().itemCategories, id)
-    if (updates.is_archived && get().items.some(item => (item.category_id === id || descendants.has(item.category_id || '')) && !item.is_archived)) throw new Error('Move or archive active items in this category tree first')
-    if (updates.is_archived && get().itemCategories.some(category => descendants.has(category.id) && !category.is_archived)) throw new Error('Archive child categories first')
-    if (updates.parent_category_id) {
-      if (updates.parent_category_id === id || descendants.has(updates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
-      const parent = get().itemCategories.find(category => category.id === updates.parent_category_id)
+    if (normalizedUpdates.is_archived && get().items.some(item => (item.category_id === id || descendants.has(item.category_id || '')) && !item.is_archived)) throw new Error('Move or archive active items in this category tree first')
+    if (normalizedUpdates.is_archived && get().itemCategories.some(category => descendants.has(category.id) && !category.is_archived)) throw new Error('Archive child categories first')
+    if (normalizedUpdates.parent_category_id) {
+      if (normalizedUpdates.parent_category_id === id || descendants.has(normalizedUpdates.parent_category_id)) throw new Error('A category cannot be moved into itself or its descendants')
+      const parent = get().itemCategories.find(category => category.id === normalizedUpdates.parent_category_id)
       if (!parent) throw new Error('Parent category not found')
       if (categoryDepth(get().itemCategories, parent.id) + subtreeHeight(get().itemCategories, id) > 4) throw new Error('Category hierarchy cannot exceed four levels')
     }
-    await updateItemCategory(id, updates)
-    set({ itemCategories: get().itemCategories.map(category => category.id === id ? { ...category, ...updates } : category) })
-    logMasterChange(company.id, 'item_category', id, 'update', existing, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record item category audit'))
-    notifySuccess(updates.is_archived === true ? 'Item category archived' : updates.is_archived === false ? 'Item category restored' : 'Item category updated', updates.name || existing.name)
+    await updateItemCategory(id, normalizedUpdates)
+    set({ itemCategories: get().itemCategories.map(category => category.id === id ? { ...category, ...normalizedUpdates } : category) })
+    logMasterChange(company.id, 'item_category', id, 'update', existing, normalizedUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record item category audit'))
+    notifySuccess(normalizedUpdates.is_archived === true ? 'Item category archived' : normalizedUpdates.is_archived === false ? 'Item category restored' : 'Item category updated', normalizedUpdates.name || existing.name)
   },
 
   alterAccount: async (id, updates) => {
@@ -834,15 +864,19 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().rawAccounts.find(account => account.id === id)
     if (!company || !existing) throw new Error('Ledger not found')
     return measuredWrite({ operation: 'update_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
+    const nextName = updates.name?.trim()
+    if (updates.name !== undefined && !nextName) throw new Error('Enter a ledger name.')
+    if (nextName && get().rawAccounts.some(account => account.id !== id && account.name.trim().toLowerCase() === nextName.toLowerCase())) throw new Error('Ledger already exist')
     const used = get().vouchers.some(voucher => voucher.lines?.some(line => line.account_id === id))
     if ((existing.is_system || used) && updates.type && updates.type !== existing.type) throw new Error('The account type of a system or used ledger cannot be changed')
     const categoryId = updates.category_id || existing.category_id
     const category = get().accountCategories.find(entry => entry.id === categoryId)
     const partyType = partyTypeForCategory(category)
     const existingParty = get().parties.find(party => party.account_id === id)
+    const normalizedUpdates = nextName ? { ...updates, name: nextName } : updates
     const effectiveUpdates = partyType
-      ? { ...updates, category_id: category!.id, group: category!.name, type: category!.account_type, is_party: true }
-      : updates
+      ? { ...normalizedUpdates, category_id: category!.id, group: category!.name, type: category!.account_type, is_party: true }
+      : normalizedUpdates
     await trace.measure('account_update', () => updateAccount(id, effectiveUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
     const partyDetails = {
       name: effectiveUpdates.name || existing.name,
@@ -892,13 +926,17 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !party) throw new Error('Party not found')
     return measuredWrite({ operation: 'update_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
     if (updates.default_credit_days !== undefined && (!Number.isInteger(updates.default_credit_days) || updates.default_credit_days < 0)) throw new Error('Default Credit Days must be a whole number of 0 or more')
+    const nextName = updates.name?.trim()
+    if (updates.name !== undefined && !nextName) throw new Error('Enter a party name.')
+    if (nextName && get().rawAccounts.some(account => account.id !== party.account_id && account.name.trim().toLowerCase() === nextName.toLowerCase())) throw new Error('Ledger already exist')
+    const normalizedUpdates = nextName ? { ...updates, name: nextName } : updates
     const nextType = updates.type || party.type
     const terminology = partyTerminology(nextType)
     const categoryName = terminology.category
     const accountType = terminology.accountType
     const category = get().accountCategories.find(item => item.name === categoryName && item.account_type === accountType)
     const accountUpdates: Partial<Account> = {
-      name: updates.name || party.name,
+      name: nextName || party.name,
       type: accountType,
       group: categoryName,
       category_id: category?.id,
@@ -908,13 +946,13 @@ export const useAppStore = create<AppState>((set, get) => ({
       pan_no: updates.pan_vat === undefined ? undefined : updates.pan_vat || null,
       credit_days: updates.default_credit_days === undefined ? undefined : updates.default_credit_days,
     }
-    await trace.measure('party_master_update', () => updateParty(id, updates), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.update' })
+    await trace.measure('party_master_update', () => updateParty(id, normalizedUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.update' })
     await trace.measure('party_ledger_update', () => updateAccount(party.account_id, accountUpdates), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.update' })
-    const parties = get().parties.map(item => item.id === id ? { ...item, ...updates } : item)
+    const parties = get().parties.map(item => item.id === id ? { ...item, ...normalizedUpdates } : item)
     const rawAccounts = get().rawAccounts.map(account => account.id === party.account_id ? { ...account, ...accountUpdates } : account)
     set({ parties, rawAccounts, accounts: recomputeAffectedBalances(rawAccounts, get().accounts, get().vouchers, [party.account_id]) })
-    logMasterChange(company.id, 'party', id, 'update', party, updates as Record<string, unknown>).catch(warnNonSensitive('Could not record party audit'))
-    notifySuccess(updates.is_archived === true ? 'Party archived' : updates.is_archived === false ? 'Party restored' : 'Party updated', updates.name || party.name)
+    logMasterChange(company.id, 'party', id, 'update', party, normalizedUpdates as Record<string, unknown>).catch(warnNonSensitive('Could not record party audit'))
+    notifySuccess(updates.is_archived === true ? 'Party archived' : updates.is_archived === false ? 'Party restored' : 'Party updated', normalizedUpdates.name || party.name)
     })
   },
 
@@ -924,6 +962,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !existing) throw new Error('Item not found')
     return measuredWrite({ operation: 'update_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
     const normalizedUpdates = { ...updates }
+    if (typeof updates.name === 'string') {
+      const itemName = updates.name.trim()
+      if (!itemName) throw new Error('Enter an item name.')
+      if (get().items.some(item => item.id !== id && item.name.trim().toLowerCase() === itemName.toLowerCase())) throw new Error('Stock item already exist')
+      normalizedUpdates.name = itemName
+    }
     const unitFieldsChanged = updates.unit !== undefined || updates.alternate_unit !== undefined || updates.alternate_conversion !== undefined
     if (typeof updates.unit === 'string') normalizedUpdates.unit = canonicalItemUnit(updates.unit) || updates.unit.trim()
     if (typeof updates.alternate_unit === 'string') normalizedUpdates.alternate_unit = canonicalItemUnit(updates.alternate_unit) || updates.alternate_unit.trim()

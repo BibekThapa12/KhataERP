@@ -3410,10 +3410,6 @@ begin
       or length(coalesce(new.barcode, '')) > 100 then
       raise exception 'Item field length is invalid';
     end if;
-    if new.sell_rate < 0 or new.opening_qty < 0 or new.opening_rate < 0
-      or coalesce(new.reorder_level, 0) < 0 then
-      raise exception 'Item rates, opening stock and reorder level cannot be negative';
-    end if;
     if (new.alternate_unit is null) <> (new.alternate_conversion is null)
       or (new.alternate_unit is not null and (
         new.alternate_conversion <= 1
@@ -3607,9 +3603,9 @@ begin
     if item_count = 0 or exists (
       select 1 from public.invoice_items item
       where item.voucher_id = target_voucher_id
-        and (item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
+        and (item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
           or (item.base_qty is not null and abs(item.base_qty - item.qty / nullif(coalesce(item.conversion_factor, 1), 0)) > 0.0001))
-    ) then raise exception 'Invoice items require positive quantities and non-negative rates'; end if;
+    ) then raise exception 'Invoice items require non-negative quantities and non-negative rates'; end if;
 
     if voucher_record.type in ('Sales','Purchase') then
       calculated_discount := coalesce(voucher_record.discount, 0);
@@ -4063,12 +4059,12 @@ begin
   updated_definition := replace(
     updated_definition,
     'item.qty <= 0 or item.rate <= 0 or coalesce(item.conversion_factor, 1) <= 0',
-    'item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+    'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
   );
   updated_definition := replace(
     updated_definition,
     'Invoice items require positive quantities and valid rates',
-    'Invoice items require positive quantities and non-negative rates'
+    'Invoice items require non-negative quantities and non-negative rates'
   );
 
   if updated_definition is distinct from current_definition then
@@ -4077,7 +4073,7 @@ begin
       'voucher_record.type in (''Receipt'',''Payment'',''Journal'')'
       in current_definition
     ) = 0 or position(
-      'item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+      'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
       in current_definition
     ) = 0 then
     raise exception 'The deployed integrity function has an unsupported definition; reapply the updated critical security hardening migration';
@@ -5328,6 +5324,532 @@ notify pgrst, 'reload schema';
 
 -- END INCLUDED FILE: supabase-multi-company-migration.sql
 
+-- BEGIN INCLUDED FILE: supabase-allow-negative-item-values-migration.sql
+
+-- Allow negative item values for portable company restores and imported data.
+-- Some legacy accounting systems export negative opening quantities/rates or
+-- reorder levels. KhataERP calculations already support negative stock values;
+-- keep tenant/reference validation but remove the non-negative item check.
+
+create or replace function public.validate_tenant_master_record()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if tg_table_name = 'accounts' then
+    if length(btrim(new.name)) < 1 or length(new.name) > 200 then
+      raise exception 'Account name must contain 1 to 200 characters';
+    end if;
+    if new.category_id is not null and not exists (
+      select 1 from public.account_categories category
+      where category.id = new.category_id
+        and category.company_id = new.company_id
+        and category.account_type = new.type
+        and category.name = new."group"
+    ) then raise exception 'Account category must belong to the company and match its type'; end if;
+  elsif tg_table_name = 'parties' then
+    if length(btrim(new.name)) < 1 or length(new.name) > 200
+      or length(coalesce(new.phone, '')) > 50
+      or length(coalesce(new.pan_vat, '')) > 100
+      or length(coalesce(new.address, '')) > 1000 then
+      raise exception 'Party field length is invalid';
+    end if;
+    if coalesce(new.default_credit_days, 0) < 0 or coalesce(new.default_credit_days, 0) > 36500 then
+      raise exception 'Party credit days are outside the valid range';
+    end if;
+    if not exists (
+      select 1 from public.accounts account
+      where account.id = new.account_id and account.company_id = new.company_id
+        and account.is_party
+    ) then raise exception 'Party ledger must belong to the company'; end if;
+  elsif tg_table_name = 'items' then
+    if length(btrim(new.name)) < 1 or length(new.name) > 200
+      or length(btrim(new.unit)) < 1 or length(new.unit) > 50
+      or length(coalesce(new.alternate_unit, '')) > 50
+      or length(coalesce(new.sku, '')) > 100
+      or length(coalesce(new.barcode, '')) > 100 then
+      raise exception 'Item field length is invalid';
+    end if;
+    if (new.alternate_unit is null) <> (new.alternate_conversion is null)
+      or (new.alternate_unit is not null and (
+        new.alternate_conversion <= 1
+        or lower(btrim(new.alternate_unit)) = lower(btrim(new.unit)))) then
+      raise exception 'Alternative item unit configuration is invalid';
+    end if;
+    if new.category_id is not null and not exists (
+      select 1 from public.item_categories category
+      where category.id = new.category_id and category.company_id = new.company_id
+    ) then raise exception 'Item category must belong to the company'; end if;
+  end if;
+  return new;
+end;
+$$;
+
+-- END INCLUDED FILE: supabase-allow-negative-item-values-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-allow-zero-invoice-quantities-migration.sql
+
+-- Allow zero-quantity invoice lines for portable restores and legacy imports.
+-- Keep negative quantities, negative rates, and invalid conversion factors blocked.
+-- Apply after supabase-critical-security-hardening-migration.sql and
+-- supabase-zero-value-invoices-migration.sql. Safe to rerun.
+begin;
+
+do $migration$
+declare
+  current_definition text;
+  updated_definition text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if current_definition is null then
+    raise exception 'validate_voucher_financial_integrity() is missing; apply the critical security hardening migration first';
+  end if;
+
+  updated_definition := replace(
+    current_definition,
+    'item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0',
+    'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+  );
+  updated_definition := replace(
+    updated_definition,
+    'Invoice items require positive quantities and non-negative rates',
+    'Invoice items require non-negative quantities and non-negative rates'
+  );
+
+  if updated_definition is distinct from current_definition then
+    execute updated_definition;
+  elsif position(
+      'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+      in current_definition
+    ) = 0 then
+    raise exception 'The deployed integrity function has an unsupported definition; reapply the updated critical security hardening migration';
+  end if;
+end;
+$migration$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-allow-zero-invoice-quantities-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-allow-negative-invoice-rates-migration.sql
+
+-- Allow negative invoice item rates for portable restores and legacy imports.
+-- Keep negative quantities and invalid conversion factors blocked.
+-- Apply after supabase-allow-zero-invoice-quantities-migration.sql. Safe to rerun.
+begin;
+
+do $migration$
+declare
+  current_definition text;
+  updated_definition text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if current_definition is null then
+    raise exception 'validate_voucher_financial_integrity() is missing; apply the critical security hardening migration first';
+  end if;
+
+  updated_definition := replace(
+    current_definition,
+    'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0',
+    'item.qty < 0 or coalesce(item.conversion_factor, 1) <= 0'
+  );
+  updated_definition := replace(
+    updated_definition,
+    'Invoice items require non-negative quantities and non-negative rates',
+    'Invoice items require non-negative quantities and valid conversion factors'
+  );
+
+  if updated_definition is distinct from current_definition then
+    execute updated_definition;
+  elsif position(
+      'item.qty < 0 or coalesce(item.conversion_factor, 1) <= 0'
+      in current_definition
+    ) = 0 then
+    raise exception 'The deployed integrity function has an unsupported definition; reapply the updated critical security hardening migration';
+  end if;
+end;
+$migration$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-allow-negative-invoice-rates-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-allow-negative-invoice-quantities-migration.sql
+
+-- Allow legacy invoice item quantities during portable restores and old-system imports.
+-- Keep invalid conversion factors blocked. Frontend forms still validate normal voucher entry.
+-- Apply after supabase-allow-negative-invoice-rates-migration.sql. Safe to rerun.
+begin;
+
+do $migration$
+declare
+  current_definition text;
+  updated_definition text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if current_definition is null then
+    raise exception 'validate_voucher_financial_integrity() is missing; apply the critical security hardening migration first';
+  end if;
+
+  updated_definition := replace(
+    current_definition,
+    'item.qty < 0 or coalesce(item.conversion_factor, 1) <= 0',
+    'coalesce(item.conversion_factor, 1) <= 0'
+  );
+  updated_definition := replace(
+    updated_definition,
+    'Invoice items require non-negative quantities and valid conversion factors',
+    'Invoice items require valid conversion factors'
+  );
+
+  if updated_definition is distinct from current_definition then
+    execute updated_definition;
+  elsif position(
+      'coalesce(item.conversion_factor, 1) <= 0'
+      in current_definition
+    ) = 0 then
+    raise exception 'The deployed integrity function has an unsupported definition; reapply the updated critical security hardening migration';
+  end if;
+end;
+$migration$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-allow-negative-invoice-quantities-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-relax-invoice-base-qty-validation-migration.sql
+
+-- Relax legacy invoice base quantity validation for portable restores.
+-- Keep conversion_factor validation, but do not reject old base_qty snapshots.
+-- Apply after supabase-allow-negative-invoice-quantities-migration.sql. Safe to rerun.
+begin;
+
+do $migration$
+declare
+  current_definition text;
+  updated_definition text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if current_definition is null then
+    raise exception 'validate_voucher_financial_integrity() is missing; apply the critical security hardening migration first';
+  end if;
+
+  updated_definition := replace(
+    current_definition,
+    'coalesce(item.conversion_factor, 1) <= 0
+          or (item.base_qty is not null and abs(item.base_qty - item.qty / nullif(coalesce(item.conversion_factor, 1), 0)) > 0.0001)',
+    'coalesce(item.conversion_factor, 1) <= 0'
+  );
+
+  updated_definition := replace(
+    updated_definition,
+    'coalesce(item.conversion_factor, 1) <= 0
+          or (item.base_qty is not null and abs(item.base_qty - item.qty / nullif(coalesce(item.conversion_factor, 1), 0)) > 0.0001)',
+    'coalesce(item.conversion_factor, 1) <= 0'
+  );
+
+  if updated_definition is distinct from current_definition then
+    execute updated_definition;
+  elsif position('item.base_qty is not null and abs(item.base_qty' in current_definition) > 0 then
+    raise exception 'Could not patch validate_voucher_financial_integrity(); expected base_qty validation block not found';
+  end if;
+end;
+$migration$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-relax-invoice-base-qty-validation-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-final-restore-invoice-integrity-fix.sql
+
+-- Final invoice integrity compatibility fix for portable restores.
+-- Allows legacy negative/zero invoice quantities and rates, and ignores old base_qty snapshots.
+-- Still blocks invalid conversion factors. Safe to rerun.
+begin;
+
+do $migration$
+declare
+  current_definition text;
+  updated_definition text;
+begin
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if current_definition is null then
+    raise exception 'validate_voucher_financial_integrity() is missing; apply the critical security hardening migration first';
+  end if;
+
+  updated_definition := current_definition;
+
+  updated_definition := regexp_replace(
+    updated_definition,
+    '\s*or\s*\(\s*item\.base_qty\s+is\s+not\s+null\s+and\s+abs\s*\(\s*item\.base_qty\s*-\s*item\.qty\s*/\s*nullif\s*\(\s*coalesce\s*\(\s*item\.conversion_factor\s*,\s*1\s*\)\s*,\s*0\s*\)\s*\)\s*>\s*0\.0001\s*\)',
+    '',
+    'gi'
+  );
+
+  updated_definition := regexp_replace(
+    updated_definition,
+    'item\.qty\s*<\s*0\s+or\s+item\.rate\s*<\s*0\s+or\s+coalesce\s*\(\s*item\.conversion_factor\s*,\s*1\s*\)\s*<=\s*0',
+    'coalesce(item.conversion_factor, 1) <= 0',
+    'gi'
+  );
+
+  updated_definition := regexp_replace(
+    updated_definition,
+    'item\.qty\s*<\s*0\s+or\s+coalesce\s*\(\s*item\.conversion_factor\s*,\s*1\s*\)\s*<=\s*0',
+    'coalesce(item.conversion_factor, 1) <= 0',
+    'gi'
+  );
+
+  updated_definition := regexp_replace(
+    updated_definition,
+    'item\.rate\s*<\s*0\s+or\s+coalesce\s*\(\s*item\.conversion_factor\s*,\s*1\s*\)\s*<=\s*0',
+    'coalesce(item.conversion_factor, 1) <= 0',
+    'gi'
+  );
+
+  updated_definition := replace(
+    updated_definition,
+    'Invoice items require non-negative quantities and non-negative rates',
+    'Invoice items require valid conversion factors'
+  );
+  updated_definition := replace(
+    updated_definition,
+    'Invoice items require non-negative quantities and valid conversion factors',
+    'Invoice items require valid conversion factors'
+  );
+
+  execute updated_definition;
+
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into current_definition;
+
+  if position('item.base_qty is not null and abs(item.base_qty' in current_definition) > 0
+    or position('item.qty < 0' in current_definition) > 0
+    or position('item.rate < 0' in current_definition) > 0 then
+    raise exception 'Invoice restore compatibility patch did not fully apply';
+  end if;
+end;
+$migration$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-final-restore-invoice-integrity-fix.sql
+
+-- BEGIN INCLUDED FILE: supabase-allow-fiscal-year-start-correction-migration.sql
+
+-- Allow safe correction of company Financial Year Start Date after import.
+-- The date may move earlier after transactions exist only when every existing
+-- voucher remains on or after the new books start. Moving it later is still blocked.
+begin;
+
+create or replace function public.protect_company_financial_year()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  if old.fiscal_year_configured and not new.fiscal_year_configured then
+    raise exception 'Financial Year setup cannot be removed';
+  end if;
+
+  if new.fiscal_year_start is distinct from old.fiscal_year_start
+    and exists (
+      select 1 from public.vouchers voucher
+      where voucher.company_id = old.id
+      limit 1
+    ) then
+    if new.fiscal_year_start > old.fiscal_year_start then
+      raise exception 'Financial Year Start Date is locked after the first transaction';
+    end if;
+
+    if exists (
+      select 1 from public.vouchers voucher
+      where voucher.company_id = old.id
+        and coalesce(voucher.date_ad, voucher.date) < new.fiscal_year_start
+      limit 1
+    ) then
+      raise exception 'Financial Year Start Date cannot be after existing transactions';
+    end if;
+  end if;
+
+  return new;
+end;
+$$;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-allow-fiscal-year-start-correction-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-ledger-unique-name-guard-migration.sql
+
+-- Prevent duplicate ledger/account names inside the same company.
+-- Existing duplicate historical rows are left untouched, but new inserts and
+-- renames to an existing ledger name are blocked case-insensitively.
+begin;
+
+create or replace function public.prevent_duplicate_ledger_name()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.name := btrim(new.name);
+
+  if new.name = '' then
+    raise exception 'Enter a ledger name';
+  end if;
+
+  if exists (
+    select 1
+    from public.accounts account
+    where account.company_id = new.company_id
+      and lower(btrim(account.name)) = lower(new.name)
+      and account.id is distinct from new.id
+    limit 1
+  ) then
+    raise exception 'Ledger already exist';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists accounts_duplicate_name_guard on public.accounts;
+create trigger accounts_duplicate_name_guard
+before insert or update of company_id, name on public.accounts
+for each row execute function public.prevent_duplicate_ledger_name();
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-ledger-unique-name-guard-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-master-duplicate-name-guards-migration.sql
+
+-- Prevent duplicate master names inside the same company.
+-- Existing duplicate historical rows are left untouched, but new inserts and
+-- renames to an existing name are blocked case-insensitively.
+begin;
+
+create or replace function public.prevent_duplicate_item_name()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.name := btrim(new.name);
+
+  if new.name = '' then
+    raise exception 'Enter an item name';
+  end if;
+
+  if exists (
+    select 1
+    from public.items item
+    where item.company_id = new.company_id
+      and lower(btrim(item.name)) = lower(new.name)
+      and item.id is distinct from new.id
+    limit 1
+  ) then
+    raise exception 'Stock item already exist';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists items_duplicate_name_guard on public.items;
+create trigger items_duplicate_name_guard
+before insert or update of company_id, name on public.items
+for each row execute function public.prevent_duplicate_item_name();
+
+create or replace function public.prevent_duplicate_item_category_name()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.name := btrim(new.name);
+
+  if new.name = '' then
+    raise exception 'Enter a category name';
+  end if;
+
+  if exists (
+    select 1
+    from public.item_categories category
+    where category.company_id = new.company_id
+      and lower(btrim(category.name)) = lower(new.name)
+      and category.id is distinct from new.id
+    limit 1
+  ) then
+    raise exception 'Stock item category already exist';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists item_categories_duplicate_name_guard on public.item_categories;
+create trigger item_categories_duplicate_name_guard
+before insert or update of company_id, name on public.item_categories
+for each row execute function public.prevent_duplicate_item_category_name();
+
+create or replace function public.prevent_duplicate_account_category_name()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+begin
+  new.name := btrim(new.name);
+
+  if new.name = '' then
+    raise exception 'Enter a category name';
+  end if;
+
+  if exists (
+    select 1
+    from public.account_categories category
+    where category.company_id = new.company_id
+      and category.account_type = new.account_type
+      and lower(btrim(category.name)) = lower(new.name)
+      and category.id is distinct from new.id
+    limit 1
+  ) then
+    raise exception 'Account category already exist';
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists account_categories_duplicate_name_guard on public.account_categories;
+create trigger account_categories_duplicate_name_guard
+before insert or update of company_id, name, account_type on public.account_categories
+for each row execute function public.prevent_duplicate_account_category_name();
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-master-duplicate-name-guards-migration.sql
+
 -- =============================================================================
 -- FINAL BOOTSTRAP VERIFICATION AND PERMISSION CLEANUP
 -- =============================================================================
@@ -5376,6 +5898,54 @@ begin
     or to_regprocedure('public.set_active_company(uuid)') is null then
     raise exception 'Bootstrap verification failed: multi-company RPCs are missing';
   end if;
+  if to_regprocedure('public.prevent_duplicate_ledger_name()') is null
+    or not exists (
+      select 1
+      from pg_trigger trigger
+      join pg_class class on class.oid = trigger.tgrelid
+      join pg_namespace namespace on namespace.oid = class.relnamespace
+      where namespace.nspname = 'public'
+        and class.relname = 'accounts'
+        and trigger.tgname = 'accounts_duplicate_name_guard'
+        and not trigger.tgisinternal
+  ) then
+    raise exception 'Bootstrap verification failed: duplicate ledger name guard is missing';
+  end if;
+  if to_regprocedure('public.prevent_duplicate_item_name()') is null
+    or to_regprocedure('public.prevent_duplicate_item_category_name()') is null
+    or to_regprocedure('public.prevent_duplicate_account_category_name()') is null
+    or not exists (
+      select 1
+      from pg_trigger trigger
+      join pg_class class on class.oid = trigger.tgrelid
+      join pg_namespace namespace on namespace.oid = class.relnamespace
+      where namespace.nspname = 'public'
+        and class.relname = 'items'
+        and trigger.tgname = 'items_duplicate_name_guard'
+        and not trigger.tgisinternal
+    )
+    or not exists (
+      select 1
+      from pg_trigger trigger
+      join pg_class class on class.oid = trigger.tgrelid
+      join pg_namespace namespace on namespace.oid = class.relnamespace
+      where namespace.nspname = 'public'
+        and class.relname = 'item_categories'
+        and trigger.tgname = 'item_categories_duplicate_name_guard'
+        and not trigger.tgisinternal
+    )
+    or not exists (
+      select 1
+      from pg_trigger trigger
+      join pg_class class on class.oid = trigger.tgrelid
+      join pg_namespace namespace on namespace.oid = class.relnamespace
+      where namespace.nspname = 'public'
+        and class.relname = 'account_categories'
+        and trigger.tgname = 'account_categories_duplicate_name_guard'
+        and not trigger.tgisinternal
+    ) then
+    raise exception 'Bootstrap verification failed: duplicate master name guards are missing';
+  end if;
 
   if not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'journal_numbering_mode')
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'fiscal_year_configured')
@@ -5398,6 +5968,15 @@ begin
   end if;
   if position('item.qty / nullif(coalesce(item.conversion_factor, 1), 0)' in integrity_definition) = 0 then
     raise exception 'Bootstrap verification failed: alternate-unit base quantity integrity is missing';
+  end if;
+  if position('item.rate < 0' in integrity_definition) > 0 then
+    raise exception 'Bootstrap verification failed: negative invoice rate restore support is missing';
+  end if;
+  if position('item.qty < 0' in integrity_definition) > 0 then
+    raise exception 'Bootstrap verification failed: legacy invoice quantity restore support is missing';
+  end if;
+  if position('item.base_qty is not null and abs(item.base_qty' in integrity_definition) > 0 then
+    raise exception 'Bootstrap verification failed: legacy invoice base quantity restore support is missing';
   end if;
 end;
 $bootstrap_verification$;

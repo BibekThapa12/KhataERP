@@ -49,7 +49,7 @@ export function SalesPage() {
       <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to Sundry Debtors (Customers)' : 'Internal sales records for bookkeeping'}
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
+        <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <InvoiceForm type="Sales" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -67,7 +67,7 @@ export function PurchasePage() {
       <PageHeader title="Purchase Bills" description="Goods bought from Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Purchase</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
+        <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <InvoiceForm type="Purchase" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -85,7 +85,7 @@ function ReturnPage({ type }: { type: 'Sales Return' | 'Purchase Return' }) {
     <div>
       <PageHeader title={title} description={isSales ? 'Goods returned by Sundry Debtors (Customers)' : 'Goods returned to Sundry Creditors (Suppliers)'}
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New {isSales ? 'Sales' : 'Purchase'} Return</Button>} />
-      <PageContent><Card><VoucherTable vouchers={vouchers} onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></Card></PageContent>
+      <PageContent><Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></Card></PageContent>
       <ReturnForm type={type} open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
   )
@@ -105,7 +105,7 @@ export function ReceiptsPage() {
       <PageHeader title="Receipts" description="Money received from Sundry Debtors (Customers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Receipt</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
+        <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <ReceiptPaymentForm type="Receipt" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -123,7 +123,7 @@ export function PaymentsPage() {
       <PageHeader title="Payments" description="Money paid to Sundry Creditors (Suppliers)"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Payment</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
+        <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <ReceiptPaymentForm type="Payment" open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -141,7 +141,7 @@ export function JournalPage() {
       <PageHeader title="Journal Entries" description="Manual adjustments — depreciation, write-offs, opening balances"
         action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Journal</Button>} />
       <PageContent>
-        <Card><VoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
+        <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={v => { setEditing(v); setOpen(true) }} /></Card>
       </PageContent>
       <JournalForm open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -162,7 +162,7 @@ export function DraftVouchersPage() {
   return (
     <div>
       <PageHeader title="Draft Vouchers" description="Saved but not posted to ledgers, inventory, reports, or dashboard totals" />
-      <PageContent><Card><VoucherTable vouchers={vouchers} onEdit={setEditing} /></Card></PageContent>
+      <PageContent><Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={setEditing} /></Card></PageContent>
       {editing && (editing.type === 'Sales' || editing.type === 'Purchase') && <InvoiceForm type={editing.type} open voucher={editing} onClose={() => setEditing(null)} />}
       {editing && (editing.type === 'Receipt' || editing.type === 'Payment') && <ReceiptPaymentForm type={editing.type} open voucher={editing} onClose={() => setEditing(null)} />}
       {editing?.type === 'Journal' && <JournalForm open voucher={editing} onClose={() => setEditing(null)} />}
