@@ -99,7 +99,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
+const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,allow_admin_chronological_bypass,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
 const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
@@ -440,6 +440,7 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     purchase_return_prefix: 'PR-',
     journal_numbering_mode: 'auto',
     reset_numbering_fiscal_year: true,
+    allow_admin_chronological_bypass: false,
     print_format: 'A5',
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
     fiscal_year_configured: true,

@@ -1,4 +1,4 @@
-import { lazy, useState, useEffect, useRef } from 'react'
+import { lazy, useState, useEffect, useMemo, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
@@ -17,6 +17,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
+import { notifyError } from '@/lib/notifications'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
@@ -37,7 +39,7 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { company, accounts, items, parties, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
+  const { company, accounts, items, parties, vouchers, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
@@ -79,6 +81,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const effectiveVatRate = vatEnabled ? vatRate : 0
   const vatAmount = round2Local(taxable * (effectiveVatRate / 100))
   const total = round2Local(taxable + vatAmount)
+  const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
 
   useEffect(() => {
     if (open && voucher) {
@@ -218,7 +221,13 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         pendingLineFocus.current = null
       }
     } catch (e: unknown) {
-      setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
+      const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
+      if (friendlyDateError) {
+        setError(friendlyDateError)
+        notifyError(friendlyDateError)
+      } else {
+        setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
+      }
     } finally {
       submissionLock.release()
       setSaving(false)
@@ -226,6 +235,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   }
 
   const handleSaveDraft = async () => {
+    if (voucher && voucher.status !== 'Draft') {
+      setError('Completed vouchers cannot be saved as draft.')
+      return
+    }
     setError('')
     setSaving(true)
     try {
@@ -260,6 +273,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     }
   }
 
+  const canSaveDraft = !voucher || voucher.status === 'Draft'
+  const completedEdit = !!voucher && voucher.status !== 'Draft'
+
   return (
     <>
       <Dialog open={open} onOpenChange={o => !o && onClose()}>
@@ -273,7 +289,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             <div className="flex flex-wrap items-start gap-3">
               <div className="w-full space-y-1.5 sm:w-40">
                 <Label>Date</Label>
-                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} />
+                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} />
               </div>
               <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
               {!isSales && <div className="w-full space-y-1.5 sm:w-48">
@@ -402,11 +418,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
           <DialogFooter>
             {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
             <Button variant="outline" tabIndex={-1} onClick={onClose}>Cancel</Button>
-            <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
+            {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
               {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
-            </Button>
+            </Button>}
             <Button onClick={() => handleSave('Completed')} disabled={saving}>
-              {saving ? 'Saving...' : 'Complete Voucher'}
+              {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}
             </Button>
           </DialogFooter>
         </DialogContent>

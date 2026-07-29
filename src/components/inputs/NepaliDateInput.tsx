@@ -18,22 +18,24 @@ export interface NepaliDateInputProps {
   placeholder?: string
   id?: string
   tabIndex?: number
+  error?: string | boolean
 }
 
 export function NepaliDateInput({
   value, onChange, className, min, max, disabled, required, allowClear = false,
-  placeholder = '2083-03-21', id, tabIndex,
+  placeholder = '2083-03-21', id, tabIndex, error,
 }: NepaliDateInputProps) {
   const [focused, setFocused] = useState(false)
   const [open, setOpen] = useState(false)
   const invalid = useMemo(() => {
+    if (error) return true
     if (focused || !value.length) return false
     const parsed = parseBsDate(value)
     if (!parsed) return true
     if (min && parseBsDate(min) && value < min) return true
     if (max && parseBsDate(max) && value > max) return true
     return false
-  }, [focused, max, min, value])
+  }, [error, focused, max, min, value])
   const handleChange = (nextValue: string) => onChange(normalizeBsDateInput(nextValue) || nextValue)
 
   const handleBlur = () => {
@@ -81,7 +83,7 @@ export function NepaliDateInput({
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
-      {invalid && <p className="mt-1 text-xs text-destructive">Enter a valid BS date{min || max ? ' within the allowed range' : ''}.</p>}
+      {invalid && <p className="mt-1 text-xs text-destructive">{typeof error === 'string' ? error : `Enter a valid BS date${min || max ? ' within the allowed range' : ''}.`}</p>}
     </div>
   )
 }

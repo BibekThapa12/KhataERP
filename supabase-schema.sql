@@ -169,6 +169,7 @@ create table if not exists companies (
   purchase_return_prefix text not null default 'PR-',
   journal_numbering_mode text not null default 'auto' check (journal_numbering_mode in ('auto','manual')),
   reset_numbering_fiscal_year boolean not null default true,
+  allow_admin_chronological_bypass boolean not null default false,
   print_format     text not null default 'A5' check (print_format in ('A5','A4')),
   invoice_terms    text,
   payment_qr_text  text,
@@ -203,6 +204,7 @@ alter table companies alter column reset_numbering_fiscal_year set default true;
 update companies set reset_numbering_fiscal_year = true where not reset_numbering_fiscal_year;
 alter table companies drop constraint if exists companies_fiscal_numbering_required;
 alter table companies add constraint companies_fiscal_numbering_required check (reset_numbering_fiscal_year);
+alter table companies add column if not exists allow_admin_chronological_bypass boolean not null default false;
 alter table companies add column if not exists print_format text not null default 'A5';
 alter table companies add column if not exists invoice_terms text;
 alter table companies add column if not exists payment_qr_text text;

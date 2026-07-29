@@ -101,6 +101,10 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   }
 
   const handleSaveDraft = async () => {
+    if (voucher && voucher.status !== 'Draft') {
+      setError('Completed vouchers cannot be saved as draft.')
+      return
+    }
     setError('')
     setSaving(true)
     try {
@@ -130,6 +134,9 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     } finally { setSaving(false) }
   }
 
+  const canSaveDraft = !voucher || voucher.status === 'Draft'
+  const completedEdit = !!voucher && voucher.status !== 'Draft'
+
   return <Dialog open={open} onOpenChange={value => !value && onClose()}>
     <DialogContent className="voucher-dialog max-w-md">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
@@ -144,8 +151,8 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       <DialogFooter>
         {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}><Trash2 className="mr-1 h-4 w-4" />Delete Draft</Button>}
         <Button variant="outline" onClick={onClose}>Cancel</Button>
-        <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
-        <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
+        {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+        <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

@@ -1,4 +1,4 @@
-import { lazy, useState, useEffect, useRef } from 'react'
+import { lazy, useState, useEffect, useMemo, useRef } from 'react'
 import { Plus, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
@@ -17,6 +17,8 @@ import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { Textarea } from '@/components/ui/misc'
 import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
+import { notifyError } from '@/lib/notifications'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
@@ -210,6 +212,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
   const allocationAccounts = accounts.filter(account => !moneyIds.has(account.id) && (!account.is_archived || (!!voucher && selectedIds.has(account.id))))
   const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
+  const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
   const partyAccountIds = new Set(parties.filter(party => party.type === (isReceipt ? 'customer' : 'supplier')).map(party => party.account_id))
   const invoiceById = new Map(vouchers.map(entry => [entry.id, entry]))
   const selectedMoneyAccount = accounts.find(account => account.id === moneyAccountId)
@@ -246,7 +249,13 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         setError('')
       }
     } catch (e: unknown) {
-      setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
+      const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
+      if (friendlyDateError) {
+        setError(friendlyDateError)
+        notifyError(friendlyDateError)
+      } else {
+        setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
+      }
     } finally { submissionLock.release(); setSaving(false) }
   }
 
@@ -259,6 +268,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   }
 
   const handleSaveDraft = async () => {
+    if (voucher && voucher.status !== 'Draft') {
+      setError('Completed vouchers cannot be saved as draft.')
+      return
+    }
     setError('')
     setSaving(true)
     try {
@@ -277,13 +290,16 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     finally { setSaving(false) }
   }
 
+  const canSaveDraft = !voucher || voucher.status === 'Draft'
+  const completedEdit = !!voucher && voucher.status !== 'Draft'
+
   return (
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
@@ -326,8 +342,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
-          <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
+          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -341,7 +357,7 @@ interface JournalFormProps { open: boolean; onClose: () => void; voucher?: Vouch
 interface JLine { account_id: string; debit: number; credit: number }
 
 export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
-  const { company, accounts, accountCategories, parties, saveJournal, updateJournal, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
+  const { company, accounts, accountCategories, parties, vouchers, saveJournal, updateJournal, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const manualJournalNumbering = company?.journal_numbering_mode === 'manual'
   const partyByAccount = new Map(parties.map(party => [party.account_id, party]))
   const journalAccounts = accounts.filter(account => {
@@ -391,6 +407,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const totalCredit = round2(jLines.reduce((s, l) => s + (l.credit || 0), 0))
   const diff = round2(totalDebit - totalCredit)
   const balanced = Math.abs(diff) < 0.005
+  const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type: 'Journal', dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: company.journal_numbering_mode === 'manual' ? journalInvoiceNo : voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status, journalInvoiceNo])
 
   const updateLine = (idx: number, field: keyof JLine, value: string | number) => {
     const next = [...jLines]
@@ -422,7 +439,13 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         setError('')
       }
     } catch (e: unknown) {
-      setError(publicErrorMessage(e, 'saving journal voucher'))
+      const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
+      if (friendlyDateError) {
+        setError(friendlyDateError)
+        notifyError(friendlyDateError)
+      } else {
+        setError(publicErrorMessage(e, 'saving journal voucher'))
+      }
     } finally { submissionLock.release(); setSaving(false) }
   }
 
@@ -435,6 +458,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   }
 
   const handleSaveDraft = async () => {
+    if (voucher && voucher.status !== 'Draft') {
+      setError('Completed vouchers cannot be saved as draft.')
+      return
+    }
     setError('')
     setSaving(true)
     try {
@@ -451,6 +478,9 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     finally { setSaving(false) }
   }
 
+  const canSaveDraft = !voucher || voucher.status === 'Draft'
+  const completedEdit = !!voucher && voucher.status !== 'Draft'
+
   return (
     <>
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
@@ -461,7 +491,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </p>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
             {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" tabIndex={-1} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
 
@@ -517,8 +547,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
-          <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
+          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

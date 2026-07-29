@@ -17,6 +17,8 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
+import { notifyError } from '@/lib/notifications'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
@@ -175,6 +177,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     type, original, party_account_id: partyAccountId, vat_rate: manualVatRate, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? partyAccountId : settlementAccountId,
     restock_items: true, stock_condition: stockCondition, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
+  const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
 
   const save = async (status: Voucher['status'] = 'Completed') => {
     setError('')
@@ -210,7 +213,15 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setReason('')
         setError('')
       }
-    } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`)) } finally { submissionLock.release(); setSaving(false) }
+    } catch (e: unknown) {
+      const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
+      if (friendlyDateError) {
+        setError(friendlyDateError)
+        notifyError(friendlyDateError)
+      } else {
+        setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`))
+      }
+    } finally { submissionLock.release(); setSaving(false) }
   }
 
   const deleteDraft = async () => {
@@ -222,6 +233,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   }
 
   const saveDraft = async () => {
+    if (voucher && voucher.status !== 'Draft') {
+      setError('Completed vouchers cannot be saved as draft.')
+      return
+    }
     setError('')
     setSaving(true)
     try {
@@ -244,6 +259,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const activeSettlementAccountId = settlementMode === 'party' ? partyAccountId : settlementAccountId
   const activeSettlementAccount = accounts.find(account => account.id === activeSettlementAccountId)
   const documentName = vatEnabled ? (isSalesReturn ? 'Credit Note' : 'Debit Note') : type
+  const canSaveDraft = !voucher || voucher.status === 'Draft'
+  const completedEdit = !!voucher && voucher.status !== 'Draft'
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
@@ -251,7 +268,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} /></div>
+            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
 
@@ -284,8 +301,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={deleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>
-          <Button onClick={() => save('Completed')} disabled={saving}>{saving ? 'Saving...' : 'Complete Voucher'}</Button>
+          {canSaveDraft && <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          <Button onClick={() => save('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

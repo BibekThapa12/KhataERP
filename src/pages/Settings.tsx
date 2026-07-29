@@ -47,7 +47,7 @@ const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
-  'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
+  'allow_admin_chronological_bypass', 'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
   'fiscal_year_configured',
 ] as const
 
@@ -239,6 +239,7 @@ export function SettingsPage() {
   const [salesReturnPrefix, setSalesReturnPrefix] = useState(company?.sales_return_prefix ?? 'SR-')
   const [purchaseReturnPrefix, setPurchaseReturnPrefix] = useState(company?.purchase_return_prefix ?? 'PR-')
   const [journalNumberingMode, setJournalNumberingMode] = useState<'auto' | 'manual'>(company?.journal_numbering_mode ?? 'auto')
+  const [allowAdminChronologicalBypass, setAllowAdminChronologicalBypass] = useState(company?.allow_admin_chronological_bypass ?? false)
   const [printFormat, setPrintFormat] = useState(company?.print_format ?? 'A5')
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
@@ -300,6 +301,7 @@ export function SettingsPage() {
     setSalesReturnPrefix(company?.sales_return_prefix ?? 'SR-')
     setPurchaseReturnPrefix(company?.purchase_return_prefix ?? 'PR-')
     setJournalNumberingMode(company?.journal_numbering_mode ?? 'auto')
+    setAllowAdminChronologicalBypass(company?.allow_admin_chronological_bypass ?? false)
     setPrintFormat(company?.print_format ?? 'A5')
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
@@ -341,6 +343,7 @@ export function SettingsPage() {
         purchase_return_prefix: purchaseReturnPrefix.trim() || 'PR-',
         journal_numbering_mode: journalNumberingMode,
         reset_numbering_fiscal_year: true,
+        allow_admin_chronological_bypass: allowAdminChronologicalBypass,
         print_format: printFormat,
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
@@ -929,6 +932,19 @@ export function SettingsPage() {
               <span>
                 <span className="block text-sm font-medium">Reset numbering every fiscal year</span>
                 <span className="block text-xs text-muted-foreground">Required. New voucher numbers start from 0001 on or after the fiscal year start date.</span>
+              </span>
+            </label>
+            <label htmlFor="admin-chronology-bypass" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
+              <input
+                id="admin-chronology-bypass"
+                type="checkbox"
+                checked={allowAdminChronologicalBypass}
+                onChange={event => setAllowAdminChronologicalBypass(event.target.checked)}
+                className="mt-1"
+              />
+              <span>
+                <span className="block text-sm font-medium">Allow Administrator to bypass chronological validation</span>
+                <span className="block text-xs text-muted-foreground">When enabled, company Admins can confirm and audit-save automatic vouchers outside voucher-date order.</span>
               </span>
             </label>
             <div className="grid gap-3 sm:grid-cols-2">

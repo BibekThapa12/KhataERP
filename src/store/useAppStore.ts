@@ -9,7 +9,7 @@ import {
   updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, updateItemsByIds, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
   fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
-  fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin,
+  fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin, logAppEvent,
 } from '@/lib/supabase'
 import {
   applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
@@ -23,6 +23,7 @@ import { bankAccounts } from '@/lib/banks'
 import { toBaseQty, toBaseRate } from '@/lib/units'
 import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
 import { previewNextDraftNumber, voucherNumberingPeriod, voucherNumberingScope } from '@/lib/voucherNumbers'
+import { validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { SYSTEM_ACCOUNT_DESTINATIONS, systemAccountGroupLevels } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { assertDateInSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
@@ -192,6 +193,50 @@ function voucherDateFields(date_bs: string, company: Company) {
     date_bs,
     date_bs_key: makeBsKey(date_bs),
   }
+}
+
+function activeUserIsCompanyAdmin(state: AppState) {
+  return !!state.companyMemberships.find(entry =>
+    entry.company_id === state.activeCompanyId &&
+    entry.status === 'active' &&
+    entry.role === 'Admin'
+  )
+}
+
+async function enforceVoucherDateOrder(state: AppState, params: { type: Voucher['type']; date_bs: string; status?: Voucher['status']; currentVoucherId?: string; invoice_no?: string }) {
+  const company = state.company
+  if (!company) throw new Error('No company')
+  const status = params.status || 'Completed'
+  if (status === 'Draft') return
+  const result = validateVoucherDateForNumbering({
+    company,
+    vouchers: state.vouchers,
+    type: params.type,
+    dateBs: params.date_bs,
+    currentVoucherId: params.currentVoucherId,
+    invoiceNo: params.invoice_no,
+    status,
+  })
+  if (result.valid) return
+
+  const canBypass = !!company.allow_admin_chronological_bypass && activeUserIsCompanyAdmin(state)
+  if (!canBypass) throw new Error(result.message || 'Voucher date is not valid for this voucher number.')
+
+  const confirmed = typeof window !== 'undefined' && window.confirm(`${result.message}\n\nAdministrator override is enabled. Do you want to bypass chronological validation and record this in the audit log?`)
+  if (!confirmed) throw new Error(result.message || 'Voucher date is not valid for this voucher number.')
+  const reason = typeof window !== 'undefined'
+    ? window.prompt('Reason for chronological bypass (optional):') || ''
+    : ''
+  await logAppEvent('voucher_chronology_bypass', company.id, {
+    voucher_type: params.type,
+    voucher_number: params.invoice_no || state.vouchers.find(voucher => voucher.id === params.currentVoucherId)?.invoice_no || null,
+    previous_voucher: result.previous?.invoice_no || null,
+    previous_date: result.previous?.date_bs || null,
+    next_voucher: result.next?.invoice_no || null,
+    next_date: result.next?.date_bs || null,
+    new_date: params.date_bs,
+    reason: reason.trim() || null,
+  })
 }
 
 function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
@@ -1033,6 +1078,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { effectiveParams, data }
     })
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Sales', date_bs: effectiveParams.date_bs, status })
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
@@ -1061,6 +1107,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { effectiveParams, data: buildPurchaseVoucherData(effectiveParams) }
     })
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Purchase', date_bs: effectiveParams.date_bs, status })
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Purchase', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, supplier_invoice_no: effectiveParams.supplier_invoice_no?.trim() || null, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
@@ -1092,6 +1139,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { isCash, validAllocations, data }
     })
     const dateFields = voucherDateFields(date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Receipt', date_bs, status })
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Receipt', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
       lines: data.lines,
@@ -1122,6 +1170,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       return { isCash, validAllocations, data }
     })
     const dateFields = voucherDateFields(date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Payment', date_bs, status })
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Payment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
       lines: data.lines,
@@ -1150,6 +1199,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(date_bs, company)
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
+    await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, invoice_no: manualInvoiceNumber })
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false, status },
       lines,
@@ -1181,6 +1231,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     return { original, partyAccountId, data }
     })
     const dateFields = voucherDateFields(params.date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: params.type, date_bs: params.date_bs, status })
     const newVoucher = await insertVoucher({
       voucher: {
         company_id: company.id, type: params.type, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
@@ -1223,6 +1274,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildSalesVoucherData(effectiveParams)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Sales', date_bs: effectiveParams.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
@@ -1254,6 +1306,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
     const data = buildPurchaseVoucherData(effectiveParams)
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Purchase', date_bs: effectiveParams.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
@@ -1286,6 +1339,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildReceiptData(validAllocations, deposit_to_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Receipt', date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
@@ -1354,6 +1408,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildPaymentData(validAllocations, paid_from_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
+    await enforceVoucherDateOrder(get(), { type: 'Payment', date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
@@ -1384,6 +1439,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const dateFields = voucherDateFields(date_bs, company)
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
+    await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, currentVoucherId: id, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : existing.invoice_no })
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false, status },
@@ -1416,6 +1472,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const partyAccountId = original?.party_account_id || params.party_account_id || null
     const data = buildReturnVoucherData({ ...params, items: markServiceInvoiceItems(params.items, get().items), original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
+    await enforceVoucherDateOrder(get(), { type: params.type, date_bs: params.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
     const updated = await updateVoucher({
       id,
       voucher: {
