@@ -189,7 +189,9 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
+  const [dateInvalid, setDateInvalid] = useState(false)
 
   useEffect(() => {
     if (open && voucher) {
@@ -201,10 +203,11 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       setAllocations(draft?.allocations?.length ? draft.allocations : restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }])
       setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
+      setDateInvalid(false)
     } else if (open) {
       setMoneyAccountId(cashAccountId)
     } else if (!open) {
-      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
     }
   }, [open, voucher, cashAccountId, isReceipt, company])
 
@@ -213,6 +216,9 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const allocationAccounts = accounts.filter(account => !moneyIds.has(account.id) && (!account.is_archived || (!!voucher && selectedIds.has(account.id))))
   const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
+  useEffect(() => {
+    if (dateInvalid && dateValidation.valid) setDateInvalid(false)
+  }, [dateInvalid, dateValidation.valid])
   const partyAccountIds = new Set(parties.filter(party => party.type === (isReceipt ? 'customer' : 'supplier')).map(party => party.account_id))
   const invoiceById = new Map(vouchers.map(entry => [entry.id, entry]))
   const selectedMoneyAccount = accounts.find(account => account.id === moneyAccountId)
@@ -225,6 +231,14 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const updateInvoiceAllocation = (allocationIndex: number, invoiceId: string, value: string) => setAllocations(current => current.map((allocation, index) => index === allocationIndex ? { ...allocation, invoice_allocations: allocation.invoice_allocations.map(row => row.invoice_voucher_id === invoiceId ? { ...row, amount: value } : row) } : allocation))
 
   const handleSave = async (status: Voucher['status'] = 'Completed') => {
+    if (status === 'Completed' && !dateValidation.valid) {
+      const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
+      setDateInvalid(true)
+      setError(message)
+      notifyError(message)
+      setTimeout(() => dateInputRef.current?.focus(), 0)
+      return
+    }
     const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount), invoice_allocations: allocation.invoice_allocations.map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: Number(row.amount) })).filter(row => row.amount > 0) }))
     if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
@@ -247,12 +261,15 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         setMoneyAccountId(cashAccountId)
         setNarration('')
         setError('')
+        setDateInvalid(false)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
+        setDateInvalid(true)
         setError(friendlyDateError)
         notifyError(friendlyDateError)
+        setTimeout(() => dateInputRef.current?.focus(), 0)
       } else {
         setError(publicErrorMessage(e, `saving ${type.toLowerCase()}`))
       }
@@ -299,7 +316,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
@@ -375,7 +392,9 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [dateInvalid, setDateInvalid] = useState(false)
   const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
 
@@ -391,6 +410,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       })))
       setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
+      setDateInvalid(false)
     } else if (open) {
       setJournalInvoiceNo('')
     } else if (!open) {
@@ -400,6 +420,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       setNarration('')
       setError('')
       setLedgerLineIndex(null)
+      setDateInvalid(false)
     }
   }, [open, voucher, company])
 
@@ -408,6 +429,9 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const diff = round2(totalDebit - totalCredit)
   const balanced = Math.abs(diff) < 0.005
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type: 'Journal', dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: company.journal_numbering_mode === 'manual' ? journalInvoiceNo : voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status, journalInvoiceNo])
+  useEffect(() => {
+    if (dateInvalid && dateValidation.valid) setDateInvalid(false)
+  }, [dateInvalid, dateValidation.valid])
 
   const updateLine = (idx: number, field: keyof JLine, value: string | number) => {
     const next = [...jLines]
@@ -420,6 +444,17 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const handleSave = async (status: Voucher['status'] = 'Completed') => {
     if (manualJournalNumbering && !journalInvoiceNo.trim()) { setError('Enter the Journal voucher number.'); return }
     if (journalInvoiceNo.trim().length > 100) { setError('Journal voucher number cannot exceed 100 characters.'); return }
+    if (status === 'Completed' && !dateValidation.valid) {
+      const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
+      const isDateProblem = !!dateValidation.previous || !!dateValidation.next || /date/i.test(dateValidation.message || '')
+      if (isDateProblem) {
+        setDateInvalid(true)
+        setTimeout(() => dateInputRef.current?.focus(), 0)
+      }
+      setError(message)
+      notifyError(message)
+      return
+    }
     const validLines = jLines.filter(l => l.account_id && (l.debit > 0 || l.credit > 0))
     if (validLines.length < 2) { setError('Add at least two lines.'); return }
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
@@ -437,12 +472,15 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
         setNarration('')
         setError('')
+        setDateInvalid(false)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
+        setDateInvalid(true)
         setError(friendlyDateError)
         notifyError(friendlyDateError)
+        setTimeout(() => dateInputRef.current?.focus(), 0)
       } else {
         setError(publicErrorMessage(e, 'saving journal voucher'))
       }
@@ -491,7 +529,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </p>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
             {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" tabIndex={-1} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
 

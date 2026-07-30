@@ -54,9 +54,11 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const [manualVatRate, setManualVatRate] = useState(vatEnabled ? 13 : 0)
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
+  const [dateInvalid, setDateInvalid] = useState(false)
   const submissionLock = useRef(new SubmissionLock()).current
   const [error, setError] = useState('')
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
 
   const emptyManualLine = useCallback((): ReturnLine => ({
     item_id: '', item_name: '', unit: '', entry_unit: '', conversion_factor: 1,
@@ -107,7 +109,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
   useEffect(() => {
     if (!open) {
-      setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError('')
+      setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError(''); setDateInvalid(false)
       return
     }
     if (voucher) {
@@ -179,8 +181,20 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   }) : null
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
 
+  useEffect(() => {
+    if (dateInvalid && dateValidation.valid) setDateInvalid(false)
+  }, [dateInvalid, dateValidation.valid])
+
   const save = async (status: Voucher['status'] = 'Completed') => {
     setError('')
+    if (status === 'Completed' && !dateValidation.valid) {
+      const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
+      setDateInvalid(true)
+      setError(message)
+      notifyError(message)
+      setTimeout(() => dateInputRef.current?.focus(), 0)
+      return
+    }
     if (!original && !partyAccountId) return setError(`Select a ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular}.`)
     if (!reason.trim()) return setError('Enter the reason for the return.')
     if (!selectedItems.length) return setError('Enter a quantity for at least one item.')
@@ -212,12 +226,15 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setManualVatRate(vatEnabled ? 13 : 0)
         setReason('')
         setError('')
+        setDateInvalid(false)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
+        setDateInvalid(true)
         setError(friendlyDateError)
         notifyError(friendlyDateError)
+        setTimeout(() => dateInputRef.current?.focus(), 0)
       } else {
         setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return`))
       }
@@ -268,7 +285,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">
-            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} /></div>
+            <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
 

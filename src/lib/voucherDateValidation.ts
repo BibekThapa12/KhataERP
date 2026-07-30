@@ -10,8 +10,10 @@ export type VoucherDateValidationResult = {
   next?: Voucher
 }
 
-export const PREVIOUS_VOUCHER_DATE_ERROR = 'Voucher date must be the same as or later than the previous voucher date.'
-export const NEXT_VOUCHER_DATE_ERROR = 'Voucher date must be the same as or earlier than the next voucher date.'
+export const PREVIOUS_VOUCHER_DATE_ERROR = 'Cannot save voucher. Voucher date must be the same as or later than the previous voucher date.'
+export const NEXT_VOUCHER_DATE_ERROR = 'Cannot save voucher. Voucher date must be the same as or earlier than the next voucher date.'
+export const PREVIOUS_VOUCHER_DATE_FIELD_HINT = 'Date must be on or after the previous voucher date.'
+export const NEXT_VOUCHER_DATE_FIELD_HINT = 'Date must be on or before the next voucher date.'
 
 const CHRONO_TYPES = new Set<VoucherType>(['Sales', 'Purchase', 'Sales Return', 'Purchase Return', 'Receipt', 'Payment', 'Journal'])
 
@@ -125,4 +127,11 @@ export function friendlyVoucherDateError(error: unknown, validation?: VoucherDat
   if (/cannot be later than Voucher/i.test(message)) return NEXT_VOUCHER_DATE_ERROR
   if (/Date must be inside selected financial year|Date cannot be before the company books start date/i.test(message)) return message
   return null
+}
+
+export function voucherDateFieldHint(validation?: VoucherDateValidationResult): string | false {
+  if (!validation || validation.valid) return false
+  if (validation.previous) return PREVIOUS_VOUCHER_DATE_FIELD_HINT
+  if (validation.next) return NEXT_VOUCHER_DATE_FIELD_HINT
+  return true
 }

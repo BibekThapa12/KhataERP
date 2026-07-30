@@ -54,10 +54,12 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [dateInvalid, setDateInvalid] = useState(false)
   const [showPartyForm, setShowPartyForm] = useState(false)
   const [showItemForm, setShowItemForm] = useState(false)
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const dateInputRef = useRef<HTMLInputElement | null>(null)
   const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const pendingLineFocus = useRef<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
@@ -84,6 +86,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
 
   useEffect(() => {
+    if (dateInvalid && dateValidation.valid) setDateInvalid(false)
+  }, [dateInvalid, dateValidation.valid])
+
+  useEffect(() => {
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
         dateBs: string; isCash: boolean; partyAccountId: string; creditDays: number; supplierInvoiceNo: string; lines: LineItem[]; vatRate: number; discount: number; discountMode: DiscountMode; narration: string
@@ -104,10 +110,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setDiscountMode(draft?.discountMode ?? 'flat')
       setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
+      setDateInvalid(false)
     } else if (!open) {
       setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
       setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
-      setDiscount(0); setDiscountMode('flat'); setNarration(''); setError('')
+      setDiscount(0); setDiscountMode('flat'); setNarration(''); setError(''); setDateInvalid(false)
     }
   }, [open, voucher, vatEnabled, items, parties, company])
 
@@ -166,6 +173,14 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   }, [lines.length])
 
   const handleSave = async (status: Voucher['status'] = 'Completed') => {
+    if (status === 'Completed' && !dateValidation.valid) {
+      const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
+      setDateInvalid(true)
+      setError(message)
+      notifyError(message)
+      setTimeout(() => dateInputRef.current?.focus(), 0)
+      return
+    }
     setError('')
     const validLines = lines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
     if (!lines.length || validLines.length !== lines.length) { setError('Select an item and enter a quantity greater than zero for every line. Rate can be zero but cannot be negative.'); return }
@@ -217,14 +232,17 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setDiscountMode('flat')
         setNarration('')
         setError('')
+        setDateInvalid(false)
         itemTriggerRefs.current = []
         pendingLineFocus.current = null
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
+        setDateInvalid(true)
         setError(friendlyDateError)
         notifyError(friendlyDateError)
+        setTimeout(() => dateInputRef.current?.focus(), 0)
       } else {
         setError(publicErrorMessage(e, `saving ${type.toLowerCase()} invoice`))
       }
@@ -289,7 +307,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             <div className="flex flex-wrap items-start gap-3">
               <div className="w-full space-y-1.5 sm:w-40">
                 <Label>Date</Label>
-                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={!dateValidation.valid ? dateValidation.message : false} />
+                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} />
               </div>
               <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
               {!isSales && <div className="w-full space-y-1.5 sm:w-48">
