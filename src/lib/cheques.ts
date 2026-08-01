@@ -1,4 +1,4 @@
-import type { Cheque, ChequePermission, ChequeStatus, CompanyModule } from '@/types'
+import type { Cheque, ChequeDirection, ChequePermission, ChequeStatus, CompanyModule } from '@/types'
 import { bsToAd, makeBsKey, todayBs } from '@/lib/nepaliDate'
 
 export const ALL_CHEQUE_PERMISSIONS: ChequePermission[] = ['cheque.view','cheque.create','cheque.edit','cheque.mark_cleared','cheque.mark_bounced','cheque.cancel','cheque.manage_banks','cheque.view_parties','cheque.view_reports']
@@ -39,8 +39,8 @@ export function validateChequeInput(input: Pick<Cheque,'cheque_number'|'account_
 
 export function canTransitionCheque(from:ChequeStatus,to:ChequeStatus) { return from==='pending' && ['cleared','bounced','cancelled'].includes(to) }
 
-export function filterPendingCheques(cheques:Cheque[], quick:string, today=todayBs()) {
-  return cheques.filter(cheque => {
+export function filterPendingCheques(cheques:Cheque[], quick:string, today=todayBs(), direction:ChequeDirection='received') {
+  return cheques.filter(cheque => (cheque.direction || 'received') === direction).filter(cheque => {
     const relative=chequeRelativeState(cheque,today)
     if (quick==='overdue') return relative.key==='overdue'
     if (quick==='today') return relative.key==='today'
@@ -53,8 +53,8 @@ export function filterPendingCheques(cheques:Cheque[], quick:string, today=today
   })
 }
 
-export function filterSettledCheques(cheques: Cheque[], status: ChequeStatus | 'all' = 'all') {
-  const settled = cheques.filter(cheque => cheque.status !== 'pending' && (status === 'all' || cheque.status === status))
+export function filterSettledCheques(cheques: Cheque[], status: ChequeStatus | 'all' = 'all', direction:ChequeDirection='received') {
+  const settled = cheques.filter(cheque => (cheque.direction || 'received') === direction && cheque.status !== 'pending' && (status === 'all' || cheque.status === status))
   const settledAt = (cheque: Cheque) => cheque.cleared_at || cheque.bounced_at || cheque.cancelled_at || cheque.updated_at || cheque.created_at || ''
   return settled.sort((left, right) => settledAt(right).localeCompare(settledAt(left)))
 }

@@ -157,7 +157,7 @@ interface AppState {
   saveSalesVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   savePurchaseVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
-  savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
+  savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string; contra_charge_amount?: number; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
   saveSimpleEntry: (params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
   saveContra: (params: ContraSaveParams, status?: Voucher['status']) => Promise<void>
@@ -1201,6 +1201,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }, { category: 'cache' })
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     notifySuccess(status === 'Draft' ? 'Payment draft saved' : 'Payment completed', newVoucher.invoice_no)
+    return newVoucher
     })
   },
 

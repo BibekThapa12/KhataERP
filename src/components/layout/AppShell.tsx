@@ -106,9 +106,22 @@ const NAV_SECTIONS: {
   {
     label: 'Cheque Management',
     items: [
-      { to: '/cheques/new', label: 'Create Cheque', Icon: Plus },
-      { to: '/cheques/pending', label: 'Pending Cheques', Icon: Clock3 },
-      { to: '/cheques/settled', label: 'Settled Cheques', Icon: CheckCircle2 },
+      {
+        kind: 'group', id: 'incoming-cheques', label: 'Incoming Cheques', Icon: ArrowDownCircle,
+        children: [
+          { to: '/cheques/received/new', label: 'Receive Cheque', Icon: Plus },
+          { to: '/cheques/received/pending', label: 'Pending Cheques', Icon: Clock3 },
+          { to: '/cheques/received/settled', label: 'Settled Cheques', Icon: CheckCircle2 },
+        ],
+      },
+      {
+        kind: 'group', id: 'outgoing-cheques', label: 'Outgoing Cheques', Icon: ArrowUpCircle,
+        children: [
+          { to: '/cheques/issued/new', label: 'Issue Cheque', Icon: Plus },
+          { to: '/cheques/issued/pending', label: 'Pending Cheques', Icon: Clock3 },
+          { to: '/cheques/issued/settled', label: 'Settled Cheques', Icon: CheckCircle2 },
+        ],
+      },
       { to: '/cheques/banks', label: 'Banks', Icon: Landmark },
       { to: '/cheques/parties', label: 'Parties', Icon: Users },
     ],
@@ -134,8 +147,8 @@ function itemIsActive(item: NavItem, pathname: string, search: string) {
 }
 
 function activeReportGroupId(pathname: string, search: string) {
-  const reports = NAV_SECTIONS.find(section => section.label === 'Reports')
-  const group = reports?.items.find(item => item.kind === 'group' && itemIsActive(item, pathname, search))
+  const group = NAV_SECTIONS.flatMap(section => section.items)
+    .find(item => item.kind === 'group' && itemIsActive(item, pathname, search))
   return group?.kind === 'group' ? group.id : null
 }
 
@@ -438,14 +451,22 @@ export function AppShell() {
             if (section.label === 'Cheque Management' && !showChequeNavigation) return null
             const collapsible = section.label !== 'Overview'
             const expanded = !collapsible || openSections.has(section.label)
-            const visibleItems = section.items.filter(item => {
-              if (item.kind === 'group') return true
-              if (!vatEnabled && item.to === '/vat-report') return false
-              if (section.label !== 'Cheque Management') return true
-              if (item.to === '/cheques/new') return chequeAccess.canWrite && chequePermissions.includes('cheque.create')
+            const chequeItemVisible = (item: NavLinkItem) => {
+              if (item.to.endsWith('/new')) return chequeAccess.canWrite && chequePermissions.includes('cheque.create')
               if (item.to === '/cheques/banks') return chequeAccess.canWrite && chequePermissions.includes('cheque.manage_banks')
               if (item.to === '/cheques/parties') return chequePermissions.includes('cheque.view_parties')
               return chequePermissions.includes('cheque.view')
+            }
+            const visibleItems = section.items.map(item => {
+              if (item.kind === 'group' && section.label === 'Cheque Management') {
+                return { ...item, children: item.children.filter(chequeItemVisible) }
+              }
+              return item
+            }).filter(item => {
+              if (item.kind === 'group') return item.children.length > 0
+              if (!vatEnabled && item.to === '/vat-report') return false
+              if (section.label !== 'Cheque Management') return true
+              return chequeItemVisible(item)
             })
             return <div key={section.label}>
               {collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase()}`} onClick={() => toggleSection(section.label)} className="mb-1 flex w-full items-center rounded-md px-2.5 py-2 text-left text-xs font-medium uppercase tracking-wider text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white">

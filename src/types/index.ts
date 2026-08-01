@@ -305,9 +305,12 @@ export interface ChequeBank {
   account_holder_name?:string; contact_number?:string; notes?:string; is_active:boolean; created_by?:string; updated_by?:string; created_at?:string; updated_at?:string;
 }
 export type ChequeStatus = 'pending'|'cleared'|'bounced'|'cancelled'
+export type ChequeDirection = 'received'|'issued'
 export interface Cheque {
-  id:string; company_id:string; cheque_number:string; bank_id:string; account_number:string; party_ledger_id:string; amount:number;
+  id:string; company_id:string; cheque_number:string; bank_id?:string|null; account_number:string; party_ledger_id:string; amount:number;
+  direction:ChequeDirection; source_account_id?:string|null;
   issue_date:string; issue_date_bs:string; issue_date_bs_key:number; due_date:string; due_date_bs:string; due_date_bs_key:number;
+  cleared_date_bs?:string|null; cleared_date_bs_key?:number|null;
   notes?:string; status:ChequeStatus; cleared_at?:string; bounced_at?:string; cancelled_at?:string; status_reason?:string;
   linked_voucher_id?:string; cleared_to_account_id?:string; created_by?:string; updated_by?:string; created_at?:string; updated_at?:string;
 }

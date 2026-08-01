@@ -4,8 +4,8 @@
 -- Do not run individual migrations after applying this bootstrap.
 
 -- =============================================================================
+
 -- BEGIN SYNCED DB FILE: supabase-schema.sql
--- =============================================================================
 -- ═══════════════════════════════════════════════════════════════════════════
 --  Khata ERP — Supabase Schema
 --  Run this entire file in your Supabase project's SQL Editor.
@@ -1732,12 +1732,9 @@ notify pgrst, 'reload schema';
 --   VITE_SUPABASE_URL      = https://your-project-id.supabase.co
 --   VITE_SUPABASE_ANON_KEY = your-anon-public-key
 -- Both are in: Supabase dashboard → Settings → API
-
 -- END SYNCED DB FILE: supabase-schema.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-masters-migration.sql
--- =============================================================================
 -- KhataERP Masters migration
 -- Run this file once in Supabase SQL Editor for an existing project.
 
@@ -1853,12 +1850,9 @@ create policy "master_change_logs_developer_select" on master_change_logs
   for select using (is_developer_admin());
 
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-masters-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-returns-migration.sql
--- =============================================================================
 -- KhataERP Sales Return / Purchase Return migration
 -- Run once in Supabase SQL Editor after the main schema or Masters migration.
 
@@ -1917,12 +1911,9 @@ create index if not exists idx_iitems_source
   on invoice_items(source_invoice_item_id) where source_invoice_item_id is not null;
 
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-returns-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-integrity-migration.sql
--- =============================================================================
 -- Apply after supabase-schema.sql.
 -- Existing duplicate invoice numbers are repaired deterministically: the oldest
 -- voucher keeps its number and later duplicates receive numbers above the
@@ -2012,12 +2003,9 @@ deferrable initially deferred
 for each row execute function public.validate_voucher_balance();
 
 commit;
-
 -- END SYNCED DB FILE: supabase-integrity-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-fiscal-voucher-numbering-migration.sql
--- =============================================================================
 -- Apply after supabase-integrity-migration.sql.
 -- Allows the same voucher number to be reused in different fiscal years while
 -- preserving uniqueness within each company, voucher type, and numbering period.
@@ -2038,12 +2026,9 @@ create unique index if not exists vouchers_company_type_period_invoice_no_unique
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-fiscal-voucher-numbering-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-stock-condition-migration.sql
--- =============================================================================
 -- Tracks stock condition without changing historical quantities or valuation.
 -- Existing stock movements are classified as saleable.
 begin;
@@ -2070,12 +2055,9 @@ create index if not exists idx_slines_item_condition
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-stock-condition-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-alternative-units-migration.sql
--- =============================================================================
 -- Main/alternative unit support. Apply after the base schema.
 begin;
 
@@ -2106,12 +2088,9 @@ alter table public.invoice_items drop constraint if exists invoice_items_convers
 alter table public.invoice_items add constraint invoice_items_conversion_factor_check check (conversion_factor >= 1);
 
 commit;
-
 -- END SYNCED DB FILE: supabase-alternative-units-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-category-hierarchy-migration.sql
--- =============================================================================
 -- Three-level account and item category hierarchy.
 begin;
 
@@ -2206,12 +2185,9 @@ create trigger item_category_hierarchy_guard before insert or update of parent_c
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-category-hierarchy-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-sundry-parties-migration.sql
--- =============================================================================
 -- Apply after supabase-category-hierarchy-migration.sql.
 -- Standardizes every party ledger under Sundry Debtors or Sundry Creditors.
 begin;
@@ -2318,12 +2294,9 @@ where lower(btrim(old_category.name)) in ('customer', 'customers', 'supplier', '
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-sundry-parties-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-multiple-bank-accounts-migration.sql
--- =============================================================================
 -- Apply after supabase-category-hierarchy-migration.sql.
 begin;
 
@@ -2362,12 +2335,9 @@ where v.settlement_account_id is null and v.type in ('Receipt','Payment','Sales 
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-multiple-bank-accounts-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-system-account-groups-migration.sql
--- =============================================================================
 -- Apply after the category hierarchy, Sundry parties, and multiple-bank migrations.
 -- Seeds and protects KhataERP's canonical account-group hierarchy.
 begin;
@@ -2616,12 +2586,9 @@ for each row execute function public.seed_system_account_groups_for_company();
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-system-account-groups-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-employee-staff-account-category-migration.sql
--- =============================================================================
 -- Default Employee/Staff loan and advance account category.
 -- Adds a system Asset group under Loans & Advances (Asset) for every company.
 
@@ -2685,12 +2652,9 @@ begin
 end $$;
 
 commit;
-
 -- END SYNCED DB FILE: supabase-employee-staff-account-category-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-retained-earnings-ledger-migration.sql
--- =============================================================================
 -- Apply after supabase-system-account-groups-migration.sql.
 -- Creates a real protected Retained Earnings ledger for every company.
 begin;
@@ -2764,12 +2728,9 @@ for each row execute function public.seed_retained_earnings_ledger_for_company()
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-retained-earnings-ledger-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-single-company-per-user-migration.sql
--- =============================================================================
 -- Prevent concurrent session initialization from creating duplicate companies.
 -- Run once in the Supabase SQL Editor. Safe to run repeatedly.
 --
@@ -2872,12 +2833,9 @@ create unique index if not exists companies_user_id_unique
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-single-company-per-user-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-credit-days-migration.sql
--- =============================================================================
 -- Party default credit terms and invoice-specific due-date snapshots.
 -- Apply after supabase-schema.sql. Safe to run more than once.
 begin;
@@ -2915,12 +2873,9 @@ end $$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-credit-days-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-ledger-details-migration.sql
--- =============================================================================
 -- Optional ledger details used by the conditional Ledger Creation form.
 -- Safe to run repeatedly.
 begin;
@@ -2962,12 +2917,9 @@ $$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-ledger-details-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-inventory-valuation-migration.sql
--- =============================================================================
 -- Company-wide perpetual inventory valuation method.
 -- Safe to run more than once.
 begin;
@@ -2995,12 +2947,9 @@ end $$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-inventory-valuation-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-voucher-settlements-migration.sql
--- =============================================================================
 -- KhataERP invoice settlement allocation migration
 -- Safe to run more than once in Supabase SQL Editor.
 
@@ -3057,12 +3006,9 @@ create policy "voucher_settlements_developer_select" on voucher_settlements
   for select using (is_developer_admin());
 
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-voucher-settlements-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-cheque-management-migration.sql
--- =============================================================================
 -- Optional tenant-level Cheque Management module (received cheques only).
 begin;
 
@@ -3293,12 +3239,9 @@ create policy cheque_module_developer_select_events on public.cheque_events for 
 
 commit;
 notify pgrst,'reload schema';
-
 -- END SYNCED DB FILE: supabase-cheque-management-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-atomic-voucher-posting-migration.sql
--- =============================================================================
 -- Phase 4: atomic voucher posting.
 -- Apply after the base schema, integrity, alternative-unit, multiple-bank, and
 -- voucher-settlement migrations. Safe to run repeatedly.
@@ -3675,12 +3618,9 @@ grant execute on function public.voucher_atomic_response(uuid) to authenticated;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-atomic-voucher-posting-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-write-query-optimization-migration.sql
--- =============================================================================
 -- Phase 5: optimize queries executed inside write operations.
 -- Apply after the base schema and Phase 4 atomic voucher migration.
 -- Safe to run repeatedly.
@@ -3875,12 +3815,9 @@ analyze public.voucher_settlements;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-write-query-optimization-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-trigger-rls-optimization-migration.sql
--- =============================================================================
 -- Phases 6 and 7: safe trigger and RLS optimization.
 -- Apply after the system-group, retained-earnings, cheque-management, and
 -- Phase 5 write-query migrations. Safe to run repeatedly.
@@ -4147,12 +4084,9 @@ analyze public.cheque_events;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-trigger-rls-optimization-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-personal-data-protection-migration.sql
--- =============================================================================
 -- Personal-data minimization and self-service account deletion.
 -- Apply after the base, master, and cheque-management migrations. Safe to run repeatedly.
 begin;
@@ -4244,12 +4178,9 @@ grant execute on function public.delete_my_account() to authenticated;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-personal-data-protection-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-production-security-migration.sql
--- =============================================================================
 -- Production error-log access hardening. Safe to run repeatedly.
 begin;
 
@@ -4260,12 +4191,9 @@ drop policy if exists "app_events_own_select" on public.app_events;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-production-security-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-critical-security-hardening-migration.sql
--- =============================================================================
 -- Critical-path authorization and accounting-integrity hardening.
 -- Apply after all existing schema, cheque, retained-earnings, and atomic
 -- voucher migrations. Safe to run repeatedly.
@@ -4939,12 +4867,9 @@ alter default privileges in schema public revoke all on sequences from anon;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-critical-security-hardening-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-developer-error-log-cleanup-migration.sql
--- =============================================================================
 -- Developer-only cleanup for handled frontend error records.
 -- Normal audit and activity events are deliberately preserved.
 begin;
@@ -4979,12 +4904,9 @@ grant execute on function public.clear_frontend_error_logs(uuid) to authenticate
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-developer-error-log-cleanup-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-developer-company-delete-rpc-migration.sql
--- =============================================================================
 -- Developer-only company deletion in dependency order.
 -- Fixes FK failures from account/item/voucher child tables during company cleanup.
 -- Safe to rerun.
@@ -5125,12 +5047,9 @@ grant execute on function public.delete_developer_company(uuid) to authenticated
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-developer-company-delete-rpc-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-developer-schema-status-policy-check-fix.sql
--- =============================================================================
 -- Fix developer dashboard schema-status policy check after multi-company RLS.
 -- Safe to rerun.
 
@@ -5267,12 +5186,9 @@ grant execute on function public.get_developer_schema_status() to authenticated;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-developer-schema-status-policy-check-fix.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-financial-year-control-migration.sql
--- =============================================================================
 -- Canonical company financial-year setup and posting safeguards.
 -- Existing companies are treated as configured; new companies must confirm
 -- their Financial Year and books start date before the first transaction.
@@ -5373,12 +5289,9 @@ for each row execute function public.validate_voucher_financial_year();
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-financial-year-control-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-zero-value-invoices-migration.sql
--- =============================================================================
 -- Allow zero-value Sales, Purchase, Sales Return, and Purchase Return
 -- documents while keeping item and positive-quantity validation compulsory.
 -- Apply after supabase-critical-security-hardening-migration.sql.
@@ -5429,12 +5342,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-zero-value-invoices-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-journal-supplier-invoice-migration.sql
--- =============================================================================
 -- Journal numbering preference and supplier physical invoice references.
 -- Apply after supabase-atomic-voucher-posting-migration.sql.
 -- Safe to run repeatedly.
@@ -5546,12 +5456,9 @@ grant execute on function public.save_voucher_with_document_metadata_atomic(json
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-journal-supplier-invoice-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-draft-vouchers-migration.sql
--- =============================================================================
 -- Draft voucher workflow columns.
 -- Apply after the voucher schema and atomic posting migrations. Safe to rerun.
 begin;
@@ -5579,12 +5486,9 @@ create unique index if not exists vouchers_company_draft_no_unique
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-draft-vouchers-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-draft-voucher-integrity-migration.sql
--- =============================================================================
 -- Let Draft vouchers save incomplete headers without ledger/invoice/stock rows.
 -- Apply after supabase-critical-security-hardening-migration.sql and
 -- supabase-draft-vouchers-migration.sql. Safe to rerun.
@@ -5634,12 +5538,9 @@ end $$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-draft-voucher-integrity-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
--- =============================================================================
 -- Fix alternate-unit invoice integrity checks.
 --
 -- Khata ERP stores item stock in the main/base unit. Invoice entry quantities
@@ -5699,12 +5600,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-service-items-migration.sql
--- =============================================================================
 -- Service Item Support
 -- Service items are invoiceable but must never create inventory movement.
 
@@ -5796,12 +5694,9 @@ end $service_items$;
 revoke all on function public.prevent_service_item_stock_line() from public, anon, authenticated;
 
 commit;
-
 -- END SYNCED DB FILE: supabase-service-items-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-multi-company-migration.sql
--- =============================================================================
 -- Single-login multi-company tenancy, licensing, active-company selection, and membership RLS.
 -- Apply after the complete current schema/migrations. Safe to rerun.
 
@@ -6538,12 +6433,9 @@ grant execute on function public.update_user_company_limit(uuid,integer,boolean,
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-multi-company-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-allow-negative-item-values-migration.sql
--- =============================================================================
 -- Allow negative item values for portable company restores and imported data.
 -- Some legacy accounting systems export negative opening quantities/rates or
 -- reorder levels. KhataERP calculations already support negative stock values;
@@ -6603,12 +6495,9 @@ begin
   return new;
 end;
 $$;
-
 -- END SYNCED DB FILE: supabase-allow-negative-item-values-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-allow-zero-invoice-quantities-migration.sql
--- =============================================================================
 -- Allow zero-quantity invoice lines for portable restores and legacy imports.
 -- Keep negative quantities, negative rates, and invalid conversion factors blocked.
 -- Apply after supabase-critical-security-hardening-migration.sql and
@@ -6651,12 +6540,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-allow-zero-invoice-quantities-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-allow-negative-invoice-rates-migration.sql
--- =============================================================================
 -- Allow negative invoice item rates for portable restores and legacy imports.
 -- Keep negative quantities and invalid conversion factors blocked.
 -- Apply after supabase-allow-zero-invoice-quantities-migration.sql. Safe to rerun.
@@ -6698,12 +6584,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-allow-negative-invoice-rates-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-allow-negative-invoice-quantities-migration.sql
--- =============================================================================
 -- Allow legacy invoice item quantities during portable restores and old-system imports.
 -- Keep invalid conversion factors blocked. Frontend forms still validate normal voucher entry.
 -- Apply after supabase-allow-negative-invoice-rates-migration.sql. Safe to rerun.
@@ -6745,12 +6628,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-allow-negative-invoice-quantities-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-relax-invoice-base-qty-validation-migration.sql
--- =============================================================================
 -- Relax legacy invoice base quantity validation for portable restores.
 -- Keep conversion_factor validation, but do not reject old base_qty snapshots.
 -- Apply after supabase-allow-negative-invoice-quantities-migration.sql. Safe to rerun.
@@ -6792,12 +6672,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-relax-invoice-base-qty-validation-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-final-restore-invoice-integrity-fix.sql
--- =============================================================================
 -- Final invoice integrity compatibility fix for portable restores.
 -- Allows legacy negative/zero invoice quantities and rates, and ignores old base_qty snapshots.
 -- Still blocks invalid conversion factors. Safe to rerun.
@@ -6871,12 +6748,9 @@ $migration$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-final-restore-invoice-integrity-fix.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-allow-fiscal-year-start-correction-migration.sql
--- =============================================================================
 -- Allow safe correction of company Financial Year Start Date after import.
 -- The date may move earlier after transactions exist only when every existing
 -- voucher remains on or after the new books start. Moving it later is still blocked.
@@ -6918,12 +6792,9 @@ $$;
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-allow-fiscal-year-start-correction-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-ledger-unique-name-guard-migration.sql
--- =============================================================================
 -- Prevent duplicate ledger/account names inside the same company.
 -- Existing duplicate historical rows are left untouched, but new inserts and
 -- renames to an existing ledger name are blocked case-insensitively.
@@ -6963,12 +6834,9 @@ for each row execute function public.prevent_duplicate_ledger_name();
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-ledger-unique-name-guard-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-master-duplicate-name-guards-migration.sql
--- =============================================================================
 -- Prevent duplicate master names inside the same company.
 -- Existing duplicate historical rows are left untouched, but new inserts and
 -- renames to an existing name are blocked case-insensitively.
@@ -7073,12 +6941,9 @@ for each row execute function public.prevent_duplicate_account_category_name();
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-master-duplicate-name-guards-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-voucher-chronology-validation-migration.sql
--- =============================================================================
 -- Enforce voucher date chronology only for Sales invoices when enabled in
 -- company settings. Draft vouchers do not reserve numbers and are ignored.
 begin;
@@ -7201,12 +7066,9 @@ revoke all on function public.validate_voucher_chronology() from public, anon, a
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-voucher-chronology-validation-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-sales-invoice-chronology-setting-migration.sql
--- =============================================================================
 -- Add an opt-in Sales-only chronological invoice date setting.
 -- When disabled, all voucher types only require dates inside the active fiscal year.
 begin;
@@ -7327,12 +7189,9 @@ revoke all on function public.voucher_number_value(text) from public, anon, auth
 
 commit;
 notify pgrst, 'reload schema';
-
 -- END SYNCED DB FILE: supabase-sales-invoice-chronology-setting-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-simple-income-expense-migration.sql
--- =============================================================================
 -- Beginner-friendly Income/Expense entries remain Journal vouchers while this
 -- marker preserves their dedicated editor and list identity.
 alter table public.vouchers add column if not exists simple_entry_type text;
@@ -7425,12 +7284,9 @@ deferrable initially deferred for each row execute function public.validate_simp
 
 revoke all on function public.sync_simple_entry_type() from public;
 revoke all on function public.validate_simple_entry_voucher() from public;
-
 -- END SYNCED DB FILE: supabase-simple-income-expense-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-contra-voucher-migration.sql
--- =============================================================================
 -- Journal-backed Contra vouchers and their protected Bank Charges ledger.
 alter table public.vouchers add column if not exists contra_entry boolean not null default false;
 alter table public.vouchers add column if not exists contra_destination_account_id text references public.accounts(id);
@@ -7543,12 +7399,145 @@ drop trigger if exists voucher_lines_validate_contra on public.voucher_lines;
 create constraint trigger voucher_lines_validate_contra after insert or update or delete on public.voucher_lines deferrable initially deferred for each row execute function public.validate_contra_voucher();
 revoke all on function public.sync_contra_metadata() from public;
 revoke all on function public.validate_contra_voucher() from public;
-
 -- END SYNCED DB FILE: supabase-contra-voucher-migration.sql
 
--- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-incoming-outgoing-cheques-migration.sql
+-- Direction-aware received and issued cheque management.
+begin;
+
+alter table public.cheques add column if not exists direction text not null default 'received';
+alter table public.cheques add column if not exists source_account_id text references public.accounts(id);
+alter table public.cheques add column if not exists cleared_date_bs text;
+alter table public.cheques add column if not exists cleared_date_bs_key integer;
+alter table public.cheques alter column bank_id drop not null;
+update public.cheques set direction='received' where direction is null;
+
+-- Received cheques retain the external bank account validation. Issued cheques
+-- identify the source by its company ledger, so an account number is optional.
+alter table public.cheques drop constraint if exists cheques_identity_account_check;
+alter table public.cheques add constraint cheques_identity_account_check check (
+  (direction='issued' and btrim(account_number)='')
+  or (char_length(btrim(account_number)) between 1 and 34 and btrim(account_number) ~ '^[[:alnum:] -]+$')
+) not valid;
+
+alter table public.cheques drop constraint if exists cheques_direction_check;
+alter table public.cheques add constraint cheques_direction_check check(direction in ('received','issued'));
+alter table public.cheques drop constraint if exists cheques_direction_metadata_check;
+alter table public.cheques add constraint cheques_direction_metadata_check check(
+  (direction='received' and bank_id is not null and source_account_id is null)
+  or (direction='issued' and source_account_id is not null)
+);
+create unique index if not exists cheques_linked_voucher_unique on public.cheques(linked_voucher_id) where linked_voucher_id is not null;
+create unique index if not exists issued_cheque_number_unique on public.cheques(company_id,source_account_id,lower(cheque_number)) where direction='issued';
+
+create or replace function public.validate_directional_cheque()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  if not exists(select 1 from public.accounts account where account.id=new.party_ledger_id and account.company_id=new.company_id and account.is_party and not coalesce(account.is_archived,false)) then
+    raise exception 'Cheque party must be an active party ledger in the same company';
+  end if;
+  if new.direction='issued' and not exists(
+    select 1 from public.accounts account join public.account_categories category on category.id=account.category_id
+    where account.id=new.source_account_id and account.company_id=new.company_id and not coalesce(account.is_archived,false)
+      and ((category.name in ('Bank Accounts','Bank') and category.account_type='Asset') or (category.name='Bank OD A/c' and category.account_type='Liability'))
+  ) then raise exception 'Issued cheque source must be an active company Bank or Bank OD ledger'; end if;
+  if new.status<>'cleared' and (new.linked_voucher_id is not null or new.cleared_to_account_id is not null or new.cleared_date_bs is not null or new.cleared_date_bs_key is not null) then
+    raise exception 'Only cleared cheques may contain settlement metadata';
+  end if;
+  if new.status='cleared' and (new.linked_voucher_id is null or new.cleared_date_bs is null or new.cleared_date_bs_key is null) then
+    raise exception 'Cleared cheque requires a linked voucher and clearing date';
+  end if;
+  return new;
+end $$;
+drop trigger if exists cheque_direction_guard on public.cheques;
+create trigger cheque_direction_guard before insert or update on public.cheques for each row execute function public.validate_directional_cheque();
+
+-- Superseded by validate_cheque_voucher_link below. The legacy trigger only
+-- accepted Receipt vouchers and therefore rejected every issued-cheque Payment.
+drop trigger if exists cleared_cheque_receipt_guard on public.cheques;
+
+-- Keep the original external-bank validator for received cheques only.
+drop trigger if exists cheque_touch_guard on public.cheques;
+create trigger cheque_touch_guard before insert or update on public.cheques for each row when (new.direction='received') execute function public.cheque_touch_and_audit();
+create or replace function public.issued_cheque_touch()
+returns trigger language plpgsql security definer set search_path=public as $$
+begin
+  new.updated_at=now(); new.updated_by=auth.uid();
+  if tg_op='UPDATE' and old.status<>'pending' and row(new.cheque_number,new.source_account_id,new.party_ledger_id,new.amount,new.issue_date,new.due_date,new.notes) is distinct from row(old.cheque_number,old.source_account_id,old.party_ledger_id,old.amount,old.issue_date,old.due_date,old.notes) then raise exception 'Completed cheques cannot be edited'; end if;
+  if tg_op='UPDATE' and new.status is distinct from old.status then
+    if old.status<>'pending' then raise exception 'Only pending cheques may change status'; end if;
+    if new.status='cleared' and not public.has_company_permission(new.company_id,'cheque.mark_cleared') then raise exception 'Missing cheque.mark_cleared permission'; end if;
+    if new.status='bounced' and not public.has_company_permission(new.company_id,'cheque.mark_bounced') then raise exception 'Missing cheque.mark_bounced permission'; end if;
+    if new.status='cancelled' and not public.has_company_permission(new.company_id,'cheque.cancel') then raise exception 'Missing cheque.cancel permission'; end if;
+    if new.status='cleared' then new.cleared_at=now(); elsif new.status='bounced' then new.bounced_at=now(); elsif new.status='cancelled' then new.cancelled_at=now(); end if;
+  end if;
+  return new;
+end $$;
+drop trigger if exists issued_cheque_touch_guard on public.cheques;
+create trigger issued_cheque_touch_guard before insert or update on public.cheques for each row when (new.direction='issued') execute function public.issued_cheque_touch();
+
+create or replace function public.validate_cleared_cheque_voucher()
+returns trigger language plpgsql security definer set search_path=public as $$
+declare target public.cheques%rowtype; linked public.vouchers%rowtype; party_debit numeric; party_credit numeric; bank_debit numeric; bank_credit numeric;
+begin
+  if tg_table_name='cheques' then target:=new; else select * into target from public.cheques where linked_voucher_id=new.id; end if;
+  if target.id is null or target.status<>'cleared' then return null; end if;
+  select * into linked from public.vouchers where id=target.linked_voucher_id;
+  if not found or linked.company_id<>target.company_id or linked.cancelled or linked.status<>'Completed' then raise exception 'Cleared cheque voucher is missing or inactive'; end if;
+  select coalesce(sum(debit),0),coalesce(sum(credit),0) into party_debit,party_credit from public.voucher_lines where voucher_id=linked.id and account_id=target.party_ledger_id;
+  if target.direction='issued' then
+    select coalesce(sum(debit),0),coalesce(sum(credit),0) into bank_debit,bank_credit from public.voucher_lines where voucher_id=linked.id and account_id=target.source_account_id;
+    if linked.type<>'Payment' or party_debit<>target.amount or party_credit<>0 or bank_credit<>target.amount or bank_debit<>0 then raise exception 'Issued cheque must link to a matching Payment voucher'; end if;
+  else
+    select coalesce(sum(debit),0),coalesce(sum(credit),0) into bank_debit,bank_credit from public.voucher_lines where voucher_id=linked.id and account_id=target.cleared_to_account_id;
+    if linked.type<>'Receipt' or target.cleared_to_account_id is null or party_credit<>target.amount or party_debit<>0 or bank_debit<>target.amount or bank_credit<>0 then raise exception 'Received cheque must link to a matching Receipt voucher'; end if;
+  end if;
+  return null;
+end $$;
+drop trigger if exists validate_cheque_voucher_link on public.cheques;
+create constraint trigger validate_cheque_voucher_link after insert or update of status,linked_voucher_id,cleared_date_bs on public.cheques deferrable initially deferred for each row execute function public.validate_cleared_cheque_voucher();
+
+create or replace function public.clear_cheque_atomic(
+  p_cheque_id uuid,p_date_ad date,p_date_bs text,p_date_bs_key integer,p_numbering_period text,p_invoice_prefix text,
+  p_reset_numbering boolean,p_period_start_key integer,p_next_period_start_key integer,p_settlement_account_id text default null,p_reason text default null
+) returns jsonb language plpgsql security definer set search_path=public as $$
+declare target public.cheques%rowtype; voucher_result jsonb; settlement_id text; voucher_type text; voucher_lines jsonb; voucher_header jsonb; cash_ledger text;
+begin
+  select * into target from public.cheques where id=p_cheque_id for update;
+  if not found or target.company_id<>public.my_company_id() then raise exception 'Cheque not found'; end if;
+  if target.status<>'pending' then
+    if target.status='cleared' and target.linked_voucher_id is not null then return jsonb_build_object('cheque',to_jsonb(target),'voucher',public.voucher_atomic_response(target.linked_voucher_id)); end if;
+    raise exception 'Only pending cheques can be cleared';
+  end if;
+  if not public.company_module_access(target.company_id,'cheque_management',true) or not public.has_company_permission(target.company_id,'cheque.mark_cleared') then raise exception 'Missing cheque clearing permission'; end if;
+  if p_date_bs is null or p_date_bs_key is null then raise exception 'Clearing date is required'; end if;
+  if target.direction='issued' then settlement_id:=target.source_account_id;voucher_type:='Payment';
+    voucher_lines:=jsonb_build_array(jsonb_build_object('account_id',target.party_ledger_id,'debit',target.amount,'credit',0),jsonb_build_object('account_id',settlement_id,'debit',0,'credit',target.amount));
+  else settlement_id:=p_settlement_account_id;voucher_type:='Receipt';
+    if settlement_id is null then raise exception 'Select the Cash or Bank ledger receiving this cheque'; end if;
+    voucher_lines:=jsonb_build_array(jsonb_build_object('account_id',settlement_id,'debit',target.amount,'credit',0),jsonb_build_object('account_id',target.party_ledger_id,'debit',0,'credit',target.amount));
+  end if;
+  if not exists(select 1 from public.accounts where id=settlement_id and company_id=target.company_id and not coalesce(is_archived,false)) then raise exception 'Cheque settlement ledger is unavailable'; end if;
+  cash_ledger:=target.company_id::text||':cash';
+  -- Voucher idempotency keys are UUIDs. The cheque UUID is stable and unique,
+  -- making repeated or concurrent clearing requests return the same voucher.
+  voucher_header:=jsonb_build_object('company_id',target.company_id,'type',voucher_type,'date',p_date_ad,'date_ad',p_date_ad,'date_bs',p_date_bs,'date_bs_key',p_date_bs_key,'numbering_period',p_numbering_period,'narration',(case when target.direction='issued' then 'Issued' else 'Received' end)||' cheque '||target.cheque_number||' cleared','party_account_id',target.party_ledger_id,'settlement_account_id',settlement_id,'is_cash',settlement_id in (cash_ledger,'cash'),'total',target.amount,'cancelled',false,'status','Completed','idempotency_key',target.id);
+  voucher_result:=public.save_voucher_atomic(voucher_header,voucher_lines,'[]'::jsonb,'[]'::jsonb,'[]'::jsonb,null,p_invoice_prefix,p_reset_numbering,p_period_start_key,p_next_period_start_key,'cheque_cleared',jsonb_build_object('cheque_id',target.id,'direction',target.direction));
+  update public.cheques set status='cleared',linked_voucher_id=(voucher_result->>'id')::uuid,cleared_date_bs=p_date_bs,cleared_date_bs_key=p_date_bs_key,cleared_to_account_id=case when target.direction='received' then settlement_id else null end,status_reason=nullif(btrim(coalesce(p_reason,'')),'') where id=target.id returning * into target;
+  insert into public.cheque_events(company_id,cheque_id,action,new_values,actor_id) values(target.company_id,target.id,'cheque_cleared',jsonb_build_object('direction',target.direction,'linked_voucher_id',target.linked_voucher_id,'cleared_date_bs',p_date_bs),auth.uid());
+  return jsonb_build_object('cheque',to_jsonb(target),'voucher',voucher_result);
+end $$;
+
+revoke all on function public.validate_directional_cheque() from public,anon,authenticated;
+revoke all on function public.validate_cleared_cheque_voucher() from public,anon,authenticated;
+revoke all on function public.issued_cheque_touch() from public,anon,authenticated;
+revoke all on function public.clear_cheque_atomic(uuid,date,text,integer,text,text,boolean,integer,integer,text,text) from public,anon;
+grant execute on function public.clear_cheque_atomic(uuid,date,text,integer,text,text,boolean,integer,integer,text,text) to authenticated;
+commit;
+notify pgrst,'reload schema';
+-- END SYNCED DB FILE: supabase-incoming-outgoing-cheques-migration.sql
+
 -- BEGIN SYNCED DB FILE: supabase-identity-validation-migration.sql
--- =============================================================================
 -- Shared backend enforcement for company, party, ledger, bank, and cheque identity fields.
 -- Invalid optional legacy phone/PAN values are intentionally cleared before constraints are installed.
 
@@ -7617,12 +7606,9 @@ begin
   end if;
 end;
 $identity_optional_tables$;
-
 -- END SYNCED DB FILE: supabase-identity-validation-migration.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-security-audit.sql
--- =============================================================================
 -- Read-only pre-deployment RLS audit. Run in the Supabase SQL Editor after all
 -- migrations. Expected result: zero rows from both queries.
 
@@ -7647,12 +7633,9 @@ where namespace.nspname = 'public'
     select 1 from pg_policy policy where policy.polrelid = class.oid
   )
 order by class.relname;
-
 -- END SYNCED DB FILE: supabase-security-audit.sql
 
--- =============================================================================
 -- BEGIN SYNCED DB FILE: supabase-write-performance-diagnostics.sql
--- =============================================================================
 -- Read-only write-performance diagnostics. Run after a representative test
 -- workload. This file does not change schema, data, RLS, or configuration.
 
@@ -7946,7 +7929,6 @@ from pg_locks lock_record
 join pg_stat_activity activity on activity.pid = lock_record.pid
 where lock_record.locktype = 'advisory'
 order by lock_record.granted, activity.xact_start;
-
 -- END SYNCED DB FILE: supabase-write-performance-diagnostics.sql
 
 -- =============================================================================

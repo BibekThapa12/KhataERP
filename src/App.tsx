@@ -41,8 +41,11 @@ const CashBankBookPage = lazy(() => import('@/pages/reports/CashBankBook').then(
 const SettingsPage = lazy(() => import('@/pages/Settings').then(m => ({ default: m.SettingsPage })))
 const DeveloperDashboard = lazy(() => import('@/pages/DeveloperDashboard').then(m => ({ default: m.DeveloperDashboard })))
 const CreateChequePage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.CreateChequePage })))
+const IssueChequePage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.IssueChequePage })))
 const PendingChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.PendingChequesPage })))
+const PendingIssuedChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.PendingIssuedChequesPage })))
 const SettledChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.SettledChequesPage })))
+const SettledIssuedChequesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.SettledIssuedChequesPage })))
 const ChequeBanksPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeBanksPage })))
 const ChequePartiesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequePartiesPage })))
 const ChequeDetailPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeDetailPage })))
@@ -265,6 +268,12 @@ export default function App() {
             <Route path="cheques/new" element={<ChequeModuleGuard permission="cheque.create" write><CreateChequePage /></ChequeModuleGuard>} />
             <Route path="cheques/pending" element={<ChequeModuleGuard><PendingChequesPage /></ChequeModuleGuard>} />
             <Route path="cheques/settled" element={<ChequeModuleGuard><SettledChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/received/new" element={<ChequeModuleGuard permission="cheque.create" write><CreateChequePage /></ChequeModuleGuard>} />
+            <Route path="cheques/received/pending" element={<ChequeModuleGuard><PendingChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/received/settled" element={<ChequeModuleGuard><SettledChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/issued/new" element={<ChequeModuleGuard permission="cheque.create" write><IssueChequePage /></ChequeModuleGuard>} />
+            <Route path="cheques/issued/pending" element={<ChequeModuleGuard><PendingIssuedChequesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/issued/settled" element={<ChequeModuleGuard><SettledIssuedChequesPage /></ChequeModuleGuard>} />
             <Route path="cheques/banks" element={<ChequeModuleGuard permission="cheque.manage_banks" write><ChequeBanksPage /></ChequeModuleGuard>} />
             <Route path="cheques/parties" element={<ChequeModuleGuard permission="cheque.view_parties"><ChequePartiesPage /></ChequeModuleGuard>} />
             <Route path="cheques/:id" element={<ChequeModuleGuard><ChequeDetailPage /></ChequeModuleGuard>} />
