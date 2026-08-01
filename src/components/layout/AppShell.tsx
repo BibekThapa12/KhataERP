@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -20,6 +20,7 @@ import { chequeEntitlement } from '@/lib/cheques'
 import { DEFAULT_FISCAL_YEAR_START_BS, bsToAd, parseBsDate } from '@/lib/nepaliDate'
 import { publicErrorMessage } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
+import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -61,6 +62,7 @@ const NAV_SECTIONS: {
       { to: '/payments', label: 'Payments', Icon: ArrowUpCircle },
       { to: '/transactions/income', label: 'Add Income', Icon: TrendingUp },
       { to: '/transactions/expenses', label: 'Add Expense', Icon: TrendingDown },
+      { to: '/transactions/contra', label: 'Contra', Icon: ArrowLeftRight },
       { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
     ],
   },
@@ -253,6 +255,8 @@ function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
       }
       const formattedName = formatMasterName(form.name) || 'My Company'
       updateForm('name', formattedName)
+      const identityError = validateName(formattedName, 'Company name') || validateAddress(form.address) || validatePan(form.pan_vat) || validatePhone(form.phone)
+      if (identityError) { setError(identityError); return }
       await createCompany({
         ...companyForm,
         name: formattedName,
@@ -263,7 +267,7 @@ function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
       setOpen(false)
       onSwitched()
     } catch (err) {
-      setError(publicErrorMessage(err, 'creating company'))
+      setError(identityDatabaseError(err) || publicErrorMessage(err, 'creating company'))
     } finally {
       setCreating(false)
     }
@@ -302,11 +306,11 @@ function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
             <DialogDescription>Create an independent company under this login.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Company Name</Label><Input value={form.name} onChange={event => updateForm('name', event.target.value)} onBlur={() => updateForm('name', formatMasterName(form.name))} /></div>
-            <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} onChange={event => updateForm('phone', event.target.value)} /></div>
-            <div className="space-y-1.5"><Label>PAN / VAT No.</Label><Input value={form.pan_vat} onChange={event => updateForm('pan_vat', event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Company Name</Label><Input value={form.name} maxLength={IDENTITY_LIMITS.name} onChange={event => updateForm('name', event.target.value)} onBlur={() => updateForm('name', formatMasterName(form.name))} /></div>
+            <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} inputMode="numeric" maxLength={10} onChange={event => updateForm('phone', normalizePhoneInput(event.target.value))} /></div>
+            <div className="space-y-1.5"><Label>PAN / VAT No.</Label><Input value={form.pan_vat} inputMode="numeric" maxLength={9} onChange={event => updateForm('pan_vat', normalizePanInput(event.target.value))} /></div>
             <div className="space-y-1.5"><Label>Fiscal Year Start Date (B.S.)</Label><NepaliDateInput value={form.fiscal_year_start_bs} onChange={value => updateForm('fiscal_year_start_bs', value)} /></div>
-            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} value={form.address} onChange={event => updateForm('address', event.target.value)} /></div>
+            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} maxLength={IDENTITY_LIMITS.address} value={form.address} onChange={event => updateForm('address', event.target.value)} /></div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={form.vat_enabled} onChange={event => updateForm('vat_enabled', event.target.checked)} /> VAT Mode</label>
             <div className="space-y-1.5"><Label>Print Format</Label><select className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm" value={form.print_format} onChange={event => updateForm('print_format', event.target.value as 'A5' | 'A4')}><option value="A5">A5</option><option value="A4">A4</option></select></div>
             {(['sales_prefix','purchase_prefix','receipt_prefix','payment_prefix','sales_return_prefix','purchase_return_prefix'] as const).map(key => (

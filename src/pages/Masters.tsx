@@ -26,6 +26,7 @@ import { ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { ledgerFieldVisibility, openingBalanceFromStored, openingBalanceToStored, type BalanceType } from '@/lib/ledgerForm'
 import { normalSide } from '@/lib/engine'
 import { formatMasterName } from '@/lib/nameFormat'
+import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateBankAccount, validateBranch, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -76,7 +77,8 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
   const save = async () => {
     const formattedName = formatMasterName(name)
     setName(formattedName)
-    if (!formattedName) return setError('Enter a category name.')
+    const nameError = validateName(formattedName, 'Category name')
+    if (nameError) return setError(nameError)
     if (kind === 'account' && !category && !parentId) return setError('Select a parent account group.')
     setSaving(true)
     try {
@@ -107,7 +109,7 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
       <DialogContent className="max-w-sm">
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
-          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus disabled={systemCategory} /></div>
+          <div className="space-y-1.5"><Label>Name</Label><Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus disabled={systemCategory} /></div>
           {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId(category ? 'root' : '') }} disabled={!!defaultAccountType || !!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
           <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} placeholder={kind === 'account' ? 'Select parent account group' : 'Select parent category'} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[...(kind === 'item' || category ? [{ value: 'root', label: 'Top level' }] : []), ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
           {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
@@ -176,12 +178,12 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
     const formattedName = formatMasterName(name)
     setName(formattedName)
     if (!formattedName) return setError('Enter a ledger name.')
+    const identityError = validateName(formattedName, 'Ledger name') || (visibility.showContactDetails ? validateAddress(address) || validatePhone(contactNo) || validatePan(panNo) : null) || (visibility.showBankDetails ? validateBankAccount(bankAccountNo) || validateBranch(bankBranch) : null)
+    if (identityError) return setError(identityError)
     if (!category) return setError(partyMode ? `${partyTerminology(fixedPartyType || partyType).category} group is unavailable. Restore the protected system group before creating this party.` : 'Select a category.')
     if (openingBalance.trim() === '' || !Number.isFinite(Number(openingBalance)) || Number(openingBalance) < 0) return setError('Enter a valid opening balance of 0 or more.')
     const creditDays = Number(defaultCreditDays)
     if (visibility.showCreditDays && (!Number.isInteger(creditDays) || creditDays < 0 || creditDays > 36500)) return setError('Credit Days must be a whole number from 0 to 36500.')
-    if (contactNo.trim().length > 50) return setError('Contact No. cannot exceed 50 characters.')
-    if (panNo.trim().length > 100) return setError('PAN No. cannot exceed 100 characters.')
     const storedOpeningBalance = openingBalanceToStored(Number(openingBalance), category.account_type, balanceType)
     const details = {
       address: visibility.showContactDetails ? address.trim() || null : null,
@@ -201,7 +203,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
         onCreated?.(createdAccount, createdParty)
       }
       onClose()
-    } catch (e: unknown) { setError(ledgerDialogError(e)) } finally { setSaving(false) }
+    } catch (e: unknown) { setError(identityDatabaseError(e) || ledgerDialogError(e)) } finally { setSaving(false) }
   }
 
   return (
@@ -211,7 +213,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
         <div className="min-w-0 space-y-4 py-2">
           <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus /></div>
+            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus /></div>
           {party && !defaultPartyType ? (
             <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
@@ -224,15 +226,15 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
           </section>
           {visibility.showContactDetails && <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
             <h3 className="text-sm font-semibold sm:col-span-2">Contact & Tax Details</h3>
-            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} value={address} onChange={event => setAddress(event.target.value)} placeholder="Business address" /></div>
-            <div className="space-y-1.5"><Label>Contact No.</Label><Input value={contactNo} onChange={event => setContactNo(event.target.value)} placeholder="Phone or mobile number" /></div>
-            <div className="space-y-1.5"><Label>PAN No.</Label><Input value={panNo} onChange={event => setPanNo(event.target.value)} placeholder="PAN / VAT registration number" /></div>
+            <div className="space-y-1.5 sm:col-span-2"><Label>Address</Label><Textarea rows={2} value={address} maxLength={IDENTITY_LIMITS.address} onChange={event => setAddress(event.target.value)} placeholder="Business address" /></div>
+            <div className="space-y-1.5"><Label>Contact No.</Label><Input value={contactNo} inputMode="numeric" maxLength={10} onChange={event => setContactNo(normalizePhoneInput(event.target.value))} placeholder="10-digit phone number" /></div>
+            <div className="space-y-1.5"><Label>PAN No.</Label><Input value={panNo} inputMode="numeric" maxLength={9} onChange={event => setPanNo(normalizePanInput(event.target.value))} placeholder="9-digit PAN / VAT number" /></div>
             {visibility.showCreditDays && <div className="space-y-1.5 sm:max-w-48"><Label>Credit Days</Label><Input type="number" min="0" max="36500" step="1" value={defaultCreditDays} onChange={event => setDefaultCreditDays(event.target.value)} /></div>}
           </section>}
           {visibility.showBankDetails && <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
             <h3 className="text-sm font-semibold sm:col-span-2">Bank Account Details</h3>
-            <div className="space-y-1.5"><Label>Account No.</Label><Input value={bankAccountNo} onChange={event => setBankAccountNo(event.target.value)} placeholder="Preserves leading zeros" /></div>
-            <div className="space-y-1.5"><Label>Branch</Label><Input value={bankBranch} onChange={event => setBankBranch(event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Account No.</Label><Input value={bankAccountNo} maxLength={IDENTITY_LIMITS.bankAccount} onChange={event => setBankAccountNo(event.target.value)} placeholder="Preserves leading zeros" /></div>
+            <div className="space-y-1.5"><Label>Branch</Label><Input value={bankBranch} maxLength={IDENTITY_LIMITS.branch} onChange={event => setBankBranch(event.target.value)} /></div>
           </section>}
           {selectedCategory && (selectedCategory.account_type === 'Income' || selectedCategory.account_type === 'Expense') && <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">Income and expense ledgers require only the base accounting details.</p>}
           {(account?.is_system || isUsed) && <p className="text-xs text-amber-700">This ledger is protected from account-type changes because it is {account?.is_system ? 'a system ledger' : 'used in vouchers'}.</p>}
@@ -268,6 +270,8 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   const stockBasisChanged = Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate
   const save = async () => {
     const itemName = formatMasterName(form.name)
+    const itemNameError = validateName(itemName, 'Item name')
+    if (itemNameError) return setError(itemNameError)
     setForm(current => ({ ...current, name: itemName }))
     if (!itemName) return setError('Item name is required.')
     const altUnit = form.alternate_unit.trim()
@@ -289,7 +293,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
-        <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} onBlur={() => setForm(current => ({ ...current, name: formatMasterName(current.name) }))} /></div>
+        <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} maxLength={IDENTITY_LIMITS.name} onChange={event => setForm({ ...form, name: event.target.value })} onBlur={() => setForm(current => ({ ...current, name: formatMasterName(current.name) }))} /></div>
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
         {isService && <div className="sm:col-span-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">Service item</div>}
         {!isService && <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>}

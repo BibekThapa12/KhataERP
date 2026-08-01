@@ -46,6 +46,7 @@ export type SystemAccountKey =
   | 'rent'
   | 'salary'
   | 'electricity'
+  | 'bank_charges'
 
 export function systemAccountId(company_id: string, key: SystemAccountKey) {
   return `${company_id}:${key}`
@@ -80,6 +81,7 @@ export function defaultChartOfAccounts(company_id: string): Omit<Account, 'balan
     base('rent', 'Rent Expense', 'Expense', 'Indirect Expenses', false),
     base('salary', 'Salary Expense', 'Expense', 'Indirect Expenses', false),
     base('electricity', 'Electricity Expense', 'Expense', 'Indirect Expenses', false),
+    base('bank_charges', 'Bank Charges', 'Expense', 'Indirect Expenses'),
   ]
 }
 

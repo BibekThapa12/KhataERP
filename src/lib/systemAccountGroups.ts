@@ -58,6 +58,7 @@ export const SYSTEM_ACCOUNT_DESTINATIONS: Record<SystemAccountKey, string> = {
   rent: 'indirect-expenses',
   salary: 'indirect-expenses',
   electricity: 'indirect-expenses',
+  bank_charges: 'indirect-expenses',
 }
 
 export function systemAccountGroup(categories: AccountCategory[], key: string) {

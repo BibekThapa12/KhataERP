@@ -33,6 +33,7 @@ import { publicErrorMessage, reportClientError } from '@/lib/security'
 import { notifySuccess } from '@/lib/notifications'
 import { formatMasterName, masterNameKey } from '@/lib/nameFormat'
 import { assertSimpleEntryCounterAccount, buildSimpleEntryLines, type SimpleEntrySaveParams } from '@/lib/simpleEntries'
+import { buildContraLines, resolveBankChargesAccountId, type ContraSaveParams } from '@/lib/contra'
 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
@@ -157,17 +158,19 @@ interface AppState {
   savePurchaseVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
-  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
+  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string; contra_charge_amount?: number; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
   saveSimpleEntry: (params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
+  saveContra: (params: ContraSaveParams, status?: Voucher['status']) => Promise<void>
   saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }, status?: Voucher['status']) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
-  saveDraftVoucher: (params: { id?: string; type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) => Promise<Voucher>
+  saveDraftVoucher: (params: { id?: string; type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string | null; contra_charge_amount?: number; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) => Promise<Voucher>
   updateSalesVoucher: (id: string, params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   updatePurchaseVoucher: (id: string, params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   updateReceipt: (id: string, params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
   updatePayment: (id: string, params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
-  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
+  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string; contra_charge_amount?: number; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
   updateSimpleEntry: (id: string, params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
+  updateContra: (id: string, params: ContraSaveParams, status?: Voucher['status']) => Promise<void>
   updateReturnVoucher: (id: string, params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
   deleteDraftVoucher: (id: string) => Promise<void>
   cancelV: (id: string) => Promise<void>
@@ -247,7 +250,7 @@ function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
   return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
 }
 
-function blankDraftVoucher(company: Company, params: { type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) {
+function blankDraftVoucher(company: Company, params: { type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string | null; contra_charge_amount?: number; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) {
   const dateFields = voucherDateFields(params.date_bs, company)
   return {
     company_id: company.id,
@@ -258,6 +261,9 @@ function blankDraftVoucher(company: Company, params: { type: Voucher['type']; da
     party_account_id: params.party_account_id || null,
     settlement_account_id: params.settlement_account_id || null,
     simple_entry_type: params.simple_entry_type || null,
+    contra_entry: !!params.contra_entry,
+    contra_destination_account_id: params.contra_destination_account_id || null,
+    contra_charge_amount: round2(params.contra_charge_amount || 0),
     is_cash: !!params.is_cash,
     total: round2(params.total || 0),
     cancelled: false,
@@ -545,6 +551,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       )
       const missingDefaults = defaults.filter(account => {
         const key = systemAccountKeyFromId(company.id, account.id)
+        if (key === 'bank_charges' && rawAccounts.some(existing => existing.company_id === company.id && existing.type === 'Expense' && existing.name.trim().toLowerCase() === 'bank charges')) return false
         return key ? !existingDefaultKeys.has(key) : false
       })
 
@@ -1198,7 +1205,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Journal ────────────────────────────────────────────────────────────────
-  saveJournal: async ({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, status = 'Completed') => {
+  saveJournal: async ({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
@@ -1211,12 +1218,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, invoice_no: manualInvoiceNumber })
     const savedVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, draft_payload, is_cash: false, total, cancelled: false, status },
+      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload, is_cash: false, total, cancelled: false, status },
       lines,
       numbering: voucherNumberingScope(company, 'Journal', date_bs),
       trace,
     })
-    const newVoucher = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, draft_payload: draft_payload || savedVoucher.draft_payload }
+    const newVoucher = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, contra_entry: contra_entry || savedVoucher.contra_entry, contra_destination_account_id: contra_destination_account_id || savedVoucher.contra_destination_account_id, contra_charge_amount: contra_charge_amount ?? savedVoucher.contra_charge_amount, draft_payload: draft_payload || savedVoucher.draft_payload }
     const nextState = trace.sync('client_balance_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
       return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
@@ -1239,6 +1246,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       settlement_account_id: params.counter_account_id,
       simple_entry_type: params.entry_type,
       draft_payload: { simpleEntryType: params.entry_type, counterAccountId: params.counter_account_id, lines: params.lines, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
+    }, status)
+  },
+
+  saveContra: async (params, status = 'Completed') => {
+    const company = get().company
+    if (!company) throw new Error('No company')
+    const chargeAccountId = resolveBankChargesAccountId(get().rawAccounts, company.id)
+    const lines = buildContraLines(params, get().rawAccounts, get().accountCategories, company.id, chargeAccountId)
+    await get().saveJournal({
+      lines,
+      narration: params.narration,
+      date_bs: params.date_bs,
+      invoice_no: params.invoice_no,
+      settlement_account_id: params.source_account_id,
+      contra_entry: true,
+      contra_destination_account_id: params.destination_account_id,
+      contra_charge_amount: params.charge_amount,
+      draft_payload: { journalEntryType: 'Contra', sourceAccountId: params.source_account_id, destinationAccountId: params.destination_account_id, amount: params.amount, chargeAmount: params.charge_amount, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
     }, status)
   },
 
@@ -1450,13 +1475,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  updateJournal: async (id, { lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, status = 'Completed') => {
+  updateJournal: async (id, { lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload }, status = 'Completed') => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
     if (existing.status === 'Draft' && status === 'Completed') {
-      await get().saveJournal({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, 'Completed')
+      await get().saveJournal({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload }, 'Completed')
       await get().deleteDraftVoucher(id)
       return
     }
@@ -1469,11 +1494,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, currentVoucherId: id, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : existing.invoice_no })
     const savedVoucher = await updateVoucher({
       id,
-      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, draft_payload, is_cash: false, total, cancelled: false, status },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload, is_cash: false, total, cancelled: false, status },
       lines,
       trace,
     })
-    const updated = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, draft_payload: draft_payload || savedVoucher.draft_payload }
+    const updated = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, contra_entry: contra_entry || savedVoucher.contra_entry, contra_destination_account_id: contra_destination_account_id || savedVoucher.contra_destination_account_id, contra_charge_amount: contra_charge_amount ?? savedVoucher.contra_charge_amount, draft_payload: draft_payload || savedVoucher.draft_payload }
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
@@ -1494,6 +1519,24 @@ export const useAppStore = create<AppState>((set, get) => ({
       settlement_account_id: params.counter_account_id,
       simple_entry_type: params.entry_type,
       draft_payload: { simpleEntryType: params.entry_type, counterAccountId: params.counter_account_id, lines: params.lines, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
+    }, status)
+  },
+
+  updateContra: async (id, params, status = 'Completed') => {
+    const company = get().company
+    if (!company) throw new Error('No company')
+    const chargeAccountId = resolveBankChargesAccountId(get().rawAccounts, company.id)
+    const lines = buildContraLines(params, get().rawAccounts, get().accountCategories, company.id, chargeAccountId)
+    await get().updateJournal(id, {
+      lines,
+      narration: params.narration,
+      date_bs: params.date_bs,
+      invoice_no: params.invoice_no,
+      settlement_account_id: params.source_account_id,
+      contra_entry: true,
+      contra_destination_account_id: params.destination_account_id,
+      contra_charge_amount: params.charge_amount,
+      draft_payload: { journalEntryType: 'Contra', sourceAccountId: params.source_account_id, destinationAccountId: params.destination_account_id, amount: params.amount, chargeAmount: params.charge_amount, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
     }, status)
   },
 

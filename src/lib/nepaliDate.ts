@@ -111,13 +111,14 @@ export function firstOfCurrentBsMonth(): string {
   return formatBsParts({ ...parts, day: 1 })
 }
 
-export function normalizeVoucherDates<T extends { date?: string; date_ad?: string | null; date_bs?: string | null; date_bs_key?: number | null; simple_entry_type?: string | null; draft_payload?: Record<string, unknown> | null }>(voucher: T) {
+export function normalizeVoucherDates<T extends { date?: string; date_ad?: string | null; date_bs?: string | null; date_bs_key?: number | null; simple_entry_type?: string | null; contra_entry?: boolean | null; contra_destination_account_id?: string | null; contra_charge_amount?: number | null; draft_payload?: Record<string, unknown> | null }>(voucher: T) {
   const dateAd = voucher.date_ad || voucher.date || new Date().toISOString().slice(0, 10)
   const dateBs = voucher.date_bs || adToBs(dateAd)
   const payloadType = voucher.draft_payload?.simpleEntryType
   const simpleEntryType = voucher.simple_entry_type === 'Income' || voucher.simple_entry_type === 'Expense'
     ? voucher.simple_entry_type
     : payloadType === 'Income' || payloadType === 'Expense' ? payloadType : null
+  const contraPayload = voucher.draft_payload?.journalEntryType === 'Contra'
   return {
     ...voucher,
     date: voucher.date || dateAd,
@@ -125,6 +126,9 @@ export function normalizeVoucherDates<T extends { date?: string; date_ad?: strin
     date_bs: dateBs,
     date_bs_key: voucher.date_bs_key || makeBsKey(dateBs),
     simple_entry_type: simpleEntryType,
+    contra_entry: !!voucher.contra_entry || contraPayload,
+    contra_destination_account_id: voucher.contra_destination_account_id || (contraPayload && typeof voucher.draft_payload?.destinationAccountId === 'string' ? voucher.draft_payload.destinationAccountId : null),
+    contra_charge_amount: Number(voucher.contra_charge_amount ?? (contraPayload ? voucher.draft_payload?.chargeAmount : 0)) || 0,
     status: (voucher as T & { status?: string | null }).status === 'Draft' ? 'Draft' : 'Completed',
   }
 }

@@ -141,6 +141,9 @@ export interface Voucher {
   settlement_mode?: 'party' | 'cash' | 'bank'
   settlement_account_id?: string | null
   simple_entry_type?: SimpleEntryType | null
+  contra_entry?: boolean
+  contra_destination_account_id?: string | null
+  contra_charge_amount?: number
   restock_items?: boolean
   party_account_id?: string | null
   is_cash: boolean

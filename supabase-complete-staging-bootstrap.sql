@@ -1,17 +1,10 @@
 -- KhataERP complete staging database bootstrap
--- Generated for a BRAND-NEW Supabase project on 2026-07-23.
---
+-- Mechanically synchronized with every SQL file in db migration files on 2026-08-01.
 -- Run this entire file once in the Supabase SQL Editor using the postgres role.
--- It creates the complete schema, RLS policies, accounting safeguards, account
--- hierarchy, optional cheque module, atomic posting functions, indexes, and all
--- current ERP functionality. Do not run the individual migration files after
--- this bootstrap.
---
--- Read-only diagnostics and security audit queries are intentionally excluded.
-
+-- Do not run individual migrations after applying this bootstrap.
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-schema.sql
+-- BEGIN SYNCED DB FILE: supabase-schema.sql
 -- =============================================================================
 -- ═══════════════════════════════════════════════════════════════════════════
 --  Khata ERP — Supabase Schema
@@ -205,6 +198,13 @@ create unique index if not exists companies_user_id_unique on companies(user_id)
 
 alter table companies add column if not exists owner_email text;
 alter table companies add column if not exists phone text;
+update companies set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update companies set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update companies set phone = btrim(phone), pan_vat = btrim(pan_vat);
+alter table companies drop constraint if exists companies_identity_phone_check;
+alter table companies add constraint companies_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table companies drop constraint if exists companies_identity_pan_check;
+alter table companies add constraint companies_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
 alter table companies add column if not exists vat_enabled boolean not null default true;
 alter table companies add column if not exists inventory_valuation_method text not null default 'weighted_average';
 alter table companies add column if not exists sales_prefix text not null default 'INV-';
@@ -282,6 +282,13 @@ create table if not exists account_categories (
 
 alter table accounts add column if not exists category_id uuid references account_categories(id) on delete restrict;
 alter table accounts add column if not exists is_archived boolean not null default false;
+update accounts set contact_no = null where contact_no is not null and btrim(contact_no) !~ '^[0-9]{10}$';
+update accounts set pan_no = null where pan_no is not null and btrim(pan_no) !~ '^[0-9]{9}$';
+update accounts set contact_no = btrim(contact_no), pan_no = btrim(pan_no);
+alter table accounts drop constraint if exists accounts_identity_phone_check;
+alter table accounts add constraint accounts_identity_phone_check check (contact_no is null or contact_no ~ '^[0-9]{10}$');
+alter table accounts drop constraint if exists accounts_identity_pan_check;
+alter table accounts add constraint accounts_identity_pan_check check (pan_no is null or pan_no ~ '^[0-9]{9}$');
 
 -- ── Parties ───────────────────────────────────────────────────────────────────
 create table if not exists parties (
@@ -297,6 +304,13 @@ create table if not exists parties (
 );
 alter table parties add column if not exists is_archived boolean not null default false;
 alter table parties add column if not exists default_credit_days integer not null default 0;
+update parties set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update parties set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update parties set phone = btrim(phone), pan_vat = btrim(pan_vat);
+alter table parties drop constraint if exists parties_identity_phone_check;
+alter table parties add constraint parties_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table parties drop constraint if exists parties_identity_pan_check;
+alter table parties add constraint parties_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
 
 -- ── Items ─────────────────────────────────────────────────────────────────────
 create table if not exists items (
@@ -379,6 +393,7 @@ create table if not exists vouchers (
   date_bs          text not null,
   date_bs_key      integer not null,
   invoice_no       text,
+  draft_no         text,
   supplier_invoice_no text,
   numbering_period text not null default 'all',
   credit_days      integer,
@@ -390,6 +405,9 @@ create table if not exists vouchers (
   return_reason    text,
   settlement_mode text check (settlement_mode in ('party','cash','bank')),
   simple_entry_type text check (simple_entry_type in ('Income','Expense')),
+  contra_entry boolean not null default false,
+  contra_destination_account_id text references accounts(id),
+  contra_charge_amount numeric(14,2) not null default 0,
   restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
@@ -399,8 +417,15 @@ create table if not exists vouchers (
   vat_amount       numeric(14,2),
   total            numeric(14,2) not null default 0,
   cancelled        boolean not null default false,
+  status           text not null default 'Completed' check (status in ('Draft','Completed')),
   seq              integer not null,
-  created_at       timestamptz not null default now()
+  created_by       uuid references auth.users(id),
+  updated_by       uuid references auth.users(id),
+  created_at       timestamptz not null default now(),
+  updated_at       timestamptz not null default now(),
+  completed_by     uuid references auth.users(id),
+  completed_at     timestamptz,
+  draft_payload    jsonb
 );
 
 do $$
@@ -420,6 +445,11 @@ end $$;
 -- normalizes them from the legacy AD date while displaying.
 alter table vouchers add column if not exists date_ad date;
 alter table vouchers add column if not exists supplier_invoice_no text;
+alter table vouchers add column if not exists simple_entry_type text;
+alter table vouchers add column if not exists contra_entry boolean not null default false;
+alter table vouchers add column if not exists contra_destination_account_id text references accounts(id);
+alter table vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
 alter table vouchers add column if not exists date_bs text;
@@ -427,6 +457,15 @@ alter table vouchers add column if not exists date_bs_key integer;
 alter table vouchers add column if not exists original_voucher_id uuid references vouchers(id) on delete restrict;
 alter table vouchers add column if not exists return_reason text;
 alter table vouchers add column if not exists settlement_mode text;
+alter table vouchers add column if not exists status text not null default 'Completed';
+alter table vouchers drop constraint if exists vouchers_status_check;
+alter table vouchers add constraint vouchers_status_check check (status in ('Draft','Completed'));
+alter table vouchers add column if not exists created_by uuid references auth.users(id);
+alter table vouchers add column if not exists updated_by uuid references auth.users(id);
+alter table vouchers add column if not exists updated_at timestamptz not null default now();
+alter table vouchers add column if not exists completed_by uuid references auth.users(id);
+alter table vouchers add column if not exists completed_at timestamptz;
+alter table vouchers add column if not exists draft_payload jsonb;
 alter table vouchers add column if not exists restock_items boolean;
 update vouchers set date_ad = coalesce(date_ad, date) where date_ad is null;
 
@@ -450,6 +489,33 @@ create table if not exists stock_lines (
   stock_condition  text not null default 'saleable' check (stock_condition in ('saleable','damaged','expired')),
   is_transfer      boolean not null default false
 );
+
+create or replace function public.prevent_service_item_stock_line()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if exists (
+    select 1
+    from public.items item
+    where item.id = new.item_id
+      and coalesce(item.is_service, false)
+  ) then
+    raise exception 'Service items cannot create stock movements';
+  end if;
+  return new;
+end;
+$$;
+
+drop trigger if exists stock_lines_reject_service_items on public.stock_lines;
+create trigger stock_lines_reject_service_items
+before insert or update of item_id on public.stock_lines
+for each row
+execute function public.prevent_service_item_stock_line();
+
+revoke all on function public.prevent_service_item_stock_line() from public, anon, authenticated;
 
 -- ── Invoice Items (human-readable line items for invoice display) ─────────────
 create table if not exists invoice_items (
@@ -517,6 +583,7 @@ create index if not exists idx_master_logs_company on master_change_logs(company
 create index if not exists idx_vouchers_company   on vouchers(company_id, date desc, seq desc);
 create index if not exists idx_vouchers_company_bs on vouchers(company_id, date_bs_key desc, seq desc);
 create unique index if not exists vouchers_company_type_period_invoice_no_unique on vouchers(company_id, type, numbering_period, invoice_no) where invoice_no is not null;
+create unique index if not exists vouchers_company_draft_no_unique on vouchers(company_id, draft_no) where draft_no is not null;
 create index if not exists idx_vouchers_original on vouchers(original_voucher_id) where original_voucher_id is not null;
 create index if not exists idx_iitems_source on invoice_items(source_invoice_item_id) where source_invoice_item_id is not null;
 create index if not exists idx_vlines_voucher     on voucher_lines(voucher_id);
@@ -665,16 +732,1011 @@ create policy "app_events_developer_select" on app_events
   for select using (is_developer_admin());
 
 -- ── Done ──────────────────────────────────────────────────────────────────────
+
+-- =============================================================================
+-- BEGIN INCLUDED FILE: supabase-multi-company-migration.sql
+-- =============================================================================
+-- Single-login multi-company tenancy, licensing, active-company selection, and membership RLS.
+-- Apply after the complete current schema/migrations. Safe to rerun.
+
+begin;
+
+drop index if exists public.companies_user_id_unique;
+
+create table if not exists public.company_members (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null default 'Admin',
+  status text not null default 'active',
+  created_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique(company_id, user_id),
+  check (role in ('Admin')),
+  check (status in ('active','inactive'))
+);
+
+create table if not exists public.user_company_limits (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  max_companies integer not null default 1 check (max_companies >= 0),
+  unlimited_companies boolean not null default false,
+  company_creation_enabled boolean not null default true,
+  license_status text not null default 'active' check (license_status in ('active','expired','suspended')),
+  expires_at date,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  updated_by uuid references auth.users(id) on delete set null
+);
+
+create table if not exists public.user_preferences (
+  user_id uuid primary key references auth.users(id) on delete cascade,
+  active_company_id uuid references public.companies(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table if not exists public.company_user_permissions (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid not null references public.companies(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete cascade,
+  permission text not null,
+  granted_by uuid references auth.users(id) on delete set null,
+  created_at timestamptz not null default now(),
+  unique(company_id, user_id, permission)
+);
+
+create index if not exists idx_company_members_user_status on public.company_members(user_id, status);
+create index if not exists idx_company_members_company_status on public.company_members(company_id, status);
+create index if not exists idx_companies_owner on public.companies(user_id, created_at);
+
+insert into public.company_members(company_id, user_id, role, status, created_by)
+select company.id, company.user_id, 'Admin', 'active', company.user_id
+from public.companies company
+where company.user_id is not null
+on conflict (company_id, user_id) do update
+set role = 'Admin',
+    status = 'active',
+    updated_at = now();
+
+insert into public.user_preferences(user_id, active_company_id)
+select distinct on (member.user_id) member.user_id, member.company_id
+from public.company_members member
+join public.companies company on company.id = member.company_id
+where member.status = 'active'
+order by member.user_id, company.created_at
+on conflict (user_id) do nothing;
+
+create or replace function public.is_company_member(target_company uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select auth.uid() is not null and (
+    public.is_developer_admin()
+    or exists (
+      select 1
+      from public.company_members member
+      where member.company_id = target_company
+        and member.user_id = auth.uid()
+        and member.status = 'active'
+    )
+  )
+$$;
+
+create or replace function public.is_company_admin(target_company uuid)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select auth.uid() is not null and (
+    public.is_developer_admin()
+    or exists (
+      select 1
+      from public.company_members member
+      where member.company_id = target_company
+        and member.user_id = auth.uid()
+        and member.status = 'active'
+        and member.role = 'Admin'
+    )
+  )
+$$;
+
+create or replace function public.my_company_id()
+returns uuid
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select coalesce(
+    (
+      select preference.active_company_id
+      from public.user_preferences preference
+      join public.company_members member
+        on member.company_id = preference.active_company_id
+       and member.user_id = preference.user_id
+       and member.status = 'active'
+      where preference.user_id = auth.uid()
+      limit 1
+    ),
+    (
+      select member.company_id
+      from public.company_members member
+      join public.companies company on company.id = member.company_id
+      where member.user_id = auth.uid()
+        and member.status = 'active'
+      order by company.created_at
+      limit 1
+    )
+  )
+$$;
+
+create or replace function public.has_company_permission(target_company uuid, requested_permission text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select public.is_company_admin(target_company)
+    or exists (
+      select 1
+      from public.company_user_permissions permission
+      where permission.company_id = target_company
+        and permission.user_id = auth.uid()
+        and permission.permission = requested_permission
+    )
+$$;
+
+create or replace function public.company_creation_license(target_user uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with license as (
+    select
+      coalesce(limit_row.max_companies, 1) as max_companies,
+      coalesce(limit_row.unlimited_companies, false) as unlimited_companies,
+      coalesce(limit_row.company_creation_enabled, true) as company_creation_enabled,
+      coalesce(limit_row.license_status, 'active') as license_status,
+      limit_row.expires_at
+    from (select 1) seed
+    left join public.user_company_limits limit_row on limit_row.user_id = target_user
+  ),
+  usage as (
+    select count(*)::integer as current_companies
+    from public.companies company
+    where company.user_id = target_user
+  )
+  select jsonb_build_object(
+    'user_id', target_user,
+    'current_companies', usage.current_companies,
+    'max_companies', license.max_companies,
+    'unlimited_companies', license.unlimited_companies,
+    'company_creation_enabled', license.company_creation_enabled,
+    'license_status', case
+      when license.license_status = 'active' and license.expires_at is not null and license.expires_at < current_date then 'expired'
+      else license.license_status
+    end,
+    'expires_at', license.expires_at,
+    'remaining_companies', case when license.unlimited_companies then null else greatest(license.max_companies - usage.current_companies, 0) end,
+    'can_create_company', license.company_creation_enabled
+      and license.license_status = 'active'
+      and (license.expires_at is null or license.expires_at >= current_date)
+      and (license.unlimited_companies or usage.current_companies < license.max_companies)
+  )
+  from license, usage
+$$;
+
+create or replace function public.assert_company_creation_allowed(target_user uuid)
+returns void
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  license jsonb;
+begin
+  license := public.company_creation_license(target_user);
+  if coalesce((license->>'company_creation_enabled')::boolean, false) = false
+    or license->>'license_status' <> 'active'
+    or coalesce((license->>'can_create_company')::boolean, false) = false then
+    raise exception 'You have reached your maximum allowed company limit. Please contact the administrator.' using errcode = '42501';
+  end if;
+end;
+$$;
+
+create or replace function public.ensure_default_company_accounts(target_company_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if to_regprocedure('public.ensure_system_account_groups(uuid)') is not null then
+    perform public.ensure_system_account_groups(target_company_id);
+  end if;
+  if to_regprocedure('public.ensure_retained_earnings_ledger(uuid)') is not null then
+    perform public.ensure_retained_earnings_ledger(target_company_id);
+  end if;
+
+  insert into public.accounts(id, company_id, name, type, "group", category_id, is_system, is_party, opening_balance)
+  select target_company_id::text || ':' || seed.account_key, target_company_id, seed.account_name, seed.account_type, seed.group_name, category.id, seed.is_system, false, 0
+  from (values
+    ('cash','Cash','Asset','Cash-in-Hand',true),
+    ('bank','Bank Account','Asset','Bank Accounts',true),
+    ('inventory','Stock-in-Hand','Asset','Current Assets',true),
+    ('vat_payable','VAT Payable (Output)','Liability','Duties & Taxes',true),
+    ('vat_receivable','VAT Receivable (Input)','Liability','Duties & Taxes',true),
+    ('sales','Sales Account','Income','Sales Accounts',true),
+    ('purchase','Purchase Account','Expense','Purchase Accounts',true),
+    ('sales_return','Sales Return Account','Income','Sales Accounts',true),
+    ('purchase_return','Purchase Return Account','Expense','Purchase Accounts',true),
+    ('capital','Owner''s Capital','Equity','Capital Account',true),
+    ('retained_earnings','Retained Earnings','Equity','Reserves & Surplus',true),
+    ('discount_allowed','Discount Allowed','Expense','Indirect Expenses',false),
+    ('bank_charges','Bank Charges','Expense','Indirect Expenses',true),
+    ('rent','Rent Expense','Expense','Indirect Expenses',false),
+    ('salary','Salary Expense','Expense','Indirect Expenses',false),
+    ('electricity','Electricity Expense','Expense','Indirect Expenses',false)
+  ) seed(account_key, account_name, account_type, group_name, is_system)
+  left join public.account_categories category
+    on category.company_id = target_company_id
+   and category.name = seed.group_name
+   and category.account_type = seed.account_type
+  on conflict (id) do nothing;
+
+  insert into public.item_categories(company_id, name, is_archived)
+  values (target_company_id, 'General', false)
+  on conflict (company_id, name) do nothing;
+end;
+$$;
+
+create or replace function public.set_active_company(target_company uuid)
+returns public.companies
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  selected_company public.companies%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_company_member(target_company) then raise exception 'Company access denied' using errcode = '42501'; end if;
+  insert into public.user_preferences(user_id, active_company_id, updated_at)
+  values (auth.uid(), target_company, now())
+  on conflict (user_id) do update
+  set active_company_id = excluded.active_company_id,
+      updated_at = now();
+  select * into selected_company from public.companies where id = target_company;
+  return selected_company;
+end;
+$$;
+
+create or replace function public.create_company_atomic(p_company jsonb)
+returns public.companies
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  caller uuid := auth.uid();
+  user_email text;
+  saved public.companies%rowtype;
+begin
+  if caller is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  perform public.assert_company_creation_allowed(caller);
+  select email into user_email from auth.users where id = caller;
+
+  insert into public.companies(
+    user_id, owner_email, name, address, pan_vat, phone, vat_enabled,
+    inventory_valuation_method, sales_prefix, purchase_prefix, receipt_prefix,
+    payment_prefix, sales_return_prefix, purchase_return_prefix,
+    journal_numbering_mode, reset_numbering_fiscal_year, print_format,
+    invoice_terms, payment_qr_text, fiscal_year_start, fiscal_year_configured
+  ) values (
+    caller,
+    user_email,
+    coalesce(nullif(btrim(coalesce(p_company->>'name', '')), ''), 'My Company'),
+    nullif(btrim(coalesce(p_company->>'address', '')), ''),
+    nullif(btrim(coalesce(p_company->>'pan_vat', '')), ''),
+    nullif(btrim(coalesce(p_company->>'phone', '')), ''),
+    coalesce((p_company->>'vat_enabled')::boolean, true),
+    coalesce(nullif(p_company->>'inventory_valuation_method', ''), 'weighted_average'),
+    coalesce(nullif(btrim(p_company->>'sales_prefix'), ''), 'INV-'),
+    coalesce(nullif(btrim(p_company->>'purchase_prefix'), ''), 'PB-'),
+    coalesce(nullif(btrim(p_company->>'receipt_prefix'), ''), 'RCPT-'),
+    coalesce(nullif(btrim(p_company->>'payment_prefix'), ''), 'PAY-'),
+    coalesce(nullif(btrim(p_company->>'sales_return_prefix'), ''), 'SR-'),
+    coalesce(nullif(btrim(p_company->>'purchase_return_prefix'), ''), 'PR-'),
+    coalesce(nullif(p_company->>'journal_numbering_mode', ''), 'auto'),
+    true,
+    coalesce(nullif(p_company->>'print_format', ''), 'A5'),
+    nullif(btrim(coalesce(p_company->>'invoice_terms', '')), ''),
+    nullif(btrim(coalesce(p_company->>'payment_qr_text', '')), ''),
+    coalesce(nullif(p_company->>'fiscal_year_start', '')::date, '2026-07-17'::date),
+    coalesce((p_company->>'fiscal_year_configured')::boolean, true)
+  ) returning * into saved;
+
+  insert into public.company_members(company_id, user_id, role, status, created_by)
+  values (saved.id, caller, 'Admin', 'active', caller)
+  on conflict (company_id, user_id) do update
+  set role = 'Admin', status = 'active', updated_at = now();
+
+  perform public.ensure_default_company_accounts(saved.id);
+  perform public.set_active_company(saved.id);
+  return saved;
+end;
+$$;
+
+create or replace function public.get_my_companies()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  with memberships as (
+    select
+      member.company_id,
+      member.role,
+      member.status,
+      member.created_at as member_since,
+      to_jsonb(company.*) as company
+    from public.company_members member
+    join public.companies company on company.id = member.company_id
+    where member.user_id = auth.uid()
+      and member.status = 'active'
+    order by company.created_at
+  ),
+  preferred as (
+    select coalesce(
+      (
+        select preference.active_company_id
+        from public.user_preferences preference
+        join public.company_members member
+          on member.company_id = preference.active_company_id
+         and member.user_id = preference.user_id
+         and member.status = 'active'
+        where preference.user_id = auth.uid()
+        limit 1
+      ),
+      (select company_id from memberships limit 1)
+    ) as active_company_id
+  )
+  select jsonb_build_object(
+    'active_company_id', preferred.active_company_id,
+    'memberships', coalesce((select jsonb_agg(to_jsonb(memberships)) from memberships), '[]'::jsonb),
+    'license', public.company_creation_license(auth.uid())
+  )
+  from preferred
+$$;
+
+create or replace function public.add_existing_company_admin(target_company uuid, target_email text)
+returns public.company_members
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_user uuid;
+  saved public.company_members%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_company_admin(target_company) then raise exception 'Company admin access required' using errcode = '42501'; end if;
+  select id into target_user
+  from auth.users
+  where lower(email) = lower(btrim(target_email))
+  limit 1;
+  if target_user is null then raise exception 'No existing user found for this email address'; end if;
+
+  insert into public.company_members(company_id, user_id, role, status, created_by)
+  values (target_company, target_user, 'Admin', 'active', auth.uid())
+  on conflict (company_id, user_id) do update
+  set role = 'Admin', status = 'active', updated_at = now()
+  returning * into saved;
+  return saved;
+end;
+$$;
+
+create or replace function public.developer_user_company_licenses()
+returns jsonb
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select case when public.is_developer_admin() then coalesce(jsonb_agg(row_data order by lower(coalesce(row_data->>'email', ''))), '[]'::jsonb) else '[]'::jsonb end
+  from (
+    select jsonb_build_object(
+      'user_id', user_record.id,
+      'email', user_record.email,
+      'license', public.company_creation_license(user_record.id),
+      'companies', coalesce((
+        select jsonb_agg(jsonb_build_object('id', company.id, 'name', company.name, 'created_at', company.created_at) order by company.created_at)
+        from public.companies company
+        where company.user_id = user_record.id
+      ), '[]'::jsonb)
+    ) as row_data
+    from auth.users user_record
+    where exists (select 1 from public.companies company where company.user_id = user_record.id)
+       or exists (select 1 from public.user_company_limits limit_row where limit_row.user_id = user_record.id)
+  ) rows;
+$$;
+
+create or replace function public.update_user_company_limit(
+  target_user uuid,
+  p_max_companies integer,
+  p_unlimited_companies boolean,
+  p_company_creation_enabled boolean,
+  p_license_status text,
+  p_expires_at date default null
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode = '42501'; end if;
+  insert into public.user_company_limits(user_id, max_companies, unlimited_companies, company_creation_enabled, license_status, expires_at, updated_by, updated_at)
+  values (
+    target_user,
+    greatest(coalesce(p_max_companies, 1), 0),
+    coalesce(p_unlimited_companies, false),
+    coalesce(p_company_creation_enabled, true),
+    coalesce(nullif(p_license_status, ''), 'active'),
+    p_expires_at,
+    auth.uid(),
+    now()
+  )
+  on conflict (user_id) do update
+  set max_companies = excluded.max_companies,
+      unlimited_companies = excluded.unlimited_companies,
+      company_creation_enabled = excluded.company_creation_enabled,
+      license_status = excluded.license_status,
+      expires_at = excluded.expires_at,
+      updated_by = auth.uid(),
+      updated_at = now();
+  return public.company_creation_license(target_user);
+end;
+$$;
+
+create or replace function public.prevent_company_id_change()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if tg_op = 'UPDATE' and new.company_id is distinct from old.company_id then
+    raise exception 'Company cannot be changed for %.%', tg_table_schema, tg_table_name;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.validate_company_reference_integrity()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  parent_company uuid;
+  source_company uuid;
+begin
+  if tg_table_name = 'accounts' then
+    if new.category_id is not null and not exists(select 1 from public.account_categories c where c.id = new.category_id and c.company_id = new.company_id) then
+      raise exception 'Ledger category must belong to the same company';
+    end if;
+  elsif tg_table_name = 'account_categories' then
+    if new.parent_category_id is not null and not exists(select 1 from public.account_categories c where c.id = new.parent_category_id and c.company_id = new.company_id and c.account_type = new.account_type) then
+      raise exception 'Parent account group must belong to the same company and type';
+    end if;
+  elsif tg_table_name = 'parties' then
+    if not exists(select 1 from public.accounts a where a.id = new.account_id and a.company_id = new.company_id) then
+      raise exception 'Party ledger must belong to the same company';
+    end if;
+  elsif tg_table_name = 'items' then
+    if new.category_id is not null and not exists(select 1 from public.item_categories c where c.id = new.category_id and c.company_id = new.company_id) then
+      raise exception 'Item category must belong to the same company';
+    end if;
+  elsif tg_table_name = 'item_categories' then
+    if new.parent_category_id is not null and not exists(select 1 from public.item_categories c where c.id = new.parent_category_id and c.company_id = new.company_id) then
+      raise exception 'Parent item category must belong to the same company';
+    end if;
+  elsif tg_table_name = 'vouchers' then
+    if new.party_account_id is not null and not exists(select 1 from public.accounts a where a.id = new.party_account_id and a.company_id = new.company_id) then
+      raise exception 'Voucher party ledger must belong to the same company';
+    end if;
+    if new.settlement_account_id is not null and not exists(select 1 from public.accounts a where a.id = new.settlement_account_id and a.company_id = new.company_id) then
+      raise exception 'Voucher settlement ledger must belong to the same company';
+    end if;
+    if new.original_voucher_id is not null and not exists(select 1 from public.vouchers v where v.id = new.original_voucher_id and v.company_id = new.company_id) then
+      raise exception 'Original voucher must belong to the same company';
+    end if;
+  elsif tg_table_name = 'voucher_settlements' then
+    if not exists(select 1 from public.vouchers v where v.id = new.settlement_voucher_id and v.company_id = new.company_id) then
+      raise exception 'Settlement voucher must belong to the same company';
+    end if;
+    if not exists(select 1 from public.vouchers v where v.id = new.invoice_voucher_id and v.company_id = new.company_id) then
+      raise exception 'Invoice voucher must belong to the same company';
+    end if;
+    if not exists(select 1 from public.accounts a where a.id = new.party_account_id and a.company_id = new.company_id) then
+      raise exception 'Settlement ledger must belong to the same company';
+    end if;
+  end if;
+
+  if tg_table_name = 'voucher_lines' then
+    select company_id into parent_company from public.vouchers where id = new.voucher_id;
+    if parent_company is null then raise exception 'Voucher line parent voucher is missing'; end if;
+    if not exists(select 1 from public.accounts a where a.id = new.account_id and a.company_id = parent_company) then
+      raise exception 'Voucher line ledger must belong to the voucher company';
+    end if;
+  elsif tg_table_name = 'stock_lines' then
+    select company_id into parent_company from public.vouchers where id = new.voucher_id;
+    if parent_company is null then raise exception 'Stock line parent voucher is missing'; end if;
+    if not exists(select 1 from public.items i where i.id = new.item_id and i.company_id = parent_company) then
+      raise exception 'Stock line item must belong to the voucher company';
+    end if;
+  elsif tg_table_name = 'invoice_items' then
+    select company_id into parent_company from public.vouchers where id = new.voucher_id;
+    if parent_company is null then raise exception 'Invoice item parent voucher is missing'; end if;
+    if not exists(select 1 from public.items i where i.id = new.item_id and i.company_id = parent_company) then
+      raise exception 'Invoice item must belong to the voucher company';
+    end if;
+    if new.source_invoice_item_id is not null then
+      select source_voucher.company_id into source_company
+      from public.invoice_items source_item
+      join public.vouchers source_voucher on source_voucher.id = source_item.voucher_id
+      where source_item.id = new.source_invoice_item_id;
+      if source_company is distinct from parent_company then raise exception 'Source invoice item must belong to the same company'; end if;
+    end if;
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.validate_active_company_preference()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if new.active_company_id is not null and not exists (
+    select 1 from public.company_members member
+    where member.company_id = new.active_company_id
+      and member.user_id = new.user_id
+      and member.status = 'active'
+  ) then
+    raise exception 'Active company must belong to the user';
+  end if;
+  new.updated_at = now();
+  return new;
+end;
+$$;
+
+drop trigger if exists user_preferences_company_guard on public.user_preferences;
+create trigger user_preferences_company_guard
+before insert or update on public.user_preferences
+for each row execute function public.validate_active_company_preference();
+
+do $triggers$
+declare
+  table_name text;
+begin
+  foreach table_name in array array['accounts','account_categories','parties','items','item_categories','vouchers','voucher_settlements'] loop
+    execute format('drop trigger if exists %I on public.%I', table_name || '_company_static_guard', table_name);
+    execute format('create trigger %I before update on public.%I for each row execute function public.prevent_company_id_change()', table_name || '_company_static_guard', table_name);
+    execute format('drop trigger if exists %I on public.%I', table_name || '_company_reference_guard', table_name);
+    execute format('create trigger %I before insert or update on public.%I for each row execute function public.validate_company_reference_integrity()', table_name || '_company_reference_guard', table_name);
+  end loop;
+
+  foreach table_name in array array['voucher_lines','stock_lines','invoice_items'] loop
+    execute format('drop trigger if exists %I on public.%I', table_name || '_company_reference_guard', table_name);
+    execute format('create trigger %I before insert or update on public.%I for each row execute function public.validate_company_reference_integrity()', table_name || '_company_reference_guard', table_name);
+  end loop;
+end;
+$triggers$;
+
+alter table public.company_members enable row level security;
+alter table public.user_company_limits enable row level security;
+alter table public.user_preferences enable row level security;
+
+do $policies$
+declare
+  table_name text;
+begin
+  foreach table_name in array array[
+    'companies','accounts','account_categories','parties','items','item_categories',
+    'master_change_logs','vouchers','voucher_settlements','app_events',
+    'company_modules','company_user_permissions','cheque_banks','cheques','cheque_events'
+  ] loop
+    if to_regclass('public.' || table_name) is not null then
+      execute format('alter table public.%I enable row level security', table_name);
+    end if;
+  end loop;
+
+  drop policy if exists "companies_own" on public.companies;
+  drop policy if exists "companies_owner_select" on public.companies;
+  drop policy if exists "companies_developer_select" on public.companies;
+  drop policy if exists "companies_developer_update" on public.companies;
+  drop policy if exists "companies_developer_delete" on public.companies;
+  drop policy if exists "companies_member_select" on public.companies;
+  drop policy if exists "companies_admin_update" on public.companies;
+  drop policy if exists "companies_developer_all" on public.companies;
+  create policy "companies_member_select" on public.companies for select using (public.is_company_member(id));
+  create policy "companies_admin_update" on public.companies for update using (public.is_company_admin(id)) with check (public.is_company_admin(id));
+  create policy "companies_developer_all" on public.companies for all using (public.is_developer_admin()) with check (public.is_developer_admin());
+
+  foreach table_name in array array['accounts','account_categories','parties','items','item_categories','master_change_logs','vouchers','voucher_settlements'] loop
+    execute format('drop policy if exists %I on public.%I', table_name || '_own', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_developer_select', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_member_select', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_write', table_name);
+    execute format('create policy %I on public.%I for select using (public.is_company_member(company_id))', table_name || '_member_select', table_name);
+    execute format('create policy %I on public.%I for all using (public.is_company_admin(company_id)) with check (public.is_company_admin(company_id))', table_name || '_admin_write', table_name);
+  end loop;
+
+  foreach table_name in array array['voucher_lines','stock_lines','invoice_items'] loop
+    execute format('drop policy if exists %I on public.%I', case when table_name = 'voucher_lines' then 'vlines_own' when table_name = 'stock_lines' then 'slines_own' else 'iitems_own' end, table_name);
+    execute format('drop policy if exists %I on public.%I', case when table_name = 'voucher_lines' then 'vlines_developer_select' when table_name = 'stock_lines' then 'slines_developer_select' else 'iitems_developer_select' end, table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_member_select', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_write', table_name);
+    execute format('create policy %I on public.%I for select using (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_member(voucher.company_id)))', table_name || '_member_select', table_name);
+    execute format('create policy %I on public.%I for all using (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id))) with check (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id)))', table_name || '_admin_write', table_name);
+  end loop;
+end;
+$policies$;
+
+drop policy if exists company_members_own_select on public.company_members;
+drop policy if exists company_members_admin_write on public.company_members;
+drop policy if exists company_members_developer_all on public.company_members;
+create policy company_members_own_select on public.company_members
+  for select using (user_id = auth.uid() or public.is_company_admin(company_id));
+create policy company_members_admin_write on public.company_members
+  for all using (public.is_company_admin(company_id)) with check (public.is_company_admin(company_id));
+create policy company_members_developer_all on public.company_members
+  for all using (public.is_developer_admin()) with check (public.is_developer_admin());
+
+drop policy if exists user_preferences_own on public.user_preferences;
+drop policy if exists user_preferences_developer_select on public.user_preferences;
+create policy user_preferences_own on public.user_preferences
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+create policy user_preferences_developer_select on public.user_preferences
+  for select using (public.is_developer_admin());
+
+drop policy if exists user_company_limits_own_select on public.user_company_limits;
+drop policy if exists user_company_limits_developer_all on public.user_company_limits;
+create policy user_company_limits_own_select on public.user_company_limits
+  for select using (user_id = auth.uid());
+create policy user_company_limits_developer_all on public.user_company_limits
+  for all using (public.is_developer_admin()) with check (public.is_developer_admin());
+
+drop policy if exists app_events_own_insert on public.app_events;
+drop policy if exists app_events_developer_select on public.app_events;
+drop policy if exists app_events_member_select on public.app_events;
+create policy app_events_own_insert on public.app_events
+  for insert with check (public.is_company_member(company_id) and user_id = auth.uid());
+create policy app_events_member_select on public.app_events
+  for select using (public.is_company_admin(company_id));
+create policy app_events_developer_select on public.app_events
+  for select using (public.is_developer_admin());
+
+do $optional_policies$
+begin
+  if to_regclass('public.company_modules') is not null then
+    drop policy if exists company_modules_owner_select on public.company_modules;
+    drop policy if exists company_modules_developer_all on public.company_modules;
+    create policy company_modules_owner_select on public.company_modules for select using (public.is_company_member(company_id));
+    create policy company_modules_developer_all on public.company_modules for all using (public.is_developer_admin()) with check (public.is_developer_admin());
+  end if;
+  if to_regclass('public.company_user_permissions') is not null then
+    drop policy if exists company_permissions_own_select on public.company_user_permissions;
+    drop policy if exists company_permissions_developer_all on public.company_user_permissions;
+    create policy company_permissions_own_select on public.company_user_permissions for select using (public.is_company_member(company_id) and (user_id = auth.uid() or public.is_company_admin(company_id)));
+    create policy company_permissions_developer_all on public.company_user_permissions for all using (public.is_developer_admin()) with check (public.is_developer_admin());
+  end if;
+end;
+$optional_policies$;
+
+create or replace function public.delete_developer_company(target_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  account_category_guard_exists boolean;
+begin
+  if not public.is_developer_admin() then
+    raise exception 'Developer admin access required' using errcode = '42501';
+  end if;
+
+  if target_company is null then
+    raise exception 'Company id is required' using errcode = '22023';
+  end if;
+
+  if not exists (select 1 from public.companies company where company.id = target_company) then
+    raise exception 'Company not found' using errcode = 'P0002';
+  end if;
+
+  perform 1 from public.companies company where company.id = target_company for update;
+
+  select exists (
+    select 1
+    from pg_trigger trigger_row
+    where trigger_row.tgrelid = 'public.account_categories'::regclass
+      and trigger_row.tgname = 'account_category_system_guard'
+      and not trigger_row.tgisinternal
+  ) into account_category_guard_exists;
+
+  if account_category_guard_exists then
+    execute 'alter table public.account_categories disable trigger account_category_system_guard';
+  end if;
+
+  begin
+  update public.user_preferences
+  set active_company_id = null,
+      updated_at = now()
+  where active_company_id = target_company;
+
+  if to_regclass('public.cheque_events') is not null then
+    delete from public.cheque_events where company_id = target_company;
+  end if;
+  if to_regclass('public.cheques') is not null then
+    delete from public.cheques where company_id = target_company;
+  end if;
+  if to_regclass('public.cheque_banks') is not null then
+    delete from public.cheque_banks where company_id = target_company;
+  end if;
+
+  delete from public.voucher_settlements settlement
+  where settlement.company_id = target_company
+     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.settlement_voucher_id and voucher.company_id = target_company)
+     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.invoice_voucher_id and voucher.company_id = target_company);
+
+  update public.invoice_items item
+  set source_invoice_item_id = null
+  where source_invoice_item_id is not null
+    and (
+      exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company)
+      or exists (
+        select 1
+        from public.invoice_items source_item
+        join public.vouchers source_voucher on source_voucher.id = source_item.voucher_id
+        where source_item.id = item.source_invoice_item_id
+          and source_voucher.company_id = target_company
+      )
+    );
+
+  delete from public.invoice_items item
+  where exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company);
+  delete from public.stock_lines line
+  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
+  delete from public.voucher_lines line
+  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
+
+  update public.vouchers voucher
+  set original_voucher_id = null
+  where voucher.original_voucher_id is not null
+    and exists (select 1 from public.vouchers original where original.id = voucher.original_voucher_id and original.company_id = target_company);
+  delete from public.vouchers where company_id = target_company;
+
+  delete from public.parties where company_id = target_company;
+  delete from public.master_change_logs where company_id = target_company;
+  delete from public.items where company_id = target_company;
+
+  update public.item_categories
+  set parent_category_id = null
+  where company_id = target_company
+    and parent_category_id is not null;
+  delete from public.item_categories where company_id = target_company;
+
+  delete from public.accounts where company_id = target_company;
+
+  update public.account_categories
+  set parent_category_id = null
+  where company_id = target_company
+    and parent_category_id is not null;
+  delete from public.account_categories where company_id = target_company;
+
+  if to_regclass('public.company_modules') is not null then
+    delete from public.company_modules where company_id = target_company;
+  end if;
+  if to_regclass('public.company_user_permissions') is not null then
+    delete from public.company_user_permissions where company_id = target_company;
+  end if;
+
+  delete from public.company_members where company_id = target_company;
+  delete from public.app_events where company_id = target_company;
+  delete from public.companies where id = target_company;
+
+  exception when others then
+    if account_category_guard_exists then
+      execute 'alter table public.account_categories enable trigger account_category_system_guard';
+    end if;
+    raise;
+  end;
+
+  if account_category_guard_exists then
+    execute 'alter table public.account_categories enable trigger account_category_system_guard';
+  end if;
+end;
+$$;
+
+revoke all on function public.is_company_member(uuid) from public, anon;
+revoke all on function public.is_company_admin(uuid) from public, anon;
+revoke all on function public.company_creation_license(uuid) from public, anon;
+revoke all on function public.assert_company_creation_allowed(uuid) from public, anon;
+revoke all on function public.ensure_default_company_accounts(uuid) from public, anon, authenticated;
+revoke all on function public.create_company_atomic(jsonb) from public, anon;
+revoke all on function public.set_active_company(uuid) from public, anon;
+revoke all on function public.get_my_companies() from public, anon;
+revoke all on function public.add_existing_company_admin(uuid,text) from public, anon;
+revoke all on function public.developer_user_company_licenses() from public, anon;
+revoke all on function public.update_user_company_limit(uuid,integer,boolean,boolean,text,date) from public, anon;
+revoke all on function public.delete_developer_company(uuid) from public, anon;
+grant execute on function public.is_company_member(uuid) to authenticated;
+grant execute on function public.is_company_admin(uuid) to authenticated;
+grant execute on function public.company_creation_license(uuid) to authenticated;
+grant execute on function public.create_company_atomic(jsonb) to authenticated;
+grant execute on function public.set_active_company(uuid) to authenticated;
+grant execute on function public.get_my_companies() to authenticated;
+grant execute on function public.add_existing_company_admin(uuid,text) to authenticated;
+grant execute on function public.developer_user_company_licenses() to authenticated;
+grant execute on function public.update_user_company_limit(uuid,integer,boolean,boolean,text,date) to authenticated;
+grant execute on function public.delete_developer_company(uuid) to authenticated;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-multi-company-migration.sql
+
+-- BEGIN INCLUDED FILE: supabase-sales-invoice-chronology-setting-migration.sql
+
+-- Add an opt-in Sales-only chronological invoice date setting.
+-- When disabled, all voucher types only require dates inside the active fiscal year.
+begin;
+
+alter table public.companies
+  add column if not exists enforce_sales_invoice_chronology boolean not null default false;
+
+create or replace function public.voucher_number_value(value text)
+returns bigint
+language sql
+immutable
+set search_path = public
+as $$
+  select nullif(substring(coalesce(value, '') from '([0-9]+)$'), '')::bigint;
+$$;
+
+create or replace function public.validate_voucher_chronology()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  company_record public.companies%rowtype;
+  current_number bigint;
+  previous_voucher public.vouchers%rowtype;
+  next_voucher public.vouchers%rowtype;
+  bypass_allowed boolean := false;
+begin
+  if coalesce(new.status, 'Completed') = 'Draft' then
+    return new;
+  end if;
+
+  if new.type <> 'Sales' then
+    return new;
+  end if;
+
+  select * into company_record from public.companies where id = new.company_id;
+  if not found then
+    return new;
+  end if;
+
+  if not coalesce(company_record.enforce_sales_invoice_chronology, false) then
+    return new;
+  end if;
+
+  current_number := public.voucher_number_value(new.invoice_no);
+  if current_number is null then
+    return new;
+  end if;
+
+  select voucher.* into previous_voucher
+  from public.vouchers voucher
+  where voucher.company_id = new.company_id
+    and voucher.type = new.type
+    and coalesce(voucher.status, 'Completed') <> 'Draft'
+    and coalesce(voucher.numbering_period, 'all') = coalesce(new.numbering_period, 'all')
+    and voucher.id is distinct from new.id
+    and public.voucher_number_value(voucher.invoice_no) < current_number
+  order by public.voucher_number_value(voucher.invoice_no) desc, voucher.seq desc
+  limit 1;
+
+  select voucher.* into next_voucher
+  from public.vouchers voucher
+  where voucher.company_id = new.company_id
+    and voucher.type = new.type
+    and coalesce(voucher.status, 'Completed') <> 'Draft'
+    and coalesce(voucher.numbering_period, 'all') = coalesce(new.numbering_period, 'all')
+    and voucher.id is distinct from new.id
+    and public.voucher_number_value(voucher.invoice_no) > current_number
+  order by public.voucher_number_value(voucher.invoice_no) asc, voucher.seq asc
+  limit 1;
+
+  if (previous_voucher.id is not null and new.date_bs_key < previous_voucher.date_bs_key)
+    or (next_voucher.id is not null and new.date_bs_key > next_voucher.date_bs_key) then
+    bypass_allowed := coalesce(company_record.allow_admin_chronological_bypass, false)
+      and public.is_company_admin(new.company_id);
+
+    if not bypass_allowed then
+      if tg_op = 'INSERT' and previous_voucher.id is not null and new.date_bs_key < previous_voucher.date_bs_key then
+        raise exception 'The voucher date cannot be earlier than the previous voucher (%). Please select the same or a later date.', previous_voucher.invoice_no;
+      elsif previous_voucher.id is not null and new.date_bs_key < previous_voucher.date_bs_key then
+        raise exception 'The voucher date cannot be earlier than Voucher %.', previous_voucher.invoice_no;
+      else
+        raise exception 'The voucher date cannot be later than Voucher %.', next_voucher.invoice_no;
+      end if;
+    end if;
+
+    insert into public.app_events (company_id, user_id, event_type, metadata)
+    values (
+      new.company_id,
+      auth.uid(),
+      'voucher_chronology_bypass',
+      jsonb_build_object(
+        'voucher_type', new.type,
+        'voucher_number', new.invoice_no,
+        'previous_voucher', previous_voucher.invoice_no,
+        'previous_date', previous_voucher.date_bs,
+        'next_voucher', next_voucher.invoice_no,
+        'next_date', next_voucher.date_bs,
+        'new_date', new.date_bs,
+        'source', 'database'
+      )
+    );
+  end if;
+
+  return new;
+end;
+$$;
+
+drop trigger if exists vouchers_chronology_guard on public.vouchers;
+create trigger vouchers_chronology_guard
+before insert or update of date_bs, date_bs_key, invoice_no, numbering_period, type, status on public.vouchers
+for each row execute function public.validate_voucher_chronology();
+
+revoke all on function public.validate_voucher_chronology() from public, anon, authenticated;
+revoke all on function public.voucher_number_value(text) from public, anon, authenticated;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END INCLUDED FILE: supabase-sales-invoice-chronology-setting-migration.sql
+
 -- After running this schema, set your environment variables:
 --   VITE_SUPABASE_URL      = https://your-project-id.supabase.co
 --   VITE_SUPABASE_ANON_KEY = your-anon-public-key
 -- Both are in: Supabase dashboard → Settings → API
 
--- END INCLUDED FILE: supabase-schema.sql
-
+-- END SYNCED DB FILE: supabase-schema.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-masters-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-masters-migration.sql
 -- =============================================================================
 -- KhataERP Masters migration
 -- Run this file once in Supabase SQL Editor for an existing project.
@@ -722,7 +1784,6 @@ alter table items add column if not exists category_id uuid references item_cate
 alter table items add column if not exists sku text;
 alter table items add column if not exists barcode text;
 alter table items add column if not exists vat_applicable boolean not null default true;
-alter table items add column if not exists is_service boolean not null default false;
 alter table items add column if not exists is_archived boolean not null default false;
 
 insert into account_categories (company_id, name, account_type, is_system)
@@ -793,11 +1854,10 @@ create policy "master_change_logs_developer_select" on master_change_logs
 
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-masters-migration.sql
-
+-- END SYNCED DB FILE: supabase-masters-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-returns-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-returns-migration.sql
 -- =============================================================================
 -- KhataERP Sales Return / Purchase Return migration
 -- Run once in Supabase SQL Editor after the main schema or Masters migration.
@@ -858,11 +1918,10 @@ create index if not exists idx_iitems_source
 
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-returns-migration.sql
-
+-- END SYNCED DB FILE: supabase-returns-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-integrity-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-integrity-migration.sql
 -- =============================================================================
 -- Apply after supabase-schema.sql.
 -- Existing duplicate invoice numbers are repaired deterministically: the oldest
@@ -954,11 +2013,10 @@ for each row execute function public.validate_voucher_balance();
 
 commit;
 
--- END INCLUDED FILE: supabase-integrity-migration.sql
-
+-- END SYNCED DB FILE: supabase-integrity-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-fiscal-voucher-numbering-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-fiscal-voucher-numbering-migration.sql
 -- =============================================================================
 -- Apply after supabase-integrity-migration.sql.
 -- Allows the same voucher number to be reused in different fiscal years while
@@ -981,11 +2039,10 @@ create unique index if not exists vouchers_company_type_period_invoice_no_unique
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-fiscal-voucher-numbering-migration.sql
-
+-- END SYNCED DB FILE: supabase-fiscal-voucher-numbering-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-stock-condition-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-stock-condition-migration.sql
 -- =============================================================================
 -- Tracks stock condition without changing historical quantities or valuation.
 -- Existing stock movements are classified as saleable.
@@ -1006,7 +2063,7 @@ begin
   alter table public.stock_lines drop constraint if exists stock_lines_stock_condition_check;
   alter table public.stock_lines add constraint stock_lines_stock_condition_check
     check (stock_condition in ('saleable', 'damaged', 'expired'));
-end $$;
+end $$;s
 
 create index if not exists idx_slines_item_condition
   on public.stock_lines(item_id, stock_condition);
@@ -1014,11 +2071,10 @@ create index if not exists idx_slines_item_condition
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-stock-condition-migration.sql
-
+-- END SYNCED DB FILE: supabase-stock-condition-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-alternative-units-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-alternative-units-migration.sql
 -- =============================================================================
 -- Main/alternative unit support. Apply after the base schema.
 begin;
@@ -1051,11 +2107,10 @@ alter table public.invoice_items add constraint invoice_items_conversion_factor_
 
 commit;
 
--- END INCLUDED FILE: supabase-alternative-units-migration.sql
-
+-- END SYNCED DB FILE: supabase-alternative-units-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-category-hierarchy-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-category-hierarchy-migration.sql
 -- =============================================================================
 -- Three-level account and item category hierarchy.
 begin;
@@ -1103,7 +2158,7 @@ begin
     if p.company_id <> new.company_id or p.account_type <> new.account_type then raise exception 'Parent must belong to the same company and account type'; end if;
     if p.id = new.id then raise exception 'Category hierarchy cycle detected'; end if;
     levels := levels + 1;
-    if levels > 4 then raise exception 'Category hierarchy cannot exceed four levels'; end if;
+    if levels > 3 then raise exception 'Category hierarchy cannot exceed three levels'; end if;
     exit when p.parent_category_id is null;
     cursor_id := p.parent_category_id;
   end loop;
@@ -1112,7 +2167,7 @@ begin
     union all
     select c.id, d.depth + 1 from public.account_categories c join descendants d on c.parent_category_id = d.id
   ) select coalesce(max(depth), 1) into descendant_height from descendants;
-  if levels + descendant_height - 1 > 4 then raise exception 'Moving this category would exceed four levels'; end if;
+  if levels + descendant_height - 1 > 3 then raise exception 'Moving this category would exceed three levels'; end if;
   return new;
 end $$;
 
@@ -1131,7 +2186,7 @@ begin
     if p.company_id <> new.company_id then raise exception 'Parent must belong to the same company'; end if;
     if p.id = new.id then raise exception 'Category hierarchy cycle detected'; end if;
     levels := levels + 1;
-    if levels > 4 then raise exception 'Category hierarchy cannot exceed four levels'; end if;
+    if levels > 3 then raise exception 'Category hierarchy cannot exceed three levels'; end if;
     exit when p.parent_category_id is null;
     cursor_id := p.parent_category_id;
   end loop;
@@ -1140,7 +2195,7 @@ begin
     union all
     select c.id, d.depth + 1 from public.item_categories c join descendants d on c.parent_category_id = d.id
   ) select coalesce(max(depth), 1) into descendant_height from descendants;
-  if levels + descendant_height - 1 > 4 then raise exception 'Moving this category would exceed four levels'; end if;
+  if levels + descendant_height - 1 > 3 then raise exception 'Moving this category would exceed three levels'; end if;
   return new;
 end $$;
 
@@ -1152,11 +2207,10 @@ create trigger item_category_hierarchy_guard before insert or update of parent_c
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-category-hierarchy-migration.sql
-
+-- END SYNCED DB FILE: supabase-category-hierarchy-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-sundry-parties-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-sundry-parties-migration.sql
 -- =============================================================================
 -- Apply after supabase-category-hierarchy-migration.sql.
 -- Standardizes every party ledger under Sundry Debtors or Sundry Creditors.
@@ -1265,11 +2319,10 @@ where lower(btrim(old_category.name)) in ('customer', 'customers', 'supplier', '
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-sundry-parties-migration.sql
-
+-- END SYNCED DB FILE: supabase-sundry-parties-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-multiple-bank-accounts-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-multiple-bank-accounts-migration.sql
 -- =============================================================================
 -- Apply after supabase-category-hierarchy-migration.sql.
 begin;
@@ -1310,11 +2363,10 @@ where v.settlement_account_id is null and v.type in ('Receipt','Payment','Sales 
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-multiple-bank-accounts-migration.sql
-
+-- END SYNCED DB FILE: supabase-multiple-bank-accounts-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-system-account-groups-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-system-account-groups-migration.sql
 -- =============================================================================
 -- Apply after the category hierarchy, Sundry parties, and multiple-bank migrations.
 -- Seeds and protects KhataERP's canonical account-group hierarchy.
@@ -1565,10 +2617,10 @@ for each row execute function public.seed_system_account_groups_for_company();
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-system-account-groups-migration.sql
+-- END SYNCED DB FILE: supabase-system-account-groups-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-employee-staff-account-category-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-employee-staff-account-category-migration.sql
 -- =============================================================================
 -- Default Employee/Staff loan and advance account category.
 -- Adds a system Asset group under Loans & Advances (Asset) for every company.
@@ -1634,11 +2686,10 @@ end $$;
 
 commit;
 
--- END INCLUDED FILE: supabase-employee-staff-account-category-migration.sql
-
+-- END SYNCED DB FILE: supabase-employee-staff-account-category-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-retained-earnings-ledger-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-retained-earnings-ledger-migration.sql
 -- =============================================================================
 -- Apply after supabase-system-account-groups-migration.sql.
 -- Creates a real protected Retained Earnings ledger for every company.
@@ -1714,11 +2765,10 @@ for each row execute function public.seed_retained_earnings_ledger_for_company()
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-retained-earnings-ledger-migration.sql
-
+-- END SYNCED DB FILE: supabase-retained-earnings-ledger-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-single-company-per-user-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-single-company-per-user-migration.sql
 -- =============================================================================
 -- Prevent concurrent session initialization from creating duplicate companies.
 -- Run once in the Supabase SQL Editor. Safe to run repeatedly.
@@ -1823,11 +2873,10 @@ create unique index if not exists companies_user_id_unique
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-single-company-per-user-migration.sql
-
+-- END SYNCED DB FILE: supabase-single-company-per-user-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-credit-days-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-credit-days-migration.sql
 -- =============================================================================
 -- Party default credit terms and invoice-specific due-date snapshots.
 -- Apply after supabase-schema.sql. Safe to run more than once.
@@ -1867,11 +2916,10 @@ end $$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-credit-days-migration.sql
-
+-- END SYNCED DB FILE: supabase-credit-days-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-ledger-details-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-ledger-details-migration.sql
 -- =============================================================================
 -- Optional ledger details used by the conditional Ledger Creation form.
 -- Safe to run repeatedly.
@@ -1915,11 +2963,10 @@ $$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-ledger-details-migration.sql
-
+-- END SYNCED DB FILE: supabase-ledger-details-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-inventory-valuation-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-inventory-valuation-migration.sql
 -- =============================================================================
 -- Company-wide perpetual inventory valuation method.
 -- Safe to run more than once.
@@ -1949,11 +2996,10 @@ end $$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-inventory-valuation-migration.sql
-
+-- END SYNCED DB FILE: supabase-inventory-valuation-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-voucher-settlements-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-voucher-settlements-migration.sql
 -- =============================================================================
 -- KhataERP invoice settlement allocation migration
 -- Safe to run more than once in Supabase SQL Editor.
@@ -2012,12 +3058,10 @@ create policy "voucher_settlements_developer_select" on voucher_settlements
 
 notify pgrst, 'reload schema';
 
-
--- END INCLUDED FILE: supabase-voucher-settlements-migration.sql
-
+-- END SYNCED DB FILE: supabase-voucher-settlements-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-cheque-management-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-cheque-management-migration.sql
 -- =============================================================================
 -- Optional tenant-level Cheque Management module (received cheques only).
 begin;
@@ -2250,11 +3294,10 @@ create policy cheque_module_developer_select_events on public.cheque_events for 
 commit;
 notify pgrst,'reload schema';
 
--- END INCLUDED FILE: supabase-cheque-management-migration.sql
-
+-- END SYNCED DB FILE: supabase-cheque-management-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-atomic-voucher-posting-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-atomic-voucher-posting-migration.sql
 -- =============================================================================
 -- Phase 4: atomic voucher posting.
 -- Apply after the base schema, integrity, alternative-unit, multiple-bank, and
@@ -2262,6 +3305,15 @@ notify pgrst,'reload schema';
 begin;
 
 alter table public.vouchers add column if not exists idempotency_key uuid;
+alter table public.vouchers add column if not exists status text not null default 'Completed';
+alter table public.vouchers drop constraint if exists vouchers_status_check;
+alter table public.vouchers add constraint vouchers_status_check check (status in ('Draft','Completed'));
+alter table public.vouchers add column if not exists created_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists updated_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists updated_at timestamptz not null default now();
+alter table public.vouchers add column if not exists completed_by uuid references auth.users(id);
+alter table public.vouchers add column if not exists completed_at timestamptz;
+alter table public.vouchers add column if not exists draft_payload jsonb;
 create unique index if not exists vouchers_company_idempotency_unique
   on public.vouchers(company_id, idempotency_key)
   where idempotency_key is not null;
@@ -2322,6 +3374,7 @@ declare
   saved public.vouchers%rowtype;
   target_company uuid;
   target_type text;
+  target_status text;
   next_seq integer;
   highest_number bigint;
   generated_number text;
@@ -2337,6 +3390,10 @@ declare
 begin
   if p_voucher is null or jsonb_typeof(p_voucher) <> 'object' then
     raise exception 'Voucher payload must be an object';
+  end if;
+  target_status := coalesce(nullif(p_voucher->>'status', ''), 'Completed');
+  if target_status not in ('Draft', 'Completed') then
+    raise exception 'Voucher status must be Draft or Completed';
   end if;
   if jsonb_typeof(coalesce(p_lines, '[]'::jsonb)) <> 'array'
     or jsonb_typeof(coalesce(p_stock_lines, '[]'::jsonb)) <> 'array'
@@ -2448,7 +3505,8 @@ begin
       narration, original_voucher_id, return_reason, settlement_mode,
       settlement_account_id, restock_items, party_account_id, is_cash,
       subtotal, discount, vat_rate, vat_amount, total, cancelled, seq,
-      idempotency_key
+      status, created_by, updated_by, updated_at, completed_by, completed_at,
+      draft_payload, idempotency_key
     ) values (
       target_company, target_type,
       (p_voucher->>'date')::date, (p_voucher->>'date_ad')::date,
@@ -2464,6 +3522,10 @@ begin
       nullif(p_voucher->>'discount', '')::numeric, nullif(p_voucher->>'vat_rate', '')::numeric,
       nullif(p_voucher->>'vat_amount', '')::numeric, coalesce((p_voucher->>'total')::numeric, 0),
       coalesce((p_voucher->>'cancelled')::boolean, false), next_seq,
+      target_status, auth.uid(), auth.uid(), now(),
+      case when target_status = 'Completed' then auth.uid() else null end,
+      case when target_status = 'Completed' then now() else null end,
+      case when p_voucher ? 'draft_payload' then p_voucher->'draft_payload' else null end,
       requested_idempotency
     ) returning * into saved;
   else
@@ -2494,7 +3556,13 @@ begin
       vat_rate = case when p_voucher ? 'vat_rate' then nullif(p_voucher->>'vat_rate', '')::numeric else voucher.vat_rate end,
       vat_amount = case when p_voucher ? 'vat_amount' then nullif(p_voucher->>'vat_amount', '')::numeric else voucher.vat_amount end,
       total = case when p_voucher ? 'total' then (p_voucher->>'total')::numeric else voucher.total end,
-      cancelled = case when p_voucher ? 'cancelled' then (p_voucher->>'cancelled')::boolean else voucher.cancelled end
+      cancelled = case when p_voucher ? 'cancelled' then (p_voucher->>'cancelled')::boolean else voucher.cancelled end,
+      status = case when p_voucher ? 'status' then target_status else voucher.status end,
+      updated_by = auth.uid(),
+      updated_at = now(),
+      completed_by = case when p_voucher ? 'status' and target_status = 'Completed' and voucher.status = 'Draft' then auth.uid() else voucher.completed_by end,
+      completed_at = case when p_voucher ? 'status' and target_status = 'Completed' and voucher.status = 'Draft' then now() else voucher.completed_at end,
+      draft_payload = case when p_voucher ? 'draft_payload' then p_voucher->'draft_payload' else voucher.draft_payload end
     where voucher.id = p_voucher_id and voucher.company_id = target_company
     returning * into saved;
 
@@ -2532,9 +3600,10 @@ begin
       on stock_line.item_id = affected.item_id
      and coalesce(stock_line.stock_condition, 'saleable') = affected.stock_condition
     left join public.vouchers voucher
-      on voucher.id = stock_line.voucher_id
+     on voucher.id = stock_line.voucher_id
      and voucher.company_id = target_company
      and not voucher.cancelled
+     and voucher.status = 'Completed'
     group by affected.item_id, affected.stock_condition, item.opening_qty
     having (case when affected.stock_condition = 'saleable' then coalesce(item.opening_qty, 0) else 0 end)
       + coalesce(sum(case when voucher.id is not null and stock_line.direction = 'in' then stock_line.qty
@@ -2607,11 +3676,10 @@ grant execute on function public.voucher_atomic_response(uuid) to authenticated;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-atomic-voucher-posting-migration.sql
-
+-- END SYNCED DB FILE: supabase-atomic-voucher-posting-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-write-query-optimization-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-write-query-optimization-migration.sql
 -- =============================================================================
 -- Phase 5: optimize queries executed inside write operations.
 -- Apply after the base schema and Phase 4 atomic voucher migration.
@@ -2808,11 +3876,10 @@ analyze public.voucher_settlements;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-write-query-optimization-migration.sql
-
+-- END SYNCED DB FILE: supabase-write-query-optimization-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-trigger-rls-optimization-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-trigger-rls-optimization-migration.sql
 -- =============================================================================
 -- Phases 6 and 7: safe trigger and RLS optimization.
 -- Apply after the system-group, retained-earnings, cheque-management, and
@@ -3081,11 +4148,10 @@ analyze public.cheque_events;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-trigger-rls-optimization-migration.sql
-
+-- END SYNCED DB FILE: supabase-trigger-rls-optimization-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-personal-data-protection-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-personal-data-protection-migration.sql
 -- =============================================================================
 -- Personal-data minimization and self-service account deletion.
 -- Apply after the base, master, and cheque-management migrations. Safe to run repeatedly.
@@ -3179,11 +4245,10 @@ grant execute on function public.delete_my_account() to authenticated;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-personal-data-protection-migration.sql
-
+-- END SYNCED DB FILE: supabase-personal-data-protection-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-production-security-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-production-security-migration.sql
 -- =============================================================================
 -- Production error-log access hardening. Safe to run repeatedly.
 begin;
@@ -3196,11 +4261,10 @@ drop policy if exists "app_events_own_select" on public.app_events;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-production-security-migration.sql
-
+-- END SYNCED DB FILE: supabase-production-security-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-critical-security-hardening-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-critical-security-hardening-migration.sql
 -- =============================================================================
 -- Critical-path authorization and accounting-integrity hardening.
 -- Apply after all existing schema, cheque, retained-earnings, and atomic
@@ -3416,6 +4480,10 @@ begin
       or length(coalesce(new.barcode, '')) > 100 then
       raise exception 'Item field length is invalid';
     end if;
+    if new.sell_rate < 0 or new.opening_qty < 0 or new.opening_rate < 0
+      or coalesce(new.reorder_level, 0) < 0 then
+      raise exception 'Item rates, opening stock and reorder level cannot be negative';
+    end if;
     if (new.alternate_unit is null) <> (new.alternate_conversion is null)
       or (new.alternate_unit is not null and (
         new.alternate_conversion <= 1
@@ -3527,15 +4595,6 @@ begin
       and (stock_line.qty <= 0 or stock_line.rate < 0)
   ) then raise exception 'Stock movements require positive quantities and non-negative rates'; end if;
 
-  if exists (
-    select 1
-    from public.stock_lines stock_line
-    join public.items item
-      on item.id = stock_line.item_id
-    where stock_line.voucher_id = target_voucher_id
-      and coalesce(item.is_service, false)
-  ) then raise exception 'Service items cannot create stock movements'; end if;
-
   if voucher_record.party_account_id is not null and not exists (
     select 1 from public.accounts account
     where account.id = voucher_record.party_account_id
@@ -3609,9 +4668,9 @@ begin
     if item_count = 0 or exists (
       select 1 from public.invoice_items item
       where item.voucher_id = target_voucher_id
-        and (item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
+        and (item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0
           or (item.base_qty is not null and abs(item.base_qty - item.qty / nullif(coalesce(item.conversion_factor, 1), 0)) > 0.0001))
-    ) then raise exception 'Invoice items require non-negative quantities and non-negative rates'; end if;
+    ) then raise exception 'Invoice items require positive quantities and non-negative rates'; end if;
 
     if voucher_record.type in ('Sales','Purchase') then
       calculated_discount := coalesce(voucher_record.discount, 0);
@@ -3661,10 +4720,6 @@ begin
                  sum(coalesce(invoice_item.base_qty,
                    invoice_item.qty / nullif(coalesce(invoice_item.conversion_factor, 1), 0))) as qty
           from public.invoice_items invoice_item
-          join public.items tracked_item
-            on tracked_item.id = invoice_item.item_id
-           and tracked_item.company_id = voucher_record.company_id
-           and not coalesce(tracked_item.is_service, false)
           where invoice_item.voucher_id = target_voucher_id
           group by invoice_item.item_id
         ), movement_quantity as (
@@ -3885,11 +4940,10 @@ alter default privileges in schema public revoke all on sequences from anon;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-critical-security-hardening-migration.sql
-
+-- END SYNCED DB FILE: supabase-critical-security-hardening-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-developer-error-log-cleanup-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-developer-error-log-cleanup-migration.sql
 -- =============================================================================
 -- Developer-only cleanup for handled frontend error records.
 -- Normal audit and activity events are deliberately preserved.
@@ -3926,11 +4980,298 @@ grant execute on function public.clear_frontend_error_logs(uuid) to authenticate
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-developer-error-log-cleanup-migration.sql
-
+-- END SYNCED DB FILE: supabase-developer-error-log-cleanup-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-financial-year-control-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-developer-company-delete-rpc-migration.sql
+-- =============================================================================
+-- Developer-only company deletion in dependency order.
+-- Fixes FK failures from account/item/voucher child tables during company cleanup.
+-- Safe to rerun.
+
+begin;
+
+create or replace function public.delete_developer_company(target_company uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  account_category_guard_exists boolean;
+begin
+  if not public.is_developer_admin() then
+    raise exception 'Developer admin access required' using errcode = '42501';
+  end if;
+
+  if target_company is null then
+    raise exception 'Company id is required' using errcode = '22023';
+  end if;
+
+  if not exists (select 1 from public.companies company where company.id = target_company) then
+    raise exception 'Company not found' using errcode = 'P0002';
+  end if;
+
+  perform 1 from public.companies company where company.id = target_company for update;
+
+  select exists (
+    select 1
+    from pg_trigger trigger_row
+    where trigger_row.tgrelid = 'public.account_categories'::regclass
+      and trigger_row.tgname = 'account_category_system_guard'
+      and not trigger_row.tgisinternal
+  ) into account_category_guard_exists;
+
+  if account_category_guard_exists then
+    execute 'alter table public.account_categories disable trigger account_category_system_guard';
+  end if;
+
+  begin
+  update public.user_preferences
+  set active_company_id = null,
+      updated_at = now()
+  where active_company_id = target_company;
+
+  if to_regclass('public.cheque_events') is not null then
+    delete from public.cheque_events where company_id = target_company;
+  end if;
+  if to_regclass('public.cheques') is not null then
+    delete from public.cheques where company_id = target_company;
+  end if;
+  if to_regclass('public.cheque_banks') is not null then
+    delete from public.cheque_banks where company_id = target_company;
+  end if;
+
+  delete from public.voucher_settlements settlement
+  where settlement.company_id = target_company
+     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.settlement_voucher_id and voucher.company_id = target_company)
+     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.invoice_voucher_id and voucher.company_id = target_company);
+
+  update public.invoice_items item
+  set source_invoice_item_id = null
+  where source_invoice_item_id is not null
+    and (
+      exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company)
+      or exists (
+        select 1
+        from public.invoice_items source_item
+        join public.vouchers source_voucher on source_voucher.id = source_item.voucher_id
+        where source_item.id = item.source_invoice_item_id
+          and source_voucher.company_id = target_company
+      )
+    );
+
+  delete from public.invoice_items item
+  where exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company);
+
+  delete from public.stock_lines line
+  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
+
+  delete from public.voucher_lines line
+  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
+
+  update public.vouchers voucher
+  set original_voucher_id = null
+  where voucher.original_voucher_id is not null
+    and exists (select 1 from public.vouchers original where original.id = voucher.original_voucher_id and original.company_id = target_company);
+
+  delete from public.vouchers where company_id = target_company;
+
+  delete from public.parties where company_id = target_company;
+  delete from public.master_change_logs where company_id = target_company;
+
+  delete from public.items where company_id = target_company;
+
+  update public.item_categories
+  set parent_category_id = null
+  where company_id = target_company
+    and parent_category_id is not null;
+  delete from public.item_categories where company_id = target_company;
+
+  delete from public.accounts where company_id = target_company;
+
+  update public.account_categories
+  set parent_category_id = null
+  where company_id = target_company
+    and parent_category_id is not null;
+  delete from public.account_categories where company_id = target_company;
+
+  if to_regclass('public.company_modules') is not null then
+    delete from public.company_modules where company_id = target_company;
+  end if;
+  if to_regclass('public.company_user_permissions') is not null then
+    delete from public.company_user_permissions where company_id = target_company;
+  end if;
+
+  delete from public.company_members where company_id = target_company;
+  delete from public.app_events where company_id = target_company;
+  delete from public.companies where id = target_company;
+
+  exception when others then
+    if account_category_guard_exists then
+      execute 'alter table public.account_categories enable trigger account_category_system_guard';
+    end if;
+    raise;
+  end;
+
+  if account_category_guard_exists then
+    execute 'alter table public.account_categories enable trigger account_category_system_guard';
+  end if;
+end;
+$$;
+
+revoke all on function public.delete_developer_company(uuid) from public, anon;
+grant execute on function public.delete_developer_company(uuid) to authenticated;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END SYNCED DB FILE: supabase-developer-company-delete-rpc-migration.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-developer-schema-status-policy-check-fix.sql
+-- =============================================================================
+-- Fix developer dashboard schema-status policy check after multi-company RLS.
+-- Safe to rerun.
+
+begin;
+
+create or replace function public.get_developer_schema_status()
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  checks jsonb := '[]'::jsonb;
+begin
+  if not public.is_developer_admin() then
+    raise exception 'Developer admin access required';
+  end if;
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'developer_admins_table',
+    'label', 'Developer admins table',
+    'status', case when to_regclass('public.developer_admins') is not null then 'ok' else 'missing' end,
+    'detail', 'Required for protecting the developer dashboard'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'app_events_table',
+    'label', 'App events table',
+    'status', case when to_regclass('public.app_events') is not null then 'ok' else 'missing' end,
+    'detail', 'Required for event log, feature usage, and error tracking'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'is_developer_admin_function',
+    'label', 'Developer admin function',
+    'status', case when to_regprocedure('public.is_developer_admin()') is not null then 'ok' else 'missing' end,
+    'detail', 'Used by RLS policies and frontend access checks'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'schema_status_function',
+    'label', 'Schema status function',
+    'status', case when to_regprocedure('public.get_developer_schema_status()') is not null then 'ok' else 'missing' end,
+    'detail', 'Powers this migration checklist'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'company_owner_email',
+    'label', 'Company owner email column',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'owner_email') then 'ok' else 'missing' end,
+    'detail', 'Shows retailer login email in developer reports'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'company_plan_fields',
+    'label', 'Company plan/support fields',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'plan_status')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'support_status')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'suspended')
+              then 'ok' else 'missing' end,
+    'detail', 'Required for plan status, support queue, notes, and suspension'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'company_invoice_settings',
+    'label', 'Invoice/settings columns',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'sales_prefix')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'print_format')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'logo_url')
+              then 'ok' else 'missing' end,
+    'detail', 'Required for invoice numbering and print customization'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'voucher_nepali_dates',
+    'label', 'Voucher Nepali date columns',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'date_bs')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'date_bs_key')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'date_ad')
+              then 'ok' else 'missing' end,
+    'detail', 'Required for fiscal-year and BS-date dashboards'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'stock_adjustment_voucher_type',
+    'label', 'Stock adjustment voucher type',
+    'status', case when exists (
+                     select 1 from pg_constraint
+                     where conname = 'vouchers_type_check'
+                       and pg_get_constraintdef(oid) ilike '%Stock Adjustment%'
+                   ) then 'ok' else 'missing' end,
+    'detail', 'Required for inventory adjustment vouchers'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'return_vouchers',
+    'label', 'Sales and purchase return support',
+    'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'original_voucher_id')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'invoice_items' and column_name = 'source_invoice_item_id')
+                   and exists (select 1 from pg_constraint where conname = 'vouchers_type_check' and pg_get_constraintdef(oid) ilike '%Sales Return%' and pg_get_constraintdef(oid) ilike '%Purchase Return%')
+              then 'ok' else 'missing' end,
+    'detail', 'Required for linked credit notes, debit notes, and partial-return validation'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'developer_rls_policies',
+    'label', 'Developer RLS policies',
+    'status', case when (
+                     exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'companies' and policyname = 'companies_developer_all')
+                     or (
+                       exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'companies' and policyname = 'companies_developer_select')
+                       and exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'companies' and policyname = 'companies_developer_delete')
+                     )
+                   )
+                   and exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'app_events' and policyname = 'app_events_developer_select')
+              then 'ok' else 'missing' end,
+    'detail', 'Required so admins can read company reports and events'
+  ));
+
+  checks := checks || jsonb_build_array(jsonb_build_object(
+    'key', 'app_event_insert_policy',
+    'label', 'App event insert policy',
+    'status', case when exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'app_events' and policyname = 'app_events_own_insert') then 'ok' else 'missing' end,
+    'detail', 'Required so retailer sessions can write usage and error events'
+  ));
+
+  return checks;
+end;
+$$;
+
+revoke all on function public.get_developer_schema_status() from public, anon;
+grant execute on function public.get_developer_schema_status() to authenticated;
+
+commit;
+notify pgrst, 'reload schema';
+
+-- END SYNCED DB FILE: supabase-developer-schema-status-policy-check-fix.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-financial-year-control-migration.sql
 -- =============================================================================
 -- Canonical company financial-year setup and posting safeguards.
 -- Existing companies are treated as configured; new companies must confirm
@@ -4033,11 +5374,10 @@ for each row execute function public.validate_voucher_financial_year();
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-financial-year-control-migration.sql
-
+-- END SYNCED DB FILE: supabase-financial-year-control-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-zero-value-invoices-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-zero-value-invoices-migration.sql
 -- =============================================================================
 -- Allow zero-value Sales, Purchase, Sales Return, and Purchase Return
 -- documents while keeping item and positive-quantity validation compulsory.
@@ -4065,12 +5405,12 @@ begin
   updated_definition := replace(
     updated_definition,
     'item.qty <= 0 or item.rate <= 0 or coalesce(item.conversion_factor, 1) <= 0',
-    'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+    'item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
   );
   updated_definition := replace(
     updated_definition,
     'Invoice items require positive quantities and valid rates',
-    'Invoice items require non-negative quantities and non-negative rates'
+    'Invoice items require positive quantities and non-negative rates'
   );
 
   if updated_definition is distinct from current_definition then
@@ -4079,7 +5419,7 @@ begin
       'voucher_record.type in (''Receipt'',''Payment'',''Journal'')'
       in current_definition
     ) = 0 or position(
-      'item.qty < 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
+      'item.qty <= 0 or item.rate < 0 or coalesce(item.conversion_factor, 1) <= 0'
       in current_definition
     ) = 0 then
     raise exception 'The deployed integrity function has an unsupported definition; reapply the updated critical security hardening migration';
@@ -4090,11 +5430,10 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-zero-value-invoices-migration.sql
-
+-- END SYNCED DB FILE: supabase-zero-value-invoices-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-journal-supplier-invoice-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-journal-supplier-invoice-migration.sql
 -- =============================================================================
 -- Journal numbering preference and supplier physical invoice references.
 -- Apply after supabase-atomic-voucher-posting-migration.sql.
@@ -4208,10 +5547,10 @@ grant execute on function public.save_voucher_with_document_metadata_atomic(json
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-journal-supplier-invoice-migration.sql
+-- END SYNCED DB FILE: supabase-journal-supplier-invoice-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-draft-vouchers-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-draft-vouchers-migration.sql
 -- =============================================================================
 -- Draft voucher workflow columns.
 -- Apply after the voucher schema and atomic posting migrations. Safe to rerun.
@@ -4241,10 +5580,10 @@ create unique index if not exists vouchers_company_draft_no_unique
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-draft-vouchers-migration.sql
+-- END SYNCED DB FILE: supabase-draft-vouchers-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-draft-voucher-integrity-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-draft-voucher-integrity-migration.sql
 -- =============================================================================
 -- Let Draft vouchers save incomplete headers without ledger/invoice/stock rows.
 -- Apply after supabase-critical-security-hardening-migration.sql and
@@ -4296,10 +5635,10 @@ end $$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-draft-voucher-integrity-migration.sql
+-- END SYNCED DB FILE: supabase-draft-voucher-integrity-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
+-- BEGIN SYNCED DB FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
 -- =============================================================================
 -- Fix alternate-unit invoice integrity checks.
 --
@@ -4361,10 +5700,10 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
+-- END SYNCED DB FILE: supabase-alternative-unit-base-qty-integrity-fix.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-service-items-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-service-items-migration.sql
 -- =============================================================================
 -- Service Item Support
 -- Service items are invoiceable but must never create inventory movement.
@@ -4458,11 +5797,10 @@ revoke all on function public.prevent_service_item_stock_line() from public, ano
 
 commit;
 
--- END INCLUDED FILE: supabase-service-items-migration.sql
-
+-- END SYNCED DB FILE: supabase-service-items-migration.sql
 
 -- =============================================================================
--- BEGIN INCLUDED FILE: supabase-multi-company-migration.sql
+-- BEGIN SYNCED DB FILE: supabase-multi-company-migration.sql
 -- =============================================================================
 -- Single-login multi-company tenancy, licensing, active-company selection, and membership RLS.
 -- Apply after the complete current schema/migrations. Safe to rerun.
@@ -5177,131 +6515,6 @@ begin
 end;
 $optional_policies$;
 
-create or replace function public.delete_developer_company(target_company uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  account_category_guard_exists boolean;
-begin
-  if not public.is_developer_admin() then
-    raise exception 'Developer admin access required' using errcode = '42501';
-  end if;
-
-  if target_company is null then
-    raise exception 'Company id is required' using errcode = '22023';
-  end if;
-
-  if not exists (select 1 from public.companies company where company.id = target_company) then
-    raise exception 'Company not found' using errcode = 'P0002';
-  end if;
-
-  perform 1 from public.companies company where company.id = target_company for update;
-
-  select exists (
-    select 1
-    from pg_trigger trigger_row
-    where trigger_row.tgrelid = 'public.account_categories'::regclass
-      and trigger_row.tgname = 'account_category_system_guard'
-      and not trigger_row.tgisinternal
-  ) into account_category_guard_exists;
-
-  if account_category_guard_exists then
-    execute 'alter table public.account_categories disable trigger account_category_system_guard';
-  end if;
-
-  begin
-  update public.user_preferences
-  set active_company_id = null,
-      updated_at = now()
-  where active_company_id = target_company;
-
-  if to_regclass('public.cheque_events') is not null then
-    delete from public.cheque_events where company_id = target_company;
-  end if;
-  if to_regclass('public.cheques') is not null then
-    delete from public.cheques where company_id = target_company;
-  end if;
-  if to_regclass('public.cheque_banks') is not null then
-    delete from public.cheque_banks where company_id = target_company;
-  end if;
-
-  delete from public.voucher_settlements settlement
-  where settlement.company_id = target_company
-     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.settlement_voucher_id and voucher.company_id = target_company)
-     or exists (select 1 from public.vouchers voucher where voucher.id = settlement.invoice_voucher_id and voucher.company_id = target_company);
-
-  update public.invoice_items item
-  set source_invoice_item_id = null
-  where source_invoice_item_id is not null
-    and (
-      exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company)
-      or exists (
-        select 1
-        from public.invoice_items source_item
-        join public.vouchers source_voucher on source_voucher.id = source_item.voucher_id
-        where source_item.id = item.source_invoice_item_id
-          and source_voucher.company_id = target_company
-      )
-    );
-
-  delete from public.invoice_items item
-  where exists (select 1 from public.vouchers voucher where voucher.id = item.voucher_id and voucher.company_id = target_company);
-  delete from public.stock_lines line
-  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
-  delete from public.voucher_lines line
-  where exists (select 1 from public.vouchers voucher where voucher.id = line.voucher_id and voucher.company_id = target_company);
-
-  update public.vouchers voucher
-  set original_voucher_id = null
-  where voucher.original_voucher_id is not null
-    and exists (select 1 from public.vouchers original where original.id = voucher.original_voucher_id and original.company_id = target_company);
-  delete from public.vouchers where company_id = target_company;
-
-  delete from public.parties where company_id = target_company;
-  delete from public.master_change_logs where company_id = target_company;
-  delete from public.items where company_id = target_company;
-
-  update public.item_categories
-  set parent_category_id = null
-  where company_id = target_company
-    and parent_category_id is not null;
-  delete from public.item_categories where company_id = target_company;
-
-  delete from public.accounts where company_id = target_company;
-
-  update public.account_categories
-  set parent_category_id = null
-  where company_id = target_company
-    and parent_category_id is not null;
-  delete from public.account_categories where company_id = target_company;
-
-  if to_regclass('public.company_modules') is not null then
-    delete from public.company_modules where company_id = target_company;
-  end if;
-  if to_regclass('public.company_user_permissions') is not null then
-    delete from public.company_user_permissions where company_id = target_company;
-  end if;
-
-  delete from public.company_members where company_id = target_company;
-  delete from public.app_events where company_id = target_company;
-  delete from public.companies where id = target_company;
-
-  exception when others then
-    if account_category_guard_exists then
-      execute 'alter table public.account_categories enable trigger account_category_system_guard';
-    end if;
-    raise;
-  end;
-
-  if account_category_guard_exists then
-    execute 'alter table public.account_categories enable trigger account_category_system_guard';
-  end if;
-end;
-$$;
-
 revoke all on function public.is_company_member(uuid) from public, anon;
 revoke all on function public.is_company_admin(uuid) from public, anon;
 revoke all on function public.company_creation_license(uuid) from public, anon;
@@ -5313,7 +6526,6 @@ revoke all on function public.get_my_companies() from public, anon;
 revoke all on function public.add_existing_company_admin(uuid,text) from public, anon;
 revoke all on function public.developer_user_company_licenses() from public, anon;
 revoke all on function public.update_user_company_limit(uuid,integer,boolean,boolean,text,date) from public, anon;
-revoke all on function public.delete_developer_company(uuid) from public, anon;
 grant execute on function public.is_company_member(uuid) to authenticated;
 grant execute on function public.is_company_admin(uuid) to authenticated;
 grant execute on function public.company_creation_license(uuid) to authenticated;
@@ -5323,15 +6535,15 @@ grant execute on function public.get_my_companies() to authenticated;
 grant execute on function public.add_existing_company_admin(uuid,text) to authenticated;
 grant execute on function public.developer_user_company_licenses() to authenticated;
 grant execute on function public.update_user_company_limit(uuid,integer,boolean,boolean,text,date) to authenticated;
-grant execute on function public.delete_developer_company(uuid) to authenticated;
 
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-multi-company-migration.sql
+-- END SYNCED DB FILE: supabase-multi-company-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-allow-negative-item-values-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-allow-negative-item-values-migration.sql
+-- =============================================================================
 -- Allow negative item values for portable company restores and imported data.
 -- Some legacy accounting systems export negative opening quantities/rates or
 -- reorder levels. KhataERP calculations already support negative stock values;
@@ -5392,10 +6604,11 @@ begin
 end;
 $$;
 
--- END INCLUDED FILE: supabase-allow-negative-item-values-migration.sql
+-- END SYNCED DB FILE: supabase-allow-negative-item-values-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-allow-zero-invoice-quantities-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-allow-zero-invoice-quantities-migration.sql
+-- =============================================================================
 -- Allow zero-quantity invoice lines for portable restores and legacy imports.
 -- Keep negative quantities, negative rates, and invalid conversion factors blocked.
 -- Apply after supabase-critical-security-hardening-migration.sql and
@@ -5439,10 +6652,11 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-allow-zero-invoice-quantities-migration.sql
+-- END SYNCED DB FILE: supabase-allow-zero-invoice-quantities-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-allow-negative-invoice-rates-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-allow-negative-invoice-rates-migration.sql
+-- =============================================================================
 -- Allow negative invoice item rates for portable restores and legacy imports.
 -- Keep negative quantities and invalid conversion factors blocked.
 -- Apply after supabase-allow-zero-invoice-quantities-migration.sql. Safe to rerun.
@@ -5485,10 +6699,11 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-allow-negative-invoice-rates-migration.sql
+-- END SYNCED DB FILE: supabase-allow-negative-invoice-rates-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-allow-negative-invoice-quantities-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-allow-negative-invoice-quantities-migration.sql
+-- =============================================================================
 -- Allow legacy invoice item quantities during portable restores and old-system imports.
 -- Keep invalid conversion factors blocked. Frontend forms still validate normal voucher entry.
 -- Apply after supabase-allow-negative-invoice-rates-migration.sql. Safe to rerun.
@@ -5531,10 +6746,11 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-allow-negative-invoice-quantities-migration.sql
+-- END SYNCED DB FILE: supabase-allow-negative-invoice-quantities-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-relax-invoice-base-qty-validation-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-relax-invoice-base-qty-validation-migration.sql
+-- =============================================================================
 -- Relax legacy invoice base quantity validation for portable restores.
 -- Keep conversion_factor validation, but do not reject old base_qty snapshots.
 -- Apply after supabase-allow-negative-invoice-quantities-migration.sql. Safe to rerun.
@@ -5577,10 +6793,11 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-relax-invoice-base-qty-validation-migration.sql
+-- END SYNCED DB FILE: supabase-relax-invoice-base-qty-validation-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-final-restore-invoice-integrity-fix.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-final-restore-invoice-integrity-fix.sql
+-- =============================================================================
 -- Final invoice integrity compatibility fix for portable restores.
 -- Allows legacy negative/zero invoice quantities and rates, and ignores old base_qty snapshots.
 -- Still blocks invalid conversion factors. Safe to rerun.
@@ -5655,10 +6872,11 @@ $migration$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-final-restore-invoice-integrity-fix.sql
+-- END SYNCED DB FILE: supabase-final-restore-invoice-integrity-fix.sql
 
--- BEGIN INCLUDED FILE: supabase-allow-fiscal-year-start-correction-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-allow-fiscal-year-start-correction-migration.sql
+-- =============================================================================
 -- Allow safe correction of company Financial Year Start Date after import.
 -- The date may move earlier after transactions exist only when every existing
 -- voucher remains on or after the new books start. Moving it later is still blocked.
@@ -5701,10 +6919,11 @@ $$;
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-allow-fiscal-year-start-correction-migration.sql
+-- END SYNCED DB FILE: supabase-allow-fiscal-year-start-correction-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-ledger-unique-name-guard-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-ledger-unique-name-guard-migration.sql
+-- =============================================================================
 -- Prevent duplicate ledger/account names inside the same company.
 -- Existing duplicate historical rows are left untouched, but new inserts and
 -- renames to an existing ledger name are blocked case-insensitively.
@@ -5745,10 +6964,11 @@ for each row execute function public.prevent_duplicate_ledger_name();
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-ledger-unique-name-guard-migration.sql
+-- END SYNCED DB FILE: supabase-ledger-unique-name-guard-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-master-duplicate-name-guards-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-master-duplicate-name-guards-migration.sql
+-- =============================================================================
 -- Prevent duplicate master names inside the same company.
 -- Existing duplicate historical rows are left untouched, but new inserts and
 -- renames to an existing name are blocked case-insensitively.
@@ -5854,10 +7074,11 @@ for each row execute function public.prevent_duplicate_account_category_name();
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-master-duplicate-name-guards-migration.sql
+-- END SYNCED DB FILE: supabase-master-duplicate-name-guards-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-voucher-chronology-validation-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-voucher-chronology-validation-migration.sql
+-- =============================================================================
 -- Enforce voucher date chronology only for Sales invoices when enabled in
 -- company settings. Draft vouchers do not reserve numbers and are ignored.
 begin;
@@ -5981,10 +7202,11 @@ revoke all on function public.validate_voucher_chronology() from public, anon, a
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-voucher-chronology-validation-migration.sql
+-- END SYNCED DB FILE: supabase-voucher-chronology-validation-migration.sql
 
--- BEGIN INCLUDED FILE: supabase-sales-invoice-chronology-setting-migration.sql
-
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-sales-invoice-chronology-setting-migration.sql
+-- =============================================================================
 -- Add an opt-in Sales-only chronological invoice date setting.
 -- When disabled, all voucher types only require dates inside the active fiscal year.
 begin;
@@ -6106,50 +7328,630 @@ revoke all on function public.voucher_number_value(text) from public, anon, auth
 commit;
 notify pgrst, 'reload schema';
 
--- END INCLUDED FILE: supabase-sales-invoice-chronology-setting-migration.sql
+-- END SYNCED DB FILE: supabase-sales-invoice-chronology-setting-migration.sql
 
 -- =============================================================================
--- FINAL BOOTSTRAP VERIFICATION AND PERMISSION CLEANUP
+-- BEGIN SYNCED DB FILE: supabase-simple-income-expense-migration.sql
 -- =============================================================================
-
-revoke all on function public.protect_company_financial_year() from public, anon, authenticated;
-revoke all on function public.validate_voucher_financial_year() from public, anon, authenticated;
-
--- Simple Income/Expense Journal identity. The posting RPC already persists
--- draft_payload, so this trigger copies its explicit marker to the column.
+-- Beginner-friendly Income/Expense entries remain Journal vouchers while this
+-- marker preserves their dedicated editor and list identity.
 alter table public.vouchers add column if not exists simple_entry_type text;
 alter table public.vouchers drop constraint if exists vouchers_simple_entry_type_check;
-alter table public.vouchers add constraint vouchers_simple_entry_type_check check (simple_entry_type is null or (type = 'Journal' and simple_entry_type in ('Income', 'Expense')));
-create or replace function public.sync_simple_entry_type() returns trigger language plpgsql set search_path = public as $$
+alter table public.vouchers add constraint vouchers_simple_entry_type_check
+  check (simple_entry_type is null or (type = 'Journal' and simple_entry_type in ('Income', 'Expense')));
+
+create or replace function public.sync_simple_entry_type()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
 begin
-  if new.type = 'Journal' and new.draft_payload ? 'simpleEntryType' then new.simple_entry_type := nullif(new.draft_payload->>'simpleEntryType', ''); end if;
+  if new.type = 'Journal' and new.draft_payload ? 'simpleEntryType' then
+    new.simple_entry_type := nullif(new.draft_payload->>'simpleEntryType', '');
+  end if;
   return new;
 end;
 $$;
+
 drop trigger if exists vouchers_sync_simple_entry_type on public.vouchers;
-create trigger vouchers_sync_simple_entry_type before insert or update of draft_payload, simple_entry_type on public.vouchers for each row execute function public.sync_simple_entry_type();
-create or replace function public.validate_simple_entry_voucher() returns trigger language plpgsql security definer set search_path = public as $$
-declare target_id uuid; voucher_row public.vouchers%rowtype; expected_type text; counter_debit numeric; counter_credit numeric; detail_total numeric; detail_count integer;
+create trigger vouchers_sync_simple_entry_type
+before insert or update of draft_payload, simple_entry_type on public.vouchers
+for each row execute function public.sync_simple_entry_type();
+
+create or replace function public.validate_simple_entry_voucher()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_id uuid;
+  voucher_row public.vouchers%rowtype;
+  expected_type text;
+  counter_debit numeric;
+  counter_credit numeric;
+  detail_total numeric;
+  detail_count integer;
 begin
-  if tg_table_name = 'voucher_lines' then target_id := case when tg_op = 'DELETE' then old.voucher_id else new.voucher_id end; else target_id := case when tg_op = 'DELETE' then old.id else new.id end; end if;
+  if tg_table_name = 'voucher_lines' then
+    target_id := case when tg_op = 'DELETE' then old.voucher_id else new.voucher_id end;
+  else
+    target_id := case when tg_op = 'DELETE' then old.id else new.id end;
+  end if;
   select * into voucher_row from public.vouchers where id = target_id;
   if not found or voucher_row.simple_entry_type is null or voucher_row.status <> 'Completed' then return null; end if;
   expected_type := voucher_row.simple_entry_type;
-  if voucher_row.type <> 'Journal' or voucher_row.settlement_account_id is null then raise exception 'Simple entry requires a Journal voucher and counter ledger'; end if;
-  if not exists (select 1 from public.accounts where id = voucher_row.settlement_account_id and company_id = voucher_row.company_id and not is_archived) then raise exception 'Simple entry counter ledger is unavailable'; end if;
-  select coalesce(sum(debit), 0), coalesce(sum(credit), 0) into counter_debit, counter_credit from public.voucher_lines where voucher_id = target_id and account_id = voucher_row.settlement_account_id;
-  select count(*), coalesce(sum(case when expected_type = 'Income' then line.credit else line.debit end), 0) into detail_count, detail_total from public.voucher_lines line join public.accounts account on account.id = line.account_id and account.company_id = voucher_row.company_id join public.account_categories category on category.id = account.category_id and category.company_id = voucher_row.company_id where line.voucher_id = target_id and line.account_id <> voucher_row.settlement_account_id and account.type = expected_type and category.account_type = expected_type and not account.is_archived and not category.is_archived and case when expected_type = 'Income' then line.credit > 0 and line.debit = 0 else line.debit > 0 and line.credit = 0 end;
-  if detail_count < 1 or detail_total <= 0 or detail_count <> (select count(*) from public.voucher_lines where voucher_id = target_id and account_id <> voucher_row.settlement_account_id) or (expected_type = 'Income' and (counter_debit <> detail_total or counter_credit <> 0)) or (expected_type = 'Expense' and (counter_credit <> detail_total or counter_debit <> 0)) or round(detail_total, 2) <> round(voucher_row.total, 2) then raise exception 'Simple entry ledger lines are invalid or unbalanced'; end if;
+
+  if voucher_row.type <> 'Journal' or voucher_row.settlement_account_id is null then
+    raise exception 'Simple entry requires a Journal voucher and counter ledger';
+  end if;
+  if not exists (select 1 from public.accounts where id = voucher_row.settlement_account_id and company_id = voucher_row.company_id and not is_archived) then
+    raise exception 'Simple entry counter ledger is unavailable';
+  end if;
+
+  select coalesce(sum(debit), 0), coalesce(sum(credit), 0)
+    into counter_debit, counter_credit
+  from public.voucher_lines where voucher_id = target_id and account_id = voucher_row.settlement_account_id;
+
+  select count(*), coalesce(sum(case when expected_type = 'Income' then line.credit else line.debit end), 0)
+    into detail_count, detail_total
+  from public.voucher_lines line
+  join public.accounts account on account.id = line.account_id and account.company_id = voucher_row.company_id
+  join public.account_categories category on category.id = account.category_id and category.company_id = voucher_row.company_id
+  where line.voucher_id = target_id and line.account_id <> voucher_row.settlement_account_id
+    and account.type = expected_type and category.account_type = expected_type and not account.is_archived and not category.is_archived
+    and case when expected_type = 'Income' then line.credit > 0 and line.debit = 0 else line.debit > 0 and line.credit = 0 end;
+
+  if detail_count < 1 or detail_total <= 0
+     or detail_count <> (select count(*) from public.voucher_lines where voucher_id = target_id and account_id <> voucher_row.settlement_account_id)
+     or (expected_type = 'Income' and (counter_debit <> detail_total or counter_credit <> 0))
+     or (expected_type = 'Expense' and (counter_credit <> detail_total or counter_debit <> 0))
+     or round(detail_total, 2) <> round(voucher_row.total, 2) then
+    raise exception 'Simple entry ledger lines are invalid or unbalanced';
+  end if;
   return null;
 end;
 $$;
+
 drop trigger if exists vouchers_validate_simple_entry on public.vouchers;
-create constraint trigger vouchers_validate_simple_entry after insert or update of status, simple_entry_type, settlement_account_id, total on public.vouchers deferrable initially deferred for each row execute function public.validate_simple_entry_voucher();
+create constraint trigger vouchers_validate_simple_entry
+after insert or update of status, simple_entry_type, settlement_account_id, total on public.vouchers
+deferrable initially deferred for each row execute function public.validate_simple_entry_voucher();
+
 drop trigger if exists voucher_lines_validate_simple_entry on public.voucher_lines;
-create constraint trigger voucher_lines_validate_simple_entry after insert or update or delete on public.voucher_lines deferrable initially deferred for each row execute function public.validate_simple_entry_voucher();
+create constraint trigger voucher_lines_validate_simple_entry
+after insert or update or delete on public.voucher_lines
+deferrable initially deferred for each row execute function public.validate_simple_entry_voucher();
+
 revoke all on function public.sync_simple_entry_type() from public;
 revoke all on function public.validate_simple_entry_voucher() from public;
 
+-- END SYNCED DB FILE: supabase-simple-income-expense-migration.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-contra-voucher-migration.sql
+-- =============================================================================
+-- Journal-backed Contra vouchers and their protected Bank Charges ledger.
+alter table public.vouchers add column if not exists contra_entry boolean not null default false;
+alter table public.vouchers add column if not exists contra_destination_account_id text references public.accounts(id);
+alter table public.vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table public.vouchers drop constraint if exists vouchers_contra_metadata_check;
+alter table public.vouchers add constraint vouchers_contra_metadata_check check (
+  contra_charge_amount >= 0 and (not contra_entry or (type = 'Journal' and (status = 'Draft' or (settlement_account_id is not null and contra_destination_account_id is not null))))
+);
+
+insert into public.account_categories(company_id, name, account_type, is_system)
+select id, 'Indirect Expenses', 'Expense', true from public.companies
+where not exists (
+  select 1 from public.account_categories category
+  where category.company_id = companies.id
+    and lower(btrim(category.name)) = lower('Indirect Expenses')
+    and category.account_type = 'Expense'
+);
+
+update public.account_categories
+set is_system = true
+where lower(btrim(name)) = lower('Indirect Expenses')
+  and account_type = 'Expense';
+
+insert into public.accounts(id, company_id, name, type, "group", category_id, is_system, is_party, opening_balance)
+select company.id::text || ':bank_charges', company.id, 'Bank Charges', 'Expense', 'Indirect Expenses', category.id, true, false, 0
+from public.companies company
+join public.account_categories category on category.company_id = company.id and category.name = 'Indirect Expenses' and category.account_type = 'Expense'
+where not exists (
+  select 1 from public.accounts existing
+  where existing.company_id = company.id
+    and lower(btrim(existing.name)) = lower('Bank Charges')
+    and existing.type = 'Expense'
+)
+on conflict (id) do update set name = 'Bank Charges', type = 'Expense', "group" = 'Indirect Expenses', category_id = excluded.category_id, is_system = true, is_archived = false;
+
+update public.accounts account
+set is_system = true, is_archived = false, "group" = 'Indirect Expenses', category_id = category.id
+from public.account_categories category
+where account.company_id = category.company_id
+  and lower(btrim(account.name)) = lower('Bank Charges')
+  and account.type = 'Expense'
+  and category.name = 'Indirect Expenses'
+  and category.account_type = 'Expense';
+
+create or replace function public.sync_contra_metadata()
+returns trigger language plpgsql set search_path = public as $$
+begin
+  if new.type = 'Journal' and new.draft_payload->>'journalEntryType' = 'Contra' then
+    new.contra_entry := true;
+    new.settlement_account_id := coalesce(nullif(new.draft_payload->>'sourceAccountId', ''), new.settlement_account_id);
+    new.contra_destination_account_id := coalesce(nullif(new.draft_payload->>'destinationAccountId', ''), new.contra_destination_account_id);
+    new.contra_charge_amount := coalesce(nullif(new.draft_payload->>'chargeAmount', '')::numeric, new.contra_charge_amount, 0);
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists vouchers_sync_contra_metadata on public.vouchers;
+create trigger vouchers_sync_contra_metadata before insert or update of draft_payload, contra_entry, contra_destination_account_id, contra_charge_amount on public.vouchers for each row execute function public.sync_contra_metadata();
+
+create or replace function public.validate_contra_voucher()
+returns trigger language plpgsql security definer set search_path = public as $$
+declare
+  target_id uuid;
+  v public.vouchers%rowtype;
+  destination_debit numeric;
+  source_credit numeric;
+  charge_debit numeric;
+  line_count integer;
+  expected_line_count integer;
+begin
+  if tg_table_name = 'voucher_lines' then
+    if tg_op = 'DELETE' then
+      target_id := old.voucher_id;
+    else
+      target_id := new.voucher_id;
+    end if;
+  else
+    if tg_op = 'DELETE' then
+      target_id := old.id;
+    else
+      target_id := new.id;
+    end if;
+  end if;
+  select * into v from public.vouchers where id = target_id;
+  if not found or not v.contra_entry or v.status <> 'Completed' then return null; end if;
+  if v.type <> 'Journal' or v.settlement_account_id = v.contra_destination_account_id then raise exception 'Contra requires different source and destination ledgers'; end if;
+  if exists (
+    select 1 from (values (v.settlement_account_id), (v.contra_destination_account_id)) endpoint(id)
+    left join public.accounts account on account.id = endpoint.id and account.company_id = v.company_id and not account.is_archived
+    left join public.account_categories category on category.id = account.category_id and category.company_id = v.company_id and not category.is_archived
+    where account.id is null or not (category.name in ('Cash-in-Hand','Bank Accounts','Bank','Bank OD A/c') and category.account_type in ('Asset','Liability'))
+  ) then raise exception 'Contra source and destination must be active Cash or Bank ledgers'; end if;
+
+  select coalesce(sum(case when account_id = v.contra_destination_account_id then debit else 0 end),0),
+         coalesce(sum(case when account_id = v.settlement_account_id then credit else 0 end),0), count(*)
+    into destination_debit, source_credit, line_count from public.voucher_lines where voucher_id = target_id;
+  select coalesce(sum(line.debit),0) into charge_debit from public.voucher_lines line join public.accounts account on account.id = line.account_id
+    where line.voucher_id = target_id and account.company_id = v.company_id and lower(btrim(account.name)) = lower('Bank Charges') and account.is_system and account.type = 'Expense';
+  expected_line_count := case when v.contra_charge_amount > 0 then 3 else 2 end;
+  if destination_debit <= 0 or round(charge_debit,2) <> round(v.contra_charge_amount,2) or round(source_credit,2) <> round(destination_debit + charge_debit,2)
+     or line_count <> expected_line_count
+     or exists (select 1 from public.voucher_lines where voucher_id = target_id and debit > 0 and credit > 0)
+  then raise exception 'Contra voucher lines are invalid or unbalanced'; end if;
+  return null;
+end;
+$$;
+drop trigger if exists vouchers_validate_contra on public.vouchers;
+create constraint trigger vouchers_validate_contra after insert or update of status, contra_entry, settlement_account_id, contra_destination_account_id, contra_charge_amount on public.vouchers deferrable initially deferred for each row execute function public.validate_contra_voucher();
+drop trigger if exists voucher_lines_validate_contra on public.voucher_lines;
+create constraint trigger voucher_lines_validate_contra after insert or update or delete on public.voucher_lines deferrable initially deferred for each row execute function public.validate_contra_voucher();
+revoke all on function public.sync_contra_metadata() from public;
+revoke all on function public.validate_contra_voucher() from public;
+
+-- END SYNCED DB FILE: supabase-contra-voucher-migration.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-identity-validation-migration.sql
+-- =============================================================================
+-- Shared backend enforcement for company, party, ledger, bank, and cheque identity fields.
+-- Invalid optional legacy phone/PAN values are intentionally cleared before constraints are installed.
+
+update public.companies set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update public.companies set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update public.accounts set contact_no = null where contact_no is not null and btrim(contact_no) !~ '^[0-9]{10}$';
+update public.accounts set pan_no = null where pan_no is not null and btrim(pan_no) !~ '^[0-9]{9}$';
+update public.parties set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update public.parties set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update public.companies set phone = btrim(phone), pan_vat = btrim(pan_vat);
+update public.accounts set contact_no = btrim(contact_no), pan_no = btrim(pan_no);
+update public.parties set phone = btrim(phone), pan_vat = btrim(pan_vat);
+
+alter table public.companies drop constraint if exists companies_identity_phone_check;
+alter table public.companies add constraint companies_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table public.companies drop constraint if exists companies_identity_pan_check;
+alter table public.companies add constraint companies_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
+alter table public.companies drop constraint if exists companies_identity_name_check;
+alter table public.companies add constraint companies_identity_name_check check (char_length(btrim(name)) between 1 and 150 and name !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') not valid;
+alter table public.companies drop constraint if exists companies_identity_address_check;
+alter table public.companies add constraint companies_identity_address_check check (address is null or (char_length(btrim(address)) <= 500 and address !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')) not valid;
+
+alter table public.accounts drop constraint if exists accounts_identity_phone_check;
+alter table public.accounts add constraint accounts_identity_phone_check check (contact_no is null or contact_no ~ '^[0-9]{10}$');
+alter table public.accounts drop constraint if exists accounts_identity_pan_check;
+alter table public.accounts add constraint accounts_identity_pan_check check (pan_no is null or pan_no ~ '^[0-9]{9}$');
+alter table public.accounts drop constraint if exists accounts_identity_name_check;
+alter table public.accounts add constraint accounts_identity_name_check check (char_length(btrim(name)) between 1 and 150 and name !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') not valid;
+alter table public.accounts drop constraint if exists accounts_identity_address_check;
+alter table public.accounts add constraint accounts_identity_address_check check (address is null or (char_length(btrim(address)) <= 500 and address !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')) not valid;
+alter table public.accounts drop constraint if exists accounts_identity_bank_account_check;
+alter table public.accounts add constraint accounts_identity_bank_account_check check (bank_account_no is null or (char_length(btrim(bank_account_no)) between 1 and 34 and btrim(bank_account_no) ~ '^[[:alnum:] -]+$')) not valid;
+alter table public.accounts drop constraint if exists accounts_identity_branch_check;
+alter table public.accounts add constraint accounts_identity_branch_check check (bank_branch is null or (char_length(btrim(bank_branch)) <= 100 and bank_branch !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')) not valid;
+
+alter table public.parties drop constraint if exists parties_identity_phone_check;
+alter table public.parties add constraint parties_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table public.parties drop constraint if exists parties_identity_pan_check;
+alter table public.parties add constraint parties_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
+alter table public.parties drop constraint if exists parties_identity_name_check;
+alter table public.parties add constraint parties_identity_name_check check (char_length(btrim(name)) between 1 and 150 and name !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]') not valid;
+alter table public.parties drop constraint if exists parties_identity_address_check;
+alter table public.parties add constraint parties_identity_address_check check (address is null or (char_length(btrim(address)) <= 500 and address !~ '[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]')) not valid;
+
+do $identity_optional_tables$
+begin
+  if to_regclass('public.cheque_banks') is not null then
+    alter table public.cheque_banks disable trigger cheque_bank_guard;
+    update public.cheque_banks set contact_number = null where contact_number is not null and btrim(contact_number) !~ '^[0-9]{10}$';
+    update public.cheque_banks set contact_number = btrim(contact_number);
+    alter table public.cheque_banks enable trigger cheque_bank_guard;
+    alter table public.cheque_banks drop constraint if exists cheque_banks_identity_phone_check;
+    alter table public.cheque_banks add constraint cheque_banks_identity_phone_check check (contact_number is null or contact_number ~ '^[0-9]{10}$');
+    alter table public.cheque_banks drop constraint if exists cheque_banks_identity_name_check;
+    alter table public.cheque_banks add constraint cheque_banks_identity_name_check check (char_length(btrim(bank_name)) between 1 and 150) not valid;
+    alter table public.cheque_banks drop constraint if exists cheque_banks_identity_branch_check;
+    alter table public.cheque_banks add constraint cheque_banks_identity_branch_check check (branch_name is null or char_length(btrim(branch_name)) <= 100) not valid;
+    alter table public.cheque_banks drop constraint if exists cheque_banks_identity_account_check;
+    alter table public.cheque_banks add constraint cheque_banks_identity_account_check check (account_number is null or btrim(account_number) = '' or (char_length(btrim(account_number)) <= 34 and btrim(account_number) ~ '^[[:alnum:] -]+$')) not valid;
+  end if;
+  if to_regclass('public.cheques') is not null then
+    alter table public.cheques drop constraint if exists cheques_identity_number_check;
+    alter table public.cheques add constraint cheques_identity_number_check check (char_length(btrim(cheque_number)) between 1 and 50 and btrim(cheque_number) ~ '^[[:alnum:]/-]+$') not valid;
+    alter table public.cheques drop constraint if exists cheques_identity_account_check;
+    alter table public.cheques add constraint cheques_identity_account_check check (char_length(btrim(account_number)) between 1 and 34 and btrim(account_number) ~ '^[[:alnum:] -]+$') not valid;
+  end if;
+end;
+$identity_optional_tables$;
+
+-- END SYNCED DB FILE: supabase-identity-validation-migration.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-security-audit.sql
+-- =============================================================================
+-- Read-only pre-deployment RLS audit. Run in the Supabase SQL Editor after all
+-- migrations. Expected result: zero rows from both queries.
+
+-- Public tables without Row Level Security.
+select namespace.nspname as schema_name, class.relname as table_name
+from pg_class class
+join pg_namespace namespace on namespace.oid = class.relnamespace
+where namespace.nspname = 'public'
+  and class.relkind in ('r', 'p')
+  and not class.relrowsecurity
+order by class.relname;
+
+-- RLS-enabled public tables without any policy. An empty-policy table is
+-- deny-by-default, but this identifies incomplete application configuration.
+select class.relname as table_name
+from pg_class class
+join pg_namespace namespace on namespace.oid = class.relnamespace
+where namespace.nspname = 'public'
+  and class.relkind in ('r', 'p')
+  and class.relrowsecurity
+  and not exists (
+    select 1 from pg_policy policy where policy.polrelid = class.oid
+  )
+order by class.relname;
+
+-- END SYNCED DB FILE: supabase-security-audit.sql
+
+-- =============================================================================
+-- BEGIN SYNCED DB FILE: supabase-write-performance-diagnostics.sql
+-- =============================================================================
+-- Read-only write-performance diagnostics. Run after a representative test
+-- workload. This file does not change schema, data, RLS, or configuration.
+
+-- Database-only statement execution (requires pg_stat_statements, normally
+-- available in Supabase). Values exclude browser processing and most client
+-- network latency.
+select
+  calls,
+  round(total_exec_time::numeric, 2) as total_exec_ms,
+  round(mean_exec_time::numeric, 2) as mean_exec_ms,
+  rows,
+  left(regexp_replace(query, '\s+', ' ', 'g'), 240) as normalized_query
+from pg_stat_statements
+where query ~* '(insert|update|delete).*(vouchers|voucher_lines|stock_lines|invoice_items|voucher_settlements|accounts|parties|items|account_categories|item_categories|master_change_logs|app_events)'
+order by total_exec_time desc
+limit 50;
+
+-- Trigger/function time is populated when PostgreSQL track_functions is
+-- enabled by the project. Zero rows means the project is not collecting it;
+-- do not infer that triggers are free.
+select
+  schemaname,
+  funcname,
+  calls,
+  round(total_time::numeric, 2) as total_ms,
+  round(self_time::numeric, 2) as self_ms,
+  case when calls > 0 then round((total_time / calls)::numeric, 3) else 0 end as mean_ms
+from pg_stat_user_functions
+where funcname in (
+  'validate_voucher_balance',
+  'validate_voucher_settlement',
+  'save_voucher_atomic',
+  'validate_account_category_hierarchy',
+  'validate_item_category_hierarchy'
+)
+order by total_time desc;
+
+-- Verify the indexes used by current write validation and foreign-key paths.
+select schemaname, tablename, indexname, indexdef
+from pg_indexes
+where schemaname = 'public'
+  and tablename in ('vouchers','voucher_lines','stock_lines','invoice_items','voucher_settlements','accounts','parties','items')
+order by tablename, indexname;
+
+-- Phase 5 representative plans. These are read-only SELECT equivalents of
+-- lookups executed during atomic posting and category writes. PostgreSQL may
+-- correctly choose a sequential scan for very small test tables; compare the
+-- estimated/actual rows and buffers rather than treating every Seq Scan as a
+-- defect.
+explain (analyze, buffers, verbose)
+with sample_company as (
+  select company_id
+  from public.vouchers
+  group by company_id
+  order by count(*) desc
+  limit 1
+)
+select max(voucher.seq)
+from public.vouchers voucher
+join sample_company sample on sample.company_id = voucher.company_id;
+
+explain (analyze, buffers, verbose)
+with sample_scope as (
+  select company_id, type, numbering_period
+  from public.vouchers
+  where invoice_no is not null
+  group by company_id, type, numbering_period
+  order by count(*) desc
+  limit 1
+)
+select max((substring(voucher.invoice_no from '([0-9]+)$'))::bigint)
+from public.vouchers voucher
+join sample_scope sample
+  on sample.company_id = voucher.company_id
+ and sample.type = voucher.type
+ and sample.numbering_period = voucher.numbering_period
+where voucher.invoice_no is not null;
+
+explain (analyze, buffers, verbose)
+select account.id
+from public.accounts account
+where account.category_id = (
+  select category_id from public.accounts
+  where category_id is not null
+  limit 1
+);
+
+explain (analyze, buffers, verbose)
+select line.id
+from public.voucher_lines line
+where line.voucher_id = (select voucher_id from public.voucher_lines limit 1);
+
+explain (analyze, buffers, verbose)
+select line.id
+from public.stock_lines line
+where line.voucher_id = (select voucher_id from public.stock_lines limit 1);
+
+explain (analyze, buffers, verbose)
+select item.id
+from public.invoice_items item
+where item.voucher_id = (select voucher_id from public.invoice_items limit 1);
+
+-- Index use and size after a representative Phase 4 workload. Low idx_scan on
+-- a newly created or tiny table is not enough reason to remove an index.
+select
+  stats.relname as table_name,
+  stats.indexrelname as index_name,
+  stats.idx_scan,
+  stats.idx_tup_read,
+  stats.idx_tup_fetch,
+  pg_size_pretty(pg_relation_size(stats.indexrelid)) as index_size
+from pg_stat_user_indexes stats
+where stats.schemaname = 'public'
+  and stats.relname in (
+    'companies','accounts','parties','items','vouchers','voucher_lines',
+    'stock_lines','invoice_items','voucher_settlements','app_events'
+  )
+order by stats.relname, stats.indexrelname;
+
+-- Foreign keys without a supporting index whose leading columns exactly match
+-- the FK. This is an audit list, not an instruction to index every result:
+-- indexes are mainly justified when referenced rows are actually updated or
+-- deleted often enough to make the FK check measurable.
+select
+  constraint_record.conrelid::regclass as child_table,
+  constraint_record.conname as foreign_key,
+  pg_get_constraintdef(constraint_record.oid) as definition
+from pg_constraint constraint_record
+where constraint_record.contype = 'f'
+  and constraint_record.connamespace = 'public'::regnamespace
+  and not exists (
+    select 1
+    from pg_index index_record
+    where index_record.indrelid = constraint_record.conrelid
+      and index_record.indisvalid
+      and cardinality(index_record.indkey::smallint[]) >= cardinality(constraint_record.conkey)
+      and not exists (
+        select 1
+        from generate_subscripts(constraint_record.conkey, 1) position
+        where constraint_record.conkey[position]
+          <> (index_record.indkey::smallint[])[position - 1]
+      )
+  )
+order by constraint_record.conrelid::regclass::text, constraint_record.conname;
+
+-- Phase 6 trigger inventory: frequency is per ROW or STATEMENT as shown.
+-- Internal constraint triggers are excluded; enabled='O' means normal.
+select
+  trigger_record.tgrelid::regclass as table_name,
+  trigger_record.tgname as trigger_name,
+  case when trigger_record.tgtype & 1 = 1 then 'ROW' else 'STATEMENT' end as frequency,
+  case
+    when trigger_record.tgtype & 2 = 2 then 'BEFORE'
+    when trigger_record.tgtype & 64 = 64 then 'INSTEAD OF'
+    else 'AFTER'
+  end as timing,
+  concat_ws(', ',
+    case when trigger_record.tgtype & 4 = 4 then 'INSERT' end,
+    case when trigger_record.tgtype & 8 = 8 then 'DELETE' end,
+    case when trigger_record.tgtype & 16 = 16 then 'UPDATE' end,
+    case when trigger_record.tgtype & 32 = 32 then 'TRUNCATE' end
+  ) as events,
+  trigger_record.tgdeferrable,
+  trigger_record.tginitdeferred,
+  function_record.proname as function_name,
+  pg_get_triggerdef(trigger_record.oid) as definition
+from pg_trigger trigger_record
+join pg_proc function_record on function_record.oid = trigger_record.tgfoid
+where not trigger_record.tgisinternal
+  and trigger_record.tgrelid::regclass::text in (
+    'companies','account_categories','item_categories','vouchers','voucher_lines',
+    'stock_lines','invoice_items','voucher_settlements','cheque_banks','cheques',
+    'cheque_events','accounts','parties','items','app_events'
+  )
+order by trigger_record.tgrelid::regclass::text, trigger_record.tgname;
+
+-- Legacy issuing-bank names that prevent a unique case-insensitive index.
+-- Phase 6 leaves these records untouched and uses a non-unique lookup index.
+select
+  company_id,
+  lower(bank_name) as normalized_bank_name,
+  count(*) as records,
+  array_agg(id order by created_at, id) as bank_ids
+from public.cheque_banks
+group by company_id, lower(bank_name)
+having count(*) > 1
+order by company_id, normalized_bank_name;
+
+-- Trigger/function totals after a representative workload. Requires
+-- track_functions; zero rows means timing collection is disabled.
+select
+  functions.schemaname,
+  functions.funcname,
+  functions.calls,
+  round(functions.total_time::numeric, 3) as total_ms,
+  round(functions.self_time::numeric, 3) as self_ms,
+  case when functions.calls > 0
+    then round((functions.total_time / functions.calls)::numeric, 4)
+    else 0 end as mean_ms
+from pg_stat_user_functions functions
+where functions.funcname in (
+  'validate_voucher_balance','validate_voucher_settlement',
+  'validate_account_category_hierarchy','validate_item_category_hierarchy',
+  'protect_system_account_category','seed_system_account_groups_for_company',
+  'seed_cheque_banks_on_entitlement','validate_cheque_bank',
+  'cheque_touch_and_audit'
+)
+order by functions.total_time desc;
+
+-- Phase 7 effective policy definitions. Review qual/with_check to verify that
+-- tenant, entitlement, and permission predicates remain present.
+select
+  schemaname, tablename, policyname, permissive, roles, cmd, qual, with_check
+from pg_policies
+where schemaname = 'public'
+  and tablename in (
+    'companies','accounts','account_categories','parties','items',
+    'item_categories','master_change_logs','vouchers','voucher_lines',
+    'stock_lines','invoice_items','voucher_settlements','app_events','modules',
+    'company_modules','company_user_permissions','cheque_banks','cheques',
+    'cheque_events'
+  )
+order by tablename, policyname;
+
+-- Current non-idle locks on write-related tables. Run while reproducing a slow
+-- write to distinguish index/query cost from lock waiting.
+select
+  activity.pid,
+  activity.state,
+  activity.wait_event_type,
+  activity.wait_event,
+  lock_record.relation::regclass as relation,
+  lock_record.mode,
+  lock_record.granted,
+  left(activity.query, 180) as query
+from pg_locks lock_record
+join pg_stat_activity activity on activity.pid = lock_record.pid
+where lock_record.relation::regclass::text in (
+  'companies','accounts','account_categories','parties','items','vouchers',
+  'voucher_lines','stock_lines','invoice_items','voucher_settlements',
+  'cheque_banks','cheques','cheque_events','app_events'
+)
+  and activity.state <> 'idle'
+order by lock_record.granted, activity.query_start;
+
+-- Phases 12-16 verification: idempotency support and atomic-posting timing.
+select indexname, indexdef
+from pg_indexes
+where schemaname = 'public'
+  and tablename = 'vouchers'
+  and indexname = 'vouchers_company_idempotency_unique';
+
+select
+  calls,
+  round(total_exec_time::numeric, 2) as total_exec_ms,
+  round(mean_exec_time::numeric, 2) as mean_exec_ms,
+  rows,
+  left(regexp_replace(query, '\s+', ' ', 'g'), 240) as normalized_query
+from pg_stat_statements
+where query ilike '%save_voucher_atomic%'
+order by total_exec_time desc;
+
+-- One voucher audit event is expected per successful unique request. Reusing
+-- an idempotency key must return the existing voucher without another event.
+select
+  metadata->>'voucher_id' as voucher_id,
+  count(*) as audit_events,
+  min(created_at) as first_event,
+  max(created_at) as last_event
+from public.app_events
+where event_type in ('voucher_created','voucher_updated','return_created','stock_adjustment')
+  and metadata ? 'voucher_id'
+group by metadata->>'voucher_id'
+having count(*) > 1
+order by audit_events desc, voucher_id;
+
+-- Same-company voucher posts may briefly wait on one advisory transaction
+-- lock. Long waits here indicate an unexpectedly long posting transaction.
+select
+  activity.pid,
+  activity.state,
+  activity.xact_start,
+  now() - activity.xact_start as transaction_age,
+  activity.wait_event_type,
+  activity.wait_event,
+  lock_record.classid,
+  lock_record.objid,
+  lock_record.granted,
+  left(activity.query, 180) as query
+from pg_locks lock_record
+join pg_stat_activity activity on activity.pid = lock_record.pid
+where lock_record.locktype = 'advisory'
+order by lock_record.granted, activity.xact_start;
+
+-- END SYNCED DB FILE: supabase-write-performance-diagnostics.sql
+
+-- =============================================================================
+-- FINAL BOOTSTRAP VERIFICATION
+-- =============================================================================
 do $bootstrap_verification$
 declare
   required_table text;

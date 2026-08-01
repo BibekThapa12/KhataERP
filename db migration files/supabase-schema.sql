@@ -190,6 +190,13 @@ create unique index if not exists companies_user_id_unique on companies(user_id)
 
 alter table companies add column if not exists owner_email text;
 alter table companies add column if not exists phone text;
+update companies set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update companies set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update companies set phone = btrim(phone), pan_vat = btrim(pan_vat);
+alter table companies drop constraint if exists companies_identity_phone_check;
+alter table companies add constraint companies_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table companies drop constraint if exists companies_identity_pan_check;
+alter table companies add constraint companies_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
 alter table companies add column if not exists vat_enabled boolean not null default true;
 alter table companies add column if not exists inventory_valuation_method text not null default 'weighted_average';
 alter table companies add column if not exists sales_prefix text not null default 'INV-';
@@ -267,6 +274,13 @@ create table if not exists account_categories (
 
 alter table accounts add column if not exists category_id uuid references account_categories(id) on delete restrict;
 alter table accounts add column if not exists is_archived boolean not null default false;
+update accounts set contact_no = null where contact_no is not null and btrim(contact_no) !~ '^[0-9]{10}$';
+update accounts set pan_no = null where pan_no is not null and btrim(pan_no) !~ '^[0-9]{9}$';
+update accounts set contact_no = btrim(contact_no), pan_no = btrim(pan_no);
+alter table accounts drop constraint if exists accounts_identity_phone_check;
+alter table accounts add constraint accounts_identity_phone_check check (contact_no is null or contact_no ~ '^[0-9]{10}$');
+alter table accounts drop constraint if exists accounts_identity_pan_check;
+alter table accounts add constraint accounts_identity_pan_check check (pan_no is null or pan_no ~ '^[0-9]{9}$');
 
 -- ── Parties ───────────────────────────────────────────────────────────────────
 create table if not exists parties (
@@ -282,6 +296,13 @@ create table if not exists parties (
 );
 alter table parties add column if not exists is_archived boolean not null default false;
 alter table parties add column if not exists default_credit_days integer not null default 0;
+update parties set phone = null where phone is not null and btrim(phone) !~ '^[0-9]{10}$';
+update parties set pan_vat = null where pan_vat is not null and btrim(pan_vat) !~ '^[0-9]{9}$';
+update parties set phone = btrim(phone), pan_vat = btrim(pan_vat);
+alter table parties drop constraint if exists parties_identity_phone_check;
+alter table parties add constraint parties_identity_phone_check check (phone is null or phone ~ '^[0-9]{10}$');
+alter table parties drop constraint if exists parties_identity_pan_check;
+alter table parties add constraint parties_identity_pan_check check (pan_vat is null or pan_vat ~ '^[0-9]{9}$');
 
 -- ── Items ─────────────────────────────────────────────────────────────────────
 create table if not exists items (
@@ -376,6 +397,9 @@ create table if not exists vouchers (
   return_reason    text,
   settlement_mode text check (settlement_mode in ('party','cash','bank')),
   simple_entry_type text check (simple_entry_type in ('Income','Expense')),
+  contra_entry boolean not null default false,
+  contra_destination_account_id text references accounts(id),
+  contra_charge_amount numeric(14,2) not null default 0,
   restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
@@ -414,6 +438,9 @@ end $$;
 alter table vouchers add column if not exists date_ad date;
 alter table vouchers add column if not exists supplier_invoice_no text;
 alter table vouchers add column if not exists simple_entry_type text;
+alter table vouchers add column if not exists contra_entry boolean not null default false;
+alter table vouchers add column if not exists contra_destination_account_id text references accounts(id);
+alter table vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
 alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
@@ -948,6 +975,7 @@ begin
     ('capital','Owner''s Capital','Equity','Capital Account',true),
     ('retained_earnings','Retained Earnings','Equity','Reserves & Surplus',true),
     ('discount_allowed','Discount Allowed','Expense','Indirect Expenses',false),
+    ('bank_charges','Bank Charges','Expense','Indirect Expenses',true),
     ('rent','Rent Expense','Expense','Indirect Expenses',false),
     ('salary','Salary Expense','Expense','Indirect Expenses',false),
     ('electricity','Electricity Expense','Expense','Indirect Expenses',false)

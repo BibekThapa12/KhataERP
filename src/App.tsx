@@ -20,6 +20,7 @@ const PaymentsPage = lazy(() => import('@/pages/Payments').then(m => ({ default:
 const JournalPage = lazy(() => import('@/pages/Journal').then(m => ({ default: m.JournalPage })))
 const IncomeEntriesPage = lazy(() => import('@/pages/SimpleEntries').then(m => ({ default: m.IncomeEntriesPage })))
 const ExpenseEntriesPage = lazy(() => import('@/pages/SimpleEntries').then(m => ({ default: m.ExpenseEntriesPage })))
+const ContraPage = lazy(() => import('@/pages/Contra').then(m => ({ default: m.ContraPage })))
 const DraftVouchersPage = lazy(() => import('@/pages/DraftVouchers').then(m => ({ default: m.DraftVouchersPage })))
 const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
@@ -241,6 +242,7 @@ export default function App() {
             <Route path="transactions/journal" element={<JournalPage />} />
             <Route path="transactions/income" element={<IncomeEntriesPage />} />
             <Route path="transactions/expenses" element={<ExpenseEntriesPage />} />
+            <Route path="transactions/contra" element={<ContraPage />} />
             <Route path="transactions/drafts" element={<DraftVouchersPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />

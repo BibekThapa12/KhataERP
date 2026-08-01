@@ -18,6 +18,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
+import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 
 type PortableCompanyBackup = {
   format?: 'khataerp-portable-company-v1'
@@ -329,6 +330,8 @@ export function SettingsPage() {
     if (valuationMethod !== (company?.inventory_valuation_method || 'weighted_average') && !window.confirm('Changing the inventory valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
     const formattedName = formatMasterName(name) || 'My Company'
     setName(formattedName)
+    const identityError = validateName(formattedName, 'Company name') || validateAddress(address) || validatePan(panVat) || validatePhone(phone)
+    if (identityError) { setSaveError(identityError); return }
     setSaving(true)
     try {
       await saveCompany({
@@ -358,7 +361,7 @@ export function SettingsPage() {
       setSaved(true)
       setTimeout(() => setSaved(false), 2000)
     } catch (e: unknown) {
-      setSaveError(publicErrorMessage(e, 'saving settings'))
+      setSaveError(identityDatabaseError(e) || publicErrorMessage(e, 'saving settings'))
     } finally {
       setSaving(false)
     }
@@ -625,6 +628,7 @@ export function SettingsPage() {
           company_id: company.id,
           original_voucher_id: null,
           settlement_account_id: voucher.settlement_account_id ? idMap.get(voucher.settlement_account_id) || null : null,
+          contra_destination_account_id: voucher.contra_destination_account_id ? idMap.get(voucher.contra_destination_account_id) || null : null,
           party_account_id: voucher.party_account_id ? idMap.get(voucher.party_account_id) || null : null,
           created_by: null,
           updated_by: null,
@@ -844,19 +848,19 @@ export function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
               <Label>Company Name</Label>
-              <Input value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="My Trading Co." />
+              <Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="My Trading Co." />
             </div>
             <div className="space-y-1.5">
               <Label>Address</Label>
-              <Textarea value={address} onChange={e => setAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" />
+              <Textarea value={address} maxLength={IDENTITY_LIMITS.address} onChange={e => setAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" />
             </div>
             <div className="space-y-1.5">
               <Label>PAN / VAT Registration No.</Label>
-              <Input value={panVat} onChange={e => setPanVat(e.target.value)} placeholder="Optional" />
+              <Input value={panVat} inputMode="numeric" maxLength={9} onChange={e => setPanVat(normalizePanInput(e.target.value))} placeholder="Optional, 9 digits" />
             </div>
             <div className="space-y-1.5">
               <Label>Phone Number</Label>
-              <Input type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="Optional" />
+              <Input type="tel" inputMode="numeric" maxLength={10} value={phone} onChange={e => setPhone(normalizePhoneInput(e.target.value))} placeholder="Optional, 10 digits" />
             </div>
             <label htmlFor="settings-vat-enabled" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
               <input

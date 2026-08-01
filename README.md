@@ -33,6 +33,8 @@ Apply `supabase-critical-security-hardening-migration.sql` last to enforce prote
 Apply `supabase-zero-value-invoices-migration.sql` afterwards to permit zero-rate and zero-total Sales, Purchase, Sales Return, and Purchase Return documents while retaining compulsory item and positive-quantity validation.
 Apply `supabase-journal-supplier-invoice-migration.sql` to configure automatic/manual Journal voucher numbers and store supplier invoice numbers from physical Purchase bills.
 Apply `supabase-simple-income-expense-migration.sql` to enable beginner-friendly Income and Expense entries backed by validated Journal vouchers.
+Apply `supabase-contra-voucher-migration.sql` to enable validated Cash and Bank Contra transfers.
+Apply `supabase-identity-validation-migration.sql` to enforce phone, PAN/VAT, name, address, bank-account, and cheque identity rules in PostgreSQL.
 For a brand-new staging Supabase project, run only `supabase-complete-staging-bootstrap.sql`; it contains the base schema and every required migration in dependency order. Do not run the individual migration files afterwards.
 
 ```bash

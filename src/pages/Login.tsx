@@ -8,6 +8,8 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { isInvalidCredentialsError, publicAuthErrorMessage } from '@/lib/security'
 import { clearLoginFailures, consumeBrowserAuthAttempt, getLoginThrottle, recordInvalidLogin } from '@/lib/authRateLimit'
 import { formatMasterName } from '@/lib/nameFormat'
+import { Eye, EyeOff } from 'lucide-react'
+import { IDENTITY_LIMITS, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 
 /*
  * CAPTCHA is temporarily disabled. To restore it later, re-enable the
@@ -19,6 +21,7 @@ export function LoginPage() {
   const [mode, setMode] = useState<'login' | 'signup' | 'forgot'>('login')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
   const [companyName, setCompanyName] = useState('')
   const [companyAddress, setCompanyAddress] = useState('')
   const [panVat, setPanVat] = useState('')
@@ -40,6 +43,10 @@ export function LoginPage() {
     e.preventDefault()
     setError('')
     setSuccess('')
+    if (mode === 'signup') {
+      const validationError = validateName(companyName, 'Company name') || validateAddress(companyAddress, true) || validatePan(panVat, true) || validatePhone(phone, true)
+      if (validationError) { setError(validationError); return }
+    }
     const rateLimit = mode === 'login' ? getLoginThrottle() : consumeBrowserAuthAttempt(mode === 'signup' ? 'signup' : 'password_reset')
     if (!rateLimit.allowed) {
       setLoading(false)
@@ -115,7 +122,7 @@ export function LoginPage() {
               </div>
               {mode !== 'forgot' && <div className="space-y-1.5">
                 <Label htmlFor="password">Password</Label>
-                <Input id="password" type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="********" required minLength={6} />
+                <div className="relative"><Input id="password" type={showPassword ? 'text' : 'password'} value={password} onChange={e => setPassword(e.target.value)} placeholder="********" required minLength={6} className="pr-10" /><button type="button" aria-label={showPassword ? 'Hide password' : 'Show password'} aria-pressed={showPassword} onMouseDown={event => event.preventDefault()} onClick={() => setShowPassword(value => !value)} className="absolute right-1 top-1/2 flex h-8 w-8 -translate-y-1/2 items-center justify-center rounded text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">{showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}</button></div>
                 {mode === 'login' && <button type="button" onClick={() => { setMode('forgot'); setError(''); setSuccess(''); setPassword('') }} className="text-xs font-medium text-primary hover:underline">Forgot password?</button>}
               </div>}
               {mode === 'login' && <label htmlFor="remember-session" className="flex cursor-pointer items-start gap-2.5 text-sm">
@@ -126,20 +133,20 @@ export function LoginPage() {
                 <>
                   <div className="space-y-1.5">
                     <Label htmlFor="company-name">Company Name</Label>
-                    <Input id="company-name" value={companyName} onChange={e => setCompanyName(e.target.value)} onBlur={() => setCompanyName(current => formatMasterName(current))} placeholder="My Trading Co." required />
+                    <Input id="company-name" value={companyName} maxLength={IDENTITY_LIMITS.name} onChange={e => setCompanyName(e.target.value)} onBlur={() => setCompanyName(current => formatMasterName(current))} placeholder="My Trading Co." required />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="company-address">Address</Label>
-                    <Textarea id="company-address" value={companyAddress} onChange={e => setCompanyAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" required />
+                    <Textarea id="company-address" value={companyAddress} maxLength={IDENTITY_LIMITS.address} onChange={e => setCompanyAddress(e.target.value)} rows={2} placeholder="Kathmandu, Nepal" required />
                   </div>
                   <div className="grid gap-4 sm:grid-cols-2">
                     <div className="space-y-1.5">
                       <Label htmlFor="pan-vat">PAN / VAT No.</Label>
-                      <Input id="pan-vat" value={panVat} onChange={e => setPanVat(e.target.value)} placeholder="600000000" required />
+                      <Input id="pan-vat" value={panVat} inputMode="numeric" maxLength={9} onChange={e => setPanVat(normalizePanInput(e.target.value))} placeholder="600000000" required />
                     </div>
                     <div className="space-y-1.5">
                       <Label htmlFor="phone">Phone Number</Label>
-                      <Input id="phone" type="tel" value={phone} onChange={e => setPhone(e.target.value)} placeholder="9800000000" required />
+                      <Input id="phone" type="tel" inputMode="numeric" maxLength={10} value={phone} onChange={e => setPhone(normalizePhoneInput(e.target.value))} placeholder="9800000000" required />
                     </div>
                   </div>
                   <label htmlFor="vat-enabled" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">

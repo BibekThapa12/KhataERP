@@ -22,6 +22,7 @@ import type { Account, Cheque, ChequeBank, ChequeEvent, ChequeStatus, Party } fr
 import { SubmissionLock } from '@/lib/submissionLock'
 import { notifySuccess } from '@/lib/notifications'
 import { formatMasterName } from '@/lib/nameFormat'
+import { IDENTITY_LIMITS, identityDatabaseError, validateBankAccount, validateBranch, validateChequeNumber, validateName } from '@/lib/identityValidation'
 
 const field = 'space-y-1'
 const th = 'px-2 py-1.5 text-left text-[10px] uppercase tracking-wide text-muted-foreground'
@@ -79,6 +80,8 @@ function ChequeForm({ afterSave }: { afterSave?: () => void }) {
   const save = async (again=false) => {
     if (!company) return
     const base = { cheque_number:form.cheque_number.trim(), bank_id:form.bank_id, account_number:form.account_number.trim(), party_ledger_id:form.party_ledger_id, amount:Number(form.amount), issue_date_bs:form.issue_date_bs, due_date_bs:form.due_date_bs }
+    const identityError = validateChequeNumber(base.cheque_number) || validateBankAccount(base.account_number)
+    if (identityError) return setError(identityError)
     const invalid = validateChequeInput(base, !!settings?.allow_due_date_before_issue_date)
     if (invalid) return setError(invalid)
     if (cheques.some(c => c.bank_id===base.bank_id && c.account_number===base.account_number && c.cheque_number.toLowerCase()===base.cheque_number.toLowerCase())) return setError('A cheque with this bank, account, and cheque number already exists.')
@@ -89,12 +92,12 @@ function ChequeForm({ afterSave }: { afterSave?: () => void }) {
       cacheCheque(created)
       notifySuccess('Cheque saved', created.cheque_number)
       if (again) { reset(); afterSave?.() } else navigate(`/cheques/${created.id}`)
-    } catch (cause) { setError(publicErrorMessage(cause, 'saving cheque')) } finally { submissionLock.release(); setSaving(false) }
+    } catch (cause) { setError(identityDatabaseError(cause) || publicErrorMessage(cause, 'saving cheque')) } finally { submissionLock.release(); setSaving(false) }
   }
   return <Card className="mx-auto max-w-3xl p-3"><div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-    <div className={field}><Label>Cheque No.</Label><Input value={form.cheque_number} onChange={e=>set('cheque_number',e.target.value)} maxLength={50} autoFocus /></div>
+    <div className={field}><Label>Cheque No.</Label><Input value={form.cheque_number} onChange={e=>set('cheque_number',e.target.value)} maxLength={IDENTITY_LIMITS.chequeNumber} autoFocus /></div>
     <div className={field}><Label>Cheque Issuing Bank</Label><SearchableSelect value={form.bank_id} onValueChange={value=>{const bank=banks.find(b=>b.id===value);setForm(current=>({...current,bank_id:value,account_number:bank?.account_number||''}))}} options={bankOptions} placeholder="Select party’s bank" searchPlaceholder="Search Nepal banks…" /></div>
-    <div className={field}><Label>Party’s Cheque Account No.</Label><Input value={form.account_number} onChange={e=>set('account_number',e.target.value)} disabled={!settings?.allow_account_number_override && !!selectedBank?.account_number} /></div>
+    <div className={field}><Label>Party’s Cheque Account No.</Label><Input value={form.account_number} maxLength={IDENTITY_LIMITS.bankAccount} onChange={e=>set('account_number',e.target.value)} disabled={!settings?.allow_account_number_override && !!selectedBank?.account_number} /></div>
     <div className={field}><Label>Amount (Rs)</Label><Input type="number" min="0.01" step="0.01" value={form.amount} onChange={e=>set('amount',e.target.value)} /></div>
     <div className="space-y-1 sm:col-span-2"><Label>Received From</Label><SearchableSelect value={form.party_ledger_id} onValueChange={value=>set('party_ledger_id',value)} options={partyOptions} placeholder="Select party ledger" searchPlaceholder="Search parties and groups…" />{form.party_ledger_id && <p className="text-xs font-semibold text-emerald-700">{formatLedgerBalance(selectedPartyAccount, selectedParty)}</p>}</div>
     <div className={field}><Label>Issue Date (B.S.)</Label><NepaliDateInput value={form.issue_date_bs} onChange={value=>set('issue_date_bs',value)} /></div>
@@ -189,7 +192,7 @@ function BankDialog({bank,onClose}:{bank?:ChequeBank;onClose:()=>void}) {
   const {company}=useAppStore()
   const [value,setValue]=useState({bank_name:bank?.bank_name||'',branch_name:bank?.branch_name||'',institution_type:bank?.institution_type==='Other'?'Others':bank?.institution_type||'Commercial Bank',notes:bank?.notes||''})
   const [error,setError]=useState('')
-  const save=async()=>{if(!company)return;const bankName=formatMasterName(value.bank_name);setValue(c=>({...c,bank_name:bankName}));if(!bankName)return setError('Enter the issuing bank name.');try{const updates={...value,bank_name:bankName,ledger_account_id:null,account_number:'',source:bank?.source||'Custom'};const saved=bank?await updateChequeBank(bank.id,company.id,updates,bank):await createChequeBank({...updates,company_id:company.id,is_active:true,account_holder_name:'',contact_number:'',created_by:undefined,updated_by:undefined});cacheChequeBank(saved);notifySuccess(bank?'Issuing bank updated':'Issuing bank created',saved.bank_name);onClose()}catch(e){setError(publicErrorMessage(e,'saving issuing bank'))}}
+  const save=async()=>{if(!company)return;const bankName=formatMasterName(value.bank_name);setValue(c=>({...c,bank_name:bankName}));const validationError=validateName(bankName,'Bank name')||validateBranch(value.branch_name);if(validationError)return setError(validationError);try{const updates={...value,bank_name:bankName,ledger_account_id:null,account_number:'',source:bank?.source||'Custom'};const saved=bank?await updateChequeBank(bank.id,company.id,updates,bank):await createChequeBank({...updates,company_id:company.id,is_active:true,account_holder_name:'',contact_number:'',created_by:undefined,updated_by:undefined});cacheChequeBank(saved);notifySuccess(bank?'Issuing bank updated':'Issuing bank created',saved.bank_name);onClose()}catch(e){setError(identityDatabaseError(e)||publicErrorMessage(e,'saving issuing bank'))}}
   return <Dialog open onOpenChange={v=>!v&&onClose()}><DialogContent><DialogHeader><DialogTitle>{bank?'Edit':'Add'} Issuing Bank</DialogTitle></DialogHeader><p className="text-xs text-muted-foreground">This is the bank printed on the party’s cheque, not your company bank ledger.</p><div className="grid gap-2 sm:grid-cols-2"><div className="sm:col-span-2"><Label>Bank Name</Label><Input value={value.bank_name} onChange={e=>setValue(c=>({...c,bank_name:e.target.value}))} onBlur={()=>setValue(c=>({...c,bank_name:formatMasterName(c.bank_name)}))} placeholder="Enter bank or financial institution" autoFocus/></div><div><Label>Branch (optional)</Label><Input value={value.branch_name} onChange={e=>setValue(c=>({...c,branch_name:e.target.value}))}/></div><div><Label>Institution Type</Label><SearchableSelect value={value.institution_type} onValueChange={institution_type=>setValue(c=>({...c,institution_type}))} options={INSTITUTION_TYPE_OPTIONS} placeholder="Select institution type" searchPlaceholder="Search institution types…"/></div><div className="sm:col-span-2"><Label>Notes</Label><Input value={value.notes} onChange={e=>setValue(c=>({...c,notes:e.target.value}))}/></div></div>{error&&<p className="text-xs text-destructive">{error}</p>}<DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save}>Save Bank</Button></DialogFooter></DialogContent></Dialog>
 }
 
