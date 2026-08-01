@@ -25,6 +25,7 @@ import { validateItemUnits } from '@/lib/itemUnits'
 import { ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { ledgerFieldVisibility, openingBalanceFromStored, openingBalanceToStored, type BalanceType } from '@/lib/ledgerForm'
 import { normalSide } from '@/lib/engine'
+import { formatMasterName } from '@/lib/nameFormat'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
@@ -73,16 +74,18 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
   }, [open, category, parentCategory, kind])
 
   const save = async () => {
-    if (!name.trim()) return setError('Enter a category name.')
+    const formattedName = formatMasterName(name)
+    setName(formattedName)
+    if (!formattedName) return setError('Enter a category name.')
     if (kind === 'account' && !category && !parentId) return setError('Select a parent account group.')
     setSaving(true)
     try {
       if (kind === 'account') {
-        if (category) await alterAccountCategory(category.id, { name: name.trim(), account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
-        else await addAccountCategory({ name: name.trim(), account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
-      } else if (category) await alterItemCategory(category.id, { name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
+        if (category) await alterAccountCategory(category.id, { name: formattedName, account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
+        else await addAccountCategory({ name: formattedName, account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
+      } else if (category) await alterItemCategory(category.id, { name: formattedName, parent_category_id: parentId === 'root' ? null : parentId })
       else {
-        const created = await addItemCategory({ name: name.trim(), parent_category_id: parentId === 'root' ? null : parentId })
+        const created = await addItemCategory({ name: formattedName, parent_category_id: parentId === 'root' ? null : parentId })
         onCreated?.(created)
       }
       onClose()
@@ -101,7 +104,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
       <DialogContent className="max-w-sm">
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
-          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus disabled={systemCategory} /></div>
+          <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus disabled={systemCategory} /></div>
           {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId(category ? 'root' : '') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
           <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} placeholder={kind === 'account' ? 'Select parent account group' : 'Select parent category'} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[...(kind === 'item' || category ? [{ value: 'root', label: 'Top level' }] : []), ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
           {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
@@ -166,7 +169,9 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
 
   const save = async () => {
     const category = activeCategories.find(item => item.id === categoryId)
-    if (!name.trim()) return setError('Enter a ledger name.')
+    const formattedName = formatMasterName(name)
+    setName(formattedName)
+    if (!formattedName) return setError('Enter a ledger name.')
     if (!category) return setError(partyMode ? `${partyTerminology(fixedPartyType || partyType).category} group is unavailable. Restore the protected system group before creating this party.` : 'Select a category.')
     if (openingBalance.trim() === '' || !Number.isFinite(Number(openingBalance)) || Number(openingBalance) < 0) return setError('Enter a valid opening balance of 0 or more.')
     const creditDays = Number(defaultCreditDays)
@@ -185,9 +190,9 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
     setSaving(true)
     try {
       if (account) {
-        await alterAccount(account.id, { name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
+        await alterAccount(account.id, { name: formattedName, category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
       } else {
-        const createdAccount = await addAccount({ name: name.trim(), category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
+        const createdAccount = await addAccount({ name: formattedName, category_id: category.id, group: category.name, type: category.account_type, opening_balance: storedOpeningBalance, ...details })
         const createdParty = useAppStore.getState().parties.find(candidate => candidate.account_id === createdAccount.id)
         onCreated?.(createdAccount, createdParty)
       }
@@ -201,7 +206,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
         <div className="min-w-0 space-y-4 py-2">
           <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} onChange={event => setName(event.target.value)} autoFocus /></div>
+            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus /></div>
           {party && !defaultPartyType ? (
             <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
@@ -255,7 +260,9 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   const unitChanged = form.unit.trim() !== item.unit
   const stockBasisChanged = Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate
   const save = async () => {
-    if (!form.name.trim()) return setError('Item name is required.')
+    const itemName = formatMasterName(form.name)
+    setForm(current => ({ ...current, name: itemName }))
+    if (!itemName) return setError('Item name is required.')
     const altUnit = form.alternate_unit.trim()
     const altFactor = Number(form.alternate_conversion)
     if (!isService) {
@@ -267,7 +274,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
     setSaving(true)
     try {
       const openingFactor = openingUnitMode === 'alternate' && altUnit ? altFactor : 1
-      await alterItem(item.id, { name: form.name.trim(), category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
+      await alterItem(item.id, { name: itemName, category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
       onClose()
     } catch (e: unknown) { setError(masterDialogError(e, 'saving item')) } finally { setSaving(false) }
   }
@@ -275,7 +282,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
-        <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} /></div>
+        <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} onChange={event => setForm({ ...form, name: event.target.value })} onBlur={() => setForm(current => ({ ...current, name: formatMasterName(current.name) }))} /></div>
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
         {isService && <div className="sm:col-span-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">Service item</div>}
         {!isService && <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>}

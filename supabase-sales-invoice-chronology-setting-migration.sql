@@ -1,9 +1,7 @@
--- Enforce voucher date chronology only for Sales invoices when enabled in
--- company settings. Draft vouchers do not reserve numbers and are ignored.
+-- Add an opt-in Sales-only chronological invoice date setting.
+-- When disabled, all voucher types only require dates inside the active fiscal year.
 begin;
 
-alter table public.companies
-  add column if not exists allow_admin_chronological_bypass boolean not null default false;
 alter table public.companies
   add column if not exists enforce_sales_invoice_chronology boolean not null default false;
 
@@ -75,7 +73,7 @@ begin
 
   if (previous_voucher.id is not null and new.date_bs_key < previous_voucher.date_bs_key)
     or (next_voucher.id is not null and new.date_bs_key > next_voucher.date_bs_key) then
-    bypass_allowed := company_record.allow_admin_chronological_bypass
+    bypass_allowed := coalesce(company_record.allow_admin_chronological_bypass, false)
       and public.is_company_admin(new.company_id);
 
     if not bypass_allowed then
@@ -115,8 +113,8 @@ create trigger vouchers_chronology_guard
 before insert or update of date_bs, date_bs_key, invoice_no, numbering_period, type, status on public.vouchers
 for each row execute function public.validate_voucher_chronology();
 
-revoke all on function public.voucher_number_value(text) from public, anon, authenticated;
 revoke all on function public.validate_voucher_chronology() from public, anon, authenticated;
+revoke all on function public.voucher_number_value(text) from public, anon, authenticated;
 
 commit;
 notify pgrst, 'reload schema';

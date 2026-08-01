@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useAppStore } from '@/store/useAppStore'
+import { formatMasterName } from '@/lib/nameFormat'
 
 const NO_ALTERNATIVE_UNIT = '__no_alternative_unit__'
 const CREATE_CUSTOM_UNIT = '__create_custom_unit__'
@@ -52,7 +53,8 @@ export function UnitCombobox({ value, onValueChange, optional = false, exclude =
   }
 
   const saveCustom = () => {
-    const next = customUnit.trim().replace(/\s+/g, ' ')
+    const next = formatMasterName(customUnit)
+    setCustomUnit(next)
     if (!isValidCustomItemUnit(next)) {
       setCustomError('Use 1–20 characters: letters, numbers, spaces, or symbols such as /, %, °, -, _, and .')
       return
@@ -85,7 +87,7 @@ export function UnitCombobox({ value, onValueChange, optional = false, exclude =
         <DialogHeader><DialogTitle>Add Custom Unit</DialogTitle></DialogHeader>
         <div className="space-y-1.5 py-2">
           <Label htmlFor={`${id || 'unit'}-custom`}>Unit name or abbreviation</Label>
-          <Input id={`${id || 'unit'}-custom`} value={customUnit} onChange={event => { setCustomUnit(event.target.value); setCustomError('') }} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); saveCustom() } }} placeholder="e.g. Tray, Sheet, Ropani" maxLength={20} autoFocus />
+          <Input id={`${id || 'unit'}-custom`} value={customUnit} onChange={event => { setCustomUnit(event.target.value); setCustomError('') }} onBlur={() => setCustomUnit(current => formatMasterName(current))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); saveCustom() } }} placeholder="e.g. Tray, Sheet, Ropani" maxLength={20} autoFocus />
           <p className="text-[11px] text-muted-foreground">After the item is saved, this unit will appear under Company custom units for future items.</p>
           {customError && <p className="text-xs text-destructive">{customError}</p>}
         </div>

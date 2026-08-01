@@ -19,6 +19,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { chequeEntitlement } from '@/lib/cheques'
 import { DEFAULT_FISCAL_YEAR_START_BS, bsToAd, parseBsDate } from '@/lib/nepaliDate'
 import { publicErrorMessage } from '@/lib/security'
+import { formatMasterName } from '@/lib/nameFormat'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -248,9 +249,11 @@ function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
         setError('Enter a valid fiscal year start date.')
         return
       }
+      const formattedName = formatMasterName(form.name) || 'My Company'
+      updateForm('name', formattedName)
       await createCompany({
         ...companyForm,
-        name: form.name.trim() || 'My Company',
+        name: formattedName,
         fiscal_year_start: fiscalYearStartAd,
         fiscal_year_configured: true,
       })
@@ -297,7 +300,7 @@ function CompanySwitcher({ onSwitched }: { onSwitched: () => void }) {
             <DialogDescription>Create an independent company under this login.</DialogDescription>
           </DialogHeader>
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Company Name</Label><Input value={form.name} onChange={event => updateForm('name', event.target.value)} /></div>
+            <div className="space-y-1.5"><Label>Company Name</Label><Input value={form.name} onChange={event => updateForm('name', event.target.value)} onBlur={() => updateForm('name', formatMasterName(form.name))} /></div>
             <div className="space-y-1.5"><Label>Phone</Label><Input value={form.phone} onChange={event => updateForm('phone', event.target.value)} /></div>
             <div className="space-y-1.5"><Label>PAN / VAT No.</Label><Input value={form.pan_vat} onChange={event => updateForm('pan_vat', event.target.value)} /></div>
             <div className="space-y-1.5"><Label>Fiscal Year Start Date (B.S.)</Label><NepaliDateInput value={form.fiscal_year_start_bs} onChange={value => updateForm('fiscal_year_start_bs', value)} /></div>

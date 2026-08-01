@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx'
 import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, Voucher } from '@/types'
 import { parseBsDate } from '@/lib/nepaliDate'
+import { masterNameKey } from '@/lib/nameFormat'
 
 export type ImportModule =
   | 'account-groups'
@@ -573,7 +574,7 @@ function bool(value: unknown) {
 }
 
 function key(value: unknown) {
-  return str(value).toLowerCase()
+  return masterNameKey(str(value))
 }
 
 function same(a: unknown, b: unknown) {

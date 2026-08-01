@@ -15,8 +15,6 @@ export const NEXT_VOUCHER_DATE_ERROR = 'Cannot save voucher. Voucher date must b
 export const PREVIOUS_VOUCHER_DATE_FIELD_HINT = 'Date must be on or after the previous voucher date.'
 export const NEXT_VOUCHER_DATE_FIELD_HINT = 'Date must be on or before the next voucher date.'
 
-const CHRONO_TYPES = new Set<VoucherType>(['Sales', 'Purchase', 'Sales Return', 'Purchase Return', 'Receipt', 'Payment', 'Journal'])
-
 function numberValue(voucher: Voucher) {
   const match = String(voucher.invoice_no || '').match(/(\d+)$/)
   return match ? Number(match[1]) : voucher.seq || 0
@@ -24,6 +22,10 @@ function numberValue(voucher: Voucher) {
 
 export function isManualVoucherNumbering(company: Company, type: VoucherType) {
   return type === 'Journal' && company.journal_numbering_mode === 'manual'
+}
+
+export function shouldEnforceVoucherChronology(company: Company, type: VoucherType) {
+  return type === 'Sales' && company.enforce_sales_invoice_chronology === true
 }
 
 function voucherLabel(voucher: Voucher) {
@@ -75,11 +77,11 @@ export function validateVoucherDateForNumbering(params: {
   }
 
   if (status === 'Draft') return { valid: true }
-  if (!CHRONO_TYPES.has(type)) return { valid: true }
 
   const manual = validateManualVoucherNumber(company, vouchers, type, dateBs, invoiceNo, currentVoucherId)
   if (!manual.valid) return manual
   if (isManualVoucherNumbering(company, type)) return { valid: true }
+  if (!shouldEnforceVoucherChronology(company, type)) return { valid: true }
 
   const dateKey = makeBsKey(dateBs)
   const candidates = completedNumberedVouchers(company, vouchers, type, dateBs)

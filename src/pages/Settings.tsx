@@ -17,6 +17,7 @@ import type { Account, AccountCategory, InventoryValuationMethod, InvoiceItem, I
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
+import { formatMasterName } from '@/lib/nameFormat'
 
 type PortableCompanyBackup = {
   format?: 'khataerp-portable-company-v1'
@@ -47,7 +48,7 @@ const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
-  'allow_admin_chronological_bypass', 'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
+  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
   'fiscal_year_configured',
 ] as const
 
@@ -240,6 +241,7 @@ export function SettingsPage() {
   const [purchaseReturnPrefix, setPurchaseReturnPrefix] = useState(company?.purchase_return_prefix ?? 'PR-')
   const [journalNumberingMode, setJournalNumberingMode] = useState<'auto' | 'manual'>(company?.journal_numbering_mode ?? 'auto')
   const [allowAdminChronologicalBypass, setAllowAdminChronologicalBypass] = useState(company?.allow_admin_chronological_bypass ?? false)
+  const [enforceSalesInvoiceChronology, setEnforceSalesInvoiceChronology] = useState(company?.enforce_sales_invoice_chronology ?? false)
   const [printFormat, setPrintFormat] = useState(company?.print_format ?? 'A5')
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
@@ -302,6 +304,7 @@ export function SettingsPage() {
     setPurchaseReturnPrefix(company?.purchase_return_prefix ?? 'PR-')
     setJournalNumberingMode(company?.journal_numbering_mode ?? 'auto')
     setAllowAdminChronologicalBypass(company?.allow_admin_chronological_bypass ?? false)
+    setEnforceSalesInvoiceChronology(company?.enforce_sales_invoice_chronology ?? false)
     setPrintFormat(company?.print_format ?? 'A5')
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
@@ -324,10 +327,12 @@ export function SettingsPage() {
       return
     }
     if (valuationMethod !== (company?.inventory_valuation_method || 'weighted_average') && !window.confirm('Changing the inventory valuation method will recalculate all historical stock values and may change Profit & Loss and Balance Sheet totals. Continue?')) return
+    const formattedName = formatMasterName(name) || 'My Company'
+    setName(formattedName)
     setSaving(true)
     try {
       await saveCompany({
-        name: name.trim() || 'My Company',
+        name: formattedName,
         address: address.trim(),
         pan_vat: panVat.trim(),
         phone: phone.trim(),
@@ -344,6 +349,7 @@ export function SettingsPage() {
         journal_numbering_mode: journalNumberingMode,
         reset_numbering_fiscal_year: true,
         allow_admin_chronological_bypass: allowAdminChronologicalBypass,
+        enforce_sales_invoice_chronology: enforceSalesInvoiceChronology,
         print_format: printFormat,
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
@@ -838,7 +844,7 @@ export function SettingsPage() {
           <CardContent className="space-y-4">
             <div className="space-y-1.5">
               <Label>Company Name</Label>
-              <Input value={name} onChange={e => setName(e.target.value)} placeholder="My Trading Co." />
+              <Input value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="My Trading Co." />
             </div>
             <div className="space-y-1.5">
               <Label>Address</Label>
@@ -901,6 +907,19 @@ export function SettingsPage() {
                 <Label>Sales Prefix</Label>
                 <Input value={salesPrefix} onChange={e => setSalesPrefix(e.target.value)} placeholder="INV-" />
               </div>
+              <label htmlFor="sales-chronology" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer sm:col-span-2">
+                <input
+                  id="sales-chronology"
+                  type="checkbox"
+                  checked={enforceSalesInvoiceChronology}
+                  onChange={event => setEnforceSalesInvoiceChronology(event.target.checked)}
+                  className="mt-1"
+                />
+                <span>
+                  <span className="block text-sm font-medium">Enforce Chronological Invoice Dates</span>
+                  <span className="block text-xs text-muted-foreground">Sales invoices in automatic numbering mode must follow invoice-number date order. Other vouchers are not affected.</span>
+                </span>
+              </label>
               <div className="space-y-1.5">
                 <Label>Purchase Prefix</Label>
                 <Input value={purchasePrefix} onChange={e => setPurchasePrefix(e.target.value)} placeholder="PB-" />
@@ -932,19 +951,6 @@ export function SettingsPage() {
               <span>
                 <span className="block text-sm font-medium">Reset numbering every fiscal year</span>
                 <span className="block text-xs text-muted-foreground">Required. New voucher numbers start from 0001 on or after the fiscal year start date.</span>
-              </span>
-            </label>
-            <label htmlFor="admin-chronology-bypass" className="flex items-start gap-3 rounded-md border border-border p-3 cursor-pointer">
-              <input
-                id="admin-chronology-bypass"
-                type="checkbox"
-                checked={allowAdminChronologicalBypass}
-                onChange={event => setAllowAdminChronologicalBypass(event.target.checked)}
-                className="mt-1"
-              />
-              <span>
-                <span className="block text-sm font-medium">Allow Administrator to bypass chronological validation</span>
-                <span className="block text-xs text-muted-foreground">When enabled, company Admins can confirm and audit-save automatic vouchers outside voucher-date order.</span>
               </span>
             </label>
             <div className="grid gap-3 sm:grid-cols-2">

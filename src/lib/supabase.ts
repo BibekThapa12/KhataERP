@@ -3,6 +3,7 @@ import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, 
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import type { WritePerformanceTrace } from '@/lib/writePerformance'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
+import { formatMasterName } from '@/lib/nameFormat'
 
 function requiredPublicEnvironment(name: string, value: string | undefined) {
   if (!value || value.startsWith('your-') || value.includes('your-project-id')) {
@@ -99,7 +100,7 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,allow_admin_chronological_bypass,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
+const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,allow_admin_chronological_bypass,enforce_sales_invoice_chronology,print_format,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
 const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
@@ -160,7 +161,7 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
       // Future CAPTCHA: add captchaToken here.
       emailRedirectTo: `${window.location.origin}/login`,
       data: {
-        company_name: company.name,
+        company_name: formatMasterName(company.name),
         company_address: company.address,
         company_pan_vat: company.pan_vat,
         company_phone: company.phone,
@@ -322,7 +323,8 @@ export async function fetchMyCompanies(): Promise<MyCompaniesResponse> {
 }
 
 export async function createCompanyAtomic(company: CompanyCreateInput): Promise<Company> {
-  const { data, error } = await supabase.rpc('create_company_atomic', { p_company: company })
+  const payload = { ...company, name: formatMasterName(company.name || '') || 'My Company' }
+  const { data, error } = await supabase.rpc('create_company_atomic', { p_company: payload })
   if (error) throw error
   return data as Company
 }
@@ -441,6 +443,7 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     journal_numbering_mode: 'auto',
     reset_numbering_fiscal_year: true,
     allow_admin_chronological_bypass: false,
+    enforce_sales_invoice_chronology: false,
     print_format: 'A5',
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
     fiscal_year_configured: true,
@@ -462,7 +465,8 @@ export function getOrCreateCompany(user_id: string): Promise<Company> {
 }
 
 export async function updateCompany(id: string, updates: Partial<Company>) {
-  const { error } = await supabase.from('companies').update(updates).eq('id', id)
+  const payload = typeof updates.name === 'string' ? { ...updates, name: formatMasterName(updates.name) || 'My Company' } : updates
+  const { error } = await supabase.from('companies').update(payload).eq('id', id)
   if (error) throw error
 }
 

@@ -184,6 +184,7 @@ export interface Company {
   journal_numbering_mode?: 'auto' | 'manual'
   reset_numbering_fiscal_year?: boolean
   allow_admin_chronological_bypass?: boolean
+  enforce_sales_invoice_chronology?: boolean
   print_format?: 'A5' | 'A4'
   invoice_terms?: string
   payment_qr_text?: string

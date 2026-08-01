@@ -23,6 +23,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
+import { formatMasterName } from '@/lib/nameFormat'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
@@ -78,7 +79,9 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
-    if (!name.trim()) { setError('Enter an item name.'); return }
+    const itemName = formatMasterName(name)
+    setName(itemName)
+    if (!itemName) { setError('Enter an item name.'); return }
     const mainUnit = isService ? 'Service' : unit.trim()
     const altUnit = isService ? '' : alternateUnit.trim()
     if (!isService) {
@@ -90,7 +93,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: name.trim(), unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(openingRate, factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
+      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(openingRate, factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -106,7 +109,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Item Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} placeholder="Rice 25kg Bag" autoFocus />
+            <Input value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="Rice 25kg Bag" autoFocus />
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>

@@ -7,6 +7,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { isInvalidCredentialsError, publicAuthErrorMessage } from '@/lib/security'
 import { clearLoginFailures, consumeBrowserAuthAttempt, getLoginThrottle, recordInvalidLogin } from '@/lib/authRateLimit'
+import { formatMasterName } from '@/lib/nameFormat'
 
 /*
  * CAPTCHA is temporarily disabled. To restore it later, re-enable the
@@ -61,8 +62,10 @@ export function LoginPage() {
         clearLoginFailures()
         setLoginRetryAfter(0)
       } else if (mode === 'signup') {
+        const formattedCompanyName = formatMasterName(companyName)
+        setCompanyName(formattedCompanyName)
         const { error } = await signUp(email, password, {
-          name: companyName.trim(),
+          name: formattedCompanyName,
           address: companyAddress.trim(),
           pan_vat: panVat.trim(),
           phone: phone.trim(),
@@ -123,7 +126,7 @@ export function LoginPage() {
                 <>
                   <div className="space-y-1.5">
                     <Label htmlFor="company-name">Company Name</Label>
-                    <Input id="company-name" value={companyName} onChange={e => setCompanyName(e.target.value)} placeholder="My Trading Co." required />
+                    <Input id="company-name" value={companyName} onChange={e => setCompanyName(e.target.value)} onBlur={() => setCompanyName(current => formatMasterName(current))} placeholder="My Trading Co." required />
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="company-address">Address</Label>

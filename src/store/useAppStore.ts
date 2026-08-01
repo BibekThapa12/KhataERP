@@ -31,6 +31,7 @@ import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
 import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } from '@/lib/writePerformance'
 import { publicErrorMessage, reportClientError } from '@/lib/security'
 import { notifySuccess } from '@/lib/notifications'
+import { formatMasterName, masterNameKey } from '@/lib/nameFormat'
 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
@@ -479,7 +480,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   createCompany: async (companyInput) => {
     const userId = get().userId
     if (!userId) throw new Error('No user')
-    const company = await createCompanyAtomic(companyInput)
+    const company = await createCompanyAtomic({ ...companyInput, name: formatMasterName(companyInput.name || '') || 'My Company' })
     rememberActiveCompany(userId, company.id)
     set({ ...blankCompanyData, company, activeCompanyId: company.id, loading: true, error: null })
     await get().loadAll(userId)
@@ -698,8 +699,11 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveCompany: async (updates) => {
     const { company } = get()
     if (!company) return
-    await updateCompany(company.id, updates)
-    const nextCompany = { ...company, ...updates }
+    const normalizedUpdates = typeof updates.name === 'string'
+      ? { ...updates, name: formatMasterName(updates.name) || 'My Company' }
+      : updates
+    await updateCompany(company.id, normalizedUpdates)
+    const nextCompany = { ...company, ...normalizedUpdates }
     const stock = updates.inventory_valuation_method
       ? recomputeStock(get().items, get().vouchers, valuationMethod(nextCompany))
       : get().stock
@@ -717,9 +721,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
-    const partyName = name.trim()
+    const partyName = formatMasterName(name)
     if (!partyName) throw new Error('Enter a party name.')
-    if (rawAccounts.some(account => account.name.trim().toLowerCase() === partyName.toLowerCase())) throw new Error('Ledger already exist')
+    if (rawAccounts.some(account => masterNameKey(account.name) === masterNameKey(partyName))) throw new Error('Ledger already exist')
     const accountId = crypto.randomUUID()
     const terminology = partyTerminology(type)
     const categoryName = terminology.category
@@ -760,9 +764,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
-    const itemName = data.name.trim()
+    const itemName = formatMasterName(data.name)
     if (!itemName) throw new Error('Enter an item name.')
-    if (get().items.some(item => item.name.trim().toLowerCase() === itemName.toLowerCase())) throw new Error('Stock item already exist')
+    if (get().items.some(item => masterNameKey(item.name) === masterNameKey(itemName))) throw new Error('Stock item already exist')
     const isService = !!data.is_service
     const unit = isService ? 'Service' : (canonicalItemUnit(data.unit) || data.unit.trim())
     const alternateUnit = isService ? null : (data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null)
@@ -787,14 +791,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company, rawAccounts, vouchers } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
-    const ledgerName = name.trim()
+    const ledgerName = formatMasterName(name)
     if (!ledgerName) throw new Error('Enter a ledger name.')
-    if (rawAccounts.some(account => account.name.trim().toLowerCase() === ledgerName.toLowerCase())) throw new Error('Ledger already exist')
+    if (rawAccounts.some(account => masterNameKey(account.name) === masterNameKey(ledgerName))) throw new Error('Ledger already exist')
     const category = get().accountCategories.find(entry => entry.id === category_id)
     const partyType = partyTypeForCategory(category)
     const newAcc = { id: crypto.randomUUID(), company_id: company.id, name: ledgerName, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance, address, contact_no, pan_no, credit_days, bank_account_no, bank_branch }
     await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
-    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name, type: partyType, phone: contact_no, pan_vat: pan_no, address, default_credit_days: credit_days || 0, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
+    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: ledgerName, type: partyType, phone: contact_no, pan_vat: pan_no, address, default_credit_days: credit_days || 0, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
     const accounts = recomputeAffectedBalances(updatedRaw, get().accounts, vouchers, [newAcc.id])
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })
@@ -806,9 +810,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   addAccountCategory: async ({ name, account_type, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
-    const categoryName = name.trim()
+    const categoryName = formatMasterName(name)
     if (!categoryName) throw new Error('Enter a category name.')
-    if (get().accountCategories.some(category => category.account_type === account_type && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Account category already exist')
+    if (get().accountCategories.some(category => category.account_type === account_type && masterNameKey(category.name) === masterNameKey(categoryName))) throw new Error('Account category already exist')
     if (!parent_category_id) throw new Error('Select a parent account group')
     const parent = parent_category_id ? get().accountCategories.find(category => category.id === parent_category_id) : undefined
     if (!parent) throw new Error('Parent account group not found')
@@ -827,10 +831,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (existing.is_system) throw new Error('System account groups cannot be changed')
     const normalizedUpdates = { ...updates }
     if (typeof updates.name === 'string') {
-      const categoryName = updates.name.trim()
+      const categoryName = formatMasterName(updates.name)
       if (!categoryName) throw new Error('Enter a category name.')
       const effectiveType = updates.account_type || existing.account_type
-      if (get().accountCategories.some(category => category.id !== id && category.account_type === effectiveType && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Account category already exist')
+      if (get().accountCategories.some(category => category.id !== id && category.account_type === effectiveType && masterNameKey(category.name) === masterNameKey(categoryName))) throw new Error('Account category already exist')
       normalizedUpdates.name = categoryName
     }
     const descendants = categoryDescendantIds(get().accountCategories, id)
@@ -866,9 +870,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   addItemCategory: async ({ name, parent_category_id = null }) => {
     const company = get().company
     if (!company) throw new Error('No company')
-    const categoryName = name.trim()
+    const categoryName = formatMasterName(name)
     if (!categoryName) throw new Error('Enter a category name.')
-    if (get().itemCategories.some(category => category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Stock item category already exist')
+    if (get().itemCategories.some(category => masterNameKey(category.name) === masterNameKey(categoryName))) throw new Error('Stock item category already exist')
     const parent = parent_category_id ? get().itemCategories.find(category => category.id === parent_category_id) : undefined
     if (parent && categoryDepth(get().itemCategories, parent.id) >= 4) throw new Error('Category hierarchy cannot exceed four levels')
     const category = await insertItemCategory({ company_id: company.id, name: categoryName, parent_category_id, is_archived: false })
@@ -884,9 +888,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !existing) throw new Error('Category not found')
     const normalizedUpdates = { ...updates }
     if (typeof updates.name === 'string') {
-      const categoryName = updates.name.trim()
+      const categoryName = formatMasterName(updates.name)
       if (!categoryName) throw new Error('Enter a category name.')
-      if (get().itemCategories.some(category => category.id !== id && category.name.trim().toLowerCase() === categoryName.toLowerCase())) throw new Error('Stock item category already exist')
+      if (get().itemCategories.some(category => category.id !== id && masterNameKey(category.name) === masterNameKey(categoryName))) throw new Error('Stock item category already exist')
       normalizedUpdates.name = categoryName
     }
     const descendants = categoryDescendantIds(get().itemCategories, id)
@@ -909,9 +913,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().rawAccounts.find(account => account.id === id)
     if (!company || !existing) throw new Error('Ledger not found')
     return measuredWrite({ operation: 'update_account', companyId: company.id, recordType: 'Account', lineItems: 0 }, async trace => {
-    const nextName = updates.name?.trim()
+    const nextName = updates.name === undefined ? undefined : formatMasterName(updates.name)
     if (updates.name !== undefined && !nextName) throw new Error('Enter a ledger name.')
-    if (nextName && get().rawAccounts.some(account => account.id !== id && account.name.trim().toLowerCase() === nextName.toLowerCase())) throw new Error('Ledger already exist')
+    if (nextName && get().rawAccounts.some(account => account.id !== id && masterNameKey(account.name) === masterNameKey(nextName))) throw new Error('Ledger already exist')
     const used = get().vouchers.some(voucher => voucher.lines?.some(line => line.account_id === id))
     if ((existing.is_system || used) && updates.type && updates.type !== existing.type) throw new Error('The account type of a system or used ledger cannot be changed')
     const categoryId = updates.category_id || existing.category_id
@@ -971,9 +975,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !party) throw new Error('Party not found')
     return measuredWrite({ operation: 'update_party', companyId: company.id, recordType: 'Party', lineItems: 0 }, async trace => {
     if (updates.default_credit_days !== undefined && (!Number.isInteger(updates.default_credit_days) || updates.default_credit_days < 0)) throw new Error('Default Credit Days must be a whole number of 0 or more')
-    const nextName = updates.name?.trim()
+    const nextName = updates.name === undefined ? undefined : formatMasterName(updates.name)
     if (updates.name !== undefined && !nextName) throw new Error('Enter a party name.')
-    if (nextName && get().rawAccounts.some(account => account.id !== party.account_id && account.name.trim().toLowerCase() === nextName.toLowerCase())) throw new Error('Ledger already exist')
+    if (nextName && get().rawAccounts.some(account => account.id !== party.account_id && masterNameKey(account.name) === masterNameKey(nextName))) throw new Error('Ledger already exist')
     const normalizedUpdates = nextName ? { ...updates, name: nextName } : updates
     const nextType = updates.type || party.type
     const terminology = partyTerminology(nextType)
@@ -1008,9 +1012,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     return measuredWrite({ operation: 'update_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
     const normalizedUpdates = { ...updates }
     if (typeof updates.name === 'string') {
-      const itemName = updates.name.trim()
+      const itemName = formatMasterName(updates.name)
       if (!itemName) throw new Error('Enter an item name.')
-      if (get().items.some(item => item.id !== id && item.name.trim().toLowerCase() === itemName.toLowerCase())) throw new Error('Stock item already exist')
+      if (get().items.some(item => item.id !== id && masterNameKey(item.name) === masterNameKey(itemName))) throw new Error('Stock item already exist')
       normalizedUpdates.name = itemName
     }
     const unitFieldsChanged = updates.unit !== undefined || updates.alternate_unit !== undefined || updates.alternate_conversion !== undefined
