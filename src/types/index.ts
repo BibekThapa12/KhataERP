@@ -3,6 +3,7 @@
 export type AccountType = 'Asset' | 'Liability' | 'Equity' | 'Income' | 'Expense'
 export type VoucherType = 'Sales' | 'Purchase' | 'Sales Return' | 'Purchase Return' | 'Receipt' | 'Payment' | 'Journal' | 'Stock Adjustment'
 export type VoucherStatus = 'Draft' | 'Completed'
+export type SimpleEntryType = 'Income' | 'Expense'
 export type PartyType = 'customer' | 'supplier'
 export type PaymentMode = 'cash' | 'bank'
 export type InventoryValuationMethod = 'weighted_average' | 'fifo' | 'lifo'
@@ -138,7 +139,8 @@ export interface Voucher {
   original_voucher_id?: string
   return_reason?: string
   settlement_mode?: 'party' | 'cash' | 'bank'
-  settlement_account_id?: string
+  settlement_account_id?: string | null
+  simple_entry_type?: SimpleEntryType | null
   restock_items?: boolean
   party_account_id?: string | null
   is_cash: boolean

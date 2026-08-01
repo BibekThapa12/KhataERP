@@ -32,6 +32,7 @@ Apply `supabase-production-security-migration.sql` before launch so operational 
 Apply `supabase-critical-security-hardening-migration.sql` last to enforce protected company fields, suspension at the database boundary, server-calculated voucher integrity, return limits, cheque/receipt linkage, and restricted internal function execution.
 Apply `supabase-zero-value-invoices-migration.sql` afterwards to permit zero-rate and zero-total Sales, Purchase, Sales Return, and Purchase Return documents while retaining compulsory item and positive-quantity validation.
 Apply `supabase-journal-supplier-invoice-migration.sql` to configure automatic/manual Journal voucher numbers and store supplier invoice numbers from physical Purchase bills.
+Apply `supabase-simple-income-expense-migration.sql` to enable beginner-friendly Income and Expense entries backed by validated Journal vouchers.
 For a brand-new staging Supabase project, run only `supabase-complete-staging-bootstrap.sql`; it contains the base schema and every required migration in dependency order. Do not run the individual migration files afterwards.
 
 ```bash

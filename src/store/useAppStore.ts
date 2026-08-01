@@ -32,6 +32,7 @@ import { beginWriteTrace, type WritePerformanceTrace, type WriteTraceContext } f
 import { publicErrorMessage, reportClientError } from '@/lib/security'
 import { notifySuccess } from '@/lib/notifications'
 import { formatMasterName, masterNameKey } from '@/lib/nameFormat'
+import { assertSimpleEntryCounterAccount, buildSimpleEntryLines, type SimpleEntrySaveParams } from '@/lib/simpleEntries'
 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
@@ -142,7 +143,7 @@ interface AppState {
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
   addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number | null; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean; is_service?: boolean }) => Promise<Item>
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number; address?: string | null; contact_no?: string | null; pan_no?: string | null; credit_days?: number | null; bank_account_no?: string | null; bank_branch?: string | null }) => Promise<Account>
-  addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
+  addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<AccountCategory>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
   deleteAccountCategory: (id: string) => Promise<void>
   addItemCategory: (data: { name: string; parent_category_id?: string | null }) => Promise<ItemCategory>
@@ -156,15 +157,17 @@ interface AppState {
   savePurchaseVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
-  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string }, status?: Voucher['status']) => Promise<void>
+  saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
+  saveSimpleEntry: (params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
   saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }, status?: Voucher['status']) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
-  saveDraftVoucher: (params: { id?: string; type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) => Promise<Voucher>
+  saveDraftVoucher: (params: { id?: string; type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) => Promise<Voucher>
   updateSalesVoucher: (id: string, params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   updatePurchaseVoucher: (id: string, params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   updateReceipt: (id: string, params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
   updatePayment: (id: string, params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<void>
-  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string }, status?: Voucher['status']) => Promise<void>
+  updateJournal: (id: string, params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
+  updateSimpleEntry: (id: string, params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
   updateReturnVoucher: (id: string, params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
   deleteDraftVoucher: (id: string) => Promise<void>
   cancelV: (id: string) => Promise<void>
@@ -244,7 +247,7 @@ function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
   return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
 }
 
-function blankDraftVoucher(company: Company, params: { type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) {
+function blankDraftVoucher(company: Company, params: { type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) {
   const dateFields = voucherDateFields(params.date_bs, company)
   return {
     company_id: company.id,
@@ -253,6 +256,8 @@ function blankDraftVoucher(company: Company, params: { type: Voucher['type']; da
     ...dateFields,
     narration: params.narration?.trim() || undefined,
     party_account_id: params.party_account_id || null,
+    settlement_account_id: params.settlement_account_id || null,
+    simple_entry_type: params.simple_entry_type || null,
     is_cash: !!params.is_cash,
     total: round2(params.total || 0),
     cancelled: false,
@@ -822,6 +827,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ accountCategories: [...get().accountCategories, category].sort((a, b) => a.name.localeCompare(b.name)) })
     logMasterChange(company.id, 'account_category', category.id, 'create', {}, category).catch(warnNonSensitive('Could not record account category audit'))
     notifySuccess('Account group created', category.name)
+    return category
   },
 
   alterAccountCategory: async (id, updates) => {
@@ -1192,7 +1198,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Journal ────────────────────────────────────────────────────────────────
-  saveJournal: async ({ lines, narration, date_bs, invoice_no }, status = 'Completed') => {
+  saveJournal: async ({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
@@ -1204,12 +1210,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, invoice_no: manualInvoiceNumber })
-    const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false, status },
+    const savedVoucher = await insertVoucher({
+      voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, draft_payload, is_cash: false, total, cancelled: false, status },
       lines,
       numbering: voucherNumberingScope(company, 'Journal', date_bs),
       trace,
     })
+    const newVoucher = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, draft_payload: draft_payload || savedVoucher.draft_payload }
     const nextState = trace.sync('client_balance_recompute', () => {
       const vouchers = [newVoucher, ...get().vouchers]
       return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
@@ -1217,6 +1224,22 @@ export const useAppStore = create<AppState>((set, get) => ({
     trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
     notifySuccess(status === 'Draft' ? 'Journal draft saved' : 'Journal voucher completed', newVoucher.invoice_no)
     })
+  },
+
+  saveSimpleEntry: async (params, status = 'Completed') => {
+    const company = get().company
+    if (!company) throw new Error('No company')
+    assertSimpleEntryCounterAccount(params.counter_account_id, get().rawAccounts, get().accountCategories, get().parties, company.id)
+    const lines = buildSimpleEntryLines(params, get().rawAccounts, get().accountCategories)
+    await get().saveJournal({
+      lines,
+      narration: params.narration,
+      date_bs: params.date_bs,
+      invoice_no: params.invoice_no,
+      settlement_account_id: params.counter_account_id,
+      simple_entry_type: params.entry_type,
+      draft_payload: { simpleEntryType: params.entry_type, counterAccountId: params.counter_account_id, lines: params.lines, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
+    }, status)
   },
 
   saveReturnVoucher: async (params, status = 'Completed') => {
@@ -1427,13 +1450,13 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  updateJournal: async (id, { lines, narration, date_bs, invoice_no }, status = 'Completed') => {
+  updateJournal: async (id, { lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, status = 'Completed') => {
     const existing = get().vouchers.find(v => v.id === id)
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
     if (existing.status === 'Draft' && status === 'Completed') {
-      await get().saveJournal({ lines, narration, date_bs: todayBs(), invoice_no }, 'Completed')
+      await get().saveJournal({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, draft_payload }, 'Completed')
       await get().deleteDraftVoucher(id)
       return
     }
@@ -1444,17 +1467,34 @@ export const useAppStore = create<AppState>((set, get) => ({
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, currentVoucherId: id, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : existing.invoice_no })
-    const updated = await updateVoucher({
+    const savedVoucher = await updateVoucher({
       id,
-      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, is_cash: false, total, cancelled: false, status },
+      voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, draft_payload, is_cash: false, total, cancelled: false, status },
       lines,
       trace,
     })
+    const updated = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, draft_payload: draft_payload || savedVoucher.draft_payload }
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
     const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
     set({ vouchers, accounts })
     notifySuccess(status === 'Draft' ? 'Journal draft updated' : 'Journal voucher completed', updated.invoice_no)
     })
+  },
+
+  updateSimpleEntry: async (id, params, status = 'Completed') => {
+    const company = get().company
+    if (!company) throw new Error('No company')
+    assertSimpleEntryCounterAccount(params.counter_account_id, get().rawAccounts, get().accountCategories, get().parties, company.id)
+    const lines = buildSimpleEntryLines(params, get().rawAccounts, get().accountCategories)
+    await get().updateJournal(id, {
+      lines,
+      narration: params.narration,
+      date_bs: params.date_bs,
+      invoice_no: params.invoice_no,
+      settlement_account_id: params.counter_account_id,
+      simple_entry_type: params.entry_type,
+      draft_payload: { simpleEntryType: params.entry_type, counterAccountId: params.counter_account_id, lines: params.lines, narration: params.narration, dateBs: params.date_bs, journalInvoiceNo: params.invoice_no || '' },
+    }, status)
   },
 
   updateReturnVoucher: async (id, params, status = 'Completed') => {

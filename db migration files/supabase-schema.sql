@@ -375,6 +375,7 @@ create table if not exists vouchers (
   original_voucher_id uuid references vouchers(id) on delete restrict,
   return_reason    text,
   settlement_mode text check (settlement_mode in ('party','cash','bank')),
+  simple_entry_type text check (simple_entry_type in ('Income','Expense')),
   restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
@@ -412,6 +413,7 @@ end $$;
 -- normalizes them from the legacy AD date while displaying.
 alter table vouchers add column if not exists date_ad date;
 alter table vouchers add column if not exists supplier_invoice_no text;
+alter table vouchers add column if not exists simple_entry_type text;
 alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);

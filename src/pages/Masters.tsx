@@ -57,7 +57,7 @@ function masterDialogError(error: unknown, operation: string) {
   return publicErrorMessage(error, operation)
 }
 
-export function CategoryDialog({ kind, category, parentCategory, open, onClose, onCreated }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; open: boolean; onClose: () => void; onCreated?: (category: ItemCategory) => void }) {
+export function CategoryDialog({ kind, category, parentCategory, defaultAccountType, open, onClose, onCreated }: { kind: 'account' | 'item'; category?: AccountCategory | ItemCategory | null; parentCategory?: AccountCategory | ItemCategory | null; defaultAccountType?: AccountType; open: boolean; onClose: () => void; onCreated?: (category: AccountCategory | ItemCategory) => void }) {
   const { accountCategories, itemCategories, addAccountCategory, alterAccountCategory, addItemCategory, alterItemCategory } = useAppStore()
   const [name, setName] = useState('')
   const [type, setType] = useState<AccountType>('Expense')
@@ -68,10 +68,10 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
   useEffect(() => {
     if (!open) return
     setName(category?.name || '')
-    setType(kind === 'account' && (category || parentCategory) ? ((category || parentCategory) as AccountCategory).account_type : 'Expense')
+    setType(kind === 'account' && (category || parentCategory) ? ((category || parentCategory) as AccountCategory).account_type : defaultAccountType || 'Expense')
     setParentId(category?.parent_category_id || parentCategory?.id || (kind === 'item' || category ? 'root' : ''))
     setError('')
-  }, [open, category, parentCategory, kind])
+  }, [open, category, parentCategory, kind, defaultAccountType])
 
   const save = async () => {
     const formattedName = formatMasterName(name)
@@ -82,7 +82,10 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
     try {
       if (kind === 'account') {
         if (category) await alterAccountCategory(category.id, { name: formattedName, account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
-        else await addAccountCategory({ name: formattedName, account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
+        else {
+          const created = await addAccountCategory({ name: formattedName, account_type: type, parent_category_id: parentId === 'root' ? null : parentId })
+          onCreated?.(created)
+        }
       } else if (category) await alterItemCategory(category.id, { name: formattedName, parent_category_id: parentId === 'root' ? null : parentId })
       else {
         const created = await addItemCategory({ name: formattedName, parent_category_id: parentId === 'root' ? null : parentId })
@@ -105,7 +108,7 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5"><Label>Name</Label><Input value={name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus disabled={systemCategory} /></div>
-          {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId(category ? 'root' : '') }} disabled={!!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
+          {kind === 'account' && <div className="space-y-1.5"><Label>Account Type</Label><SearchableSelect value={type} onValueChange={value => { setType(value as AccountType); setParentId(category ? 'root' : '') }} disabled={!!defaultAccountType || !!selectedParent || !!(category as AccountCategory | undefined)?.is_system} options={ACCOUNT_TYPES.map(value => ({ value, label: value }))} /></div>}
           <div className="space-y-1.5"><Label>Parent Category</Label><SearchableSelect value={parentId} placeholder={kind === 'account' ? 'Select parent account group' : 'Select parent category'} disabled={systemCategory} onValueChange={value => { setParentId(value); const parent = allCategories.find(candidate => candidate.id === value); if (kind === 'account' && parent) setType((parent as AccountCategory).account_type) }} options={[...(kind === 'item' || category ? [{ value: 'root', label: 'Top level' }] : []), ...parentOptions.map(parent => ({ value: parent.id, label: categoryOptionLabel(allCategories, parent.id), searchText: categoryPath(allCategories, parent.id), group: 'account_type' in parent ? parent.account_type : undefined }))]} /></div>
           {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
@@ -116,9 +119,9 @@ export function CategoryDialog({ kind, category, parentCategory, open, onClose, 
   )
 }
 
-export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyType, open, onClose, onCreated }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; defaultPartyType?: 'customer' | 'supplier'; open: boolean; onClose: () => void; onCreated?: (account: Account, party?: Party) => void }) {
+export function LedgerDialog({ account, party, defaultCategoryId, allowedAccountType, defaultPartyType, open, onClose, onCreated }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; allowedAccountType?: AccountType; defaultPartyType?: 'customer' | 'supplier'; open: boolean; onClose: () => void; onCreated?: (account: Account, party?: Party) => void }) {
   const { accountCategories, addAccount, alterAccount, vouchers } = useAppStore()
-  const activeCategories = useMemo(() => accountCategories.filter(category => !category.is_archived), [accountCategories])
+  const activeCategories = useMemo(() => accountCategories.filter(category => !category.is_archived && (!allowedAccountType || category.account_type === allowedAccountType)), [accountCategories, allowedAccountType])
   const [name, setName] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [partyType, setPartyType] = useState<'customer' | 'supplier'>('customer')
@@ -132,6 +135,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
   const [bankBranch, setBankBranch] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
   const isUsed = !!account && vouchers.some(voucher => voucher.lines?.some(line => line.account_id === account.id))
   const selectedCategory = activeCategories.find(category => category.id === categoryId)
   const visibility = useMemo(() => ledgerFieldVisibility(accountCategories, categoryId), [accountCategories, categoryId])
@@ -201,6 +205,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
   }
 
   return (
+    <>
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
@@ -210,7 +215,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
           {party && !defaultPartyType ? (
             <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
-            <div className="space-y-1.5"><Label>Group / Category <span className="text-destructive">*</span></Label><SearchableSelect value={categoryId} onValueChange={value => { setCategoryId(value); if (!account) { const next = activeCategories.find(category => category.id === value); if (next) setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') } }} disabled={partyMode || !!account?.is_system} placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>
+            <div className="space-y-1.5"><Label>Group / Category <span className="text-destructive">*</span></Label><div className="flex gap-1"><SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={value => { setCategoryId(value); if (!account) { const next = activeCategories.find(category => category.id === value); if (next) setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') } }} disabled={partyMode || !!account?.is_system} placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /><Button type="button" variant="outline" size="icon" disabled={partyMode || !!account?.is_system} title="Create account category" aria-label="Create account category" onClick={() => setCategoryDialogOpen(true)}><FolderPlus className="h-4 w-4" /></Button></div></div>
           )}
             {party && !defaultPartyType && <div className="space-y-1.5 sm:col-span-2"><Label>Group / Category <span className="text-destructive">*</span></Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>}
             <div className="space-y-1.5"><Label>Opening Balance <span className="text-destructive">*</span></Label><Input type="number" min="0" step="any" value={openingBalance} onChange={event => setOpeningBalance(event.target.value)} /></div>
@@ -236,6 +241,8 @@ export function LedgerDialog({ account, party, defaultCategoryId, defaultPartyTy
         <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Ledger'}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
+    {categoryDialogOpen && <CategoryDialog kind="account" open defaultAccountType={allowedAccountType || selectedCategory?.account_type} onClose={() => setCategoryDialogOpen(false)} onCreated={created => { const next = created as AccountCategory; setCategoryId(next.id); setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') }} />}
+    </>
   )
 }
 

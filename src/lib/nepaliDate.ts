@@ -111,15 +111,20 @@ export function firstOfCurrentBsMonth(): string {
   return formatBsParts({ ...parts, day: 1 })
 }
 
-export function normalizeVoucherDates<T extends { date?: string; date_ad?: string | null; date_bs?: string | null; date_bs_key?: number | null }>(voucher: T) {
+export function normalizeVoucherDates<T extends { date?: string; date_ad?: string | null; date_bs?: string | null; date_bs_key?: number | null; simple_entry_type?: string | null; draft_payload?: Record<string, unknown> | null }>(voucher: T) {
   const dateAd = voucher.date_ad || voucher.date || new Date().toISOString().slice(0, 10)
   const dateBs = voucher.date_bs || adToBs(dateAd)
+  const payloadType = voucher.draft_payload?.simpleEntryType
+  const simpleEntryType = voucher.simple_entry_type === 'Income' || voucher.simple_entry_type === 'Expense'
+    ? voucher.simple_entry_type
+    : payloadType === 'Income' || payloadType === 'Expense' ? payloadType : null
   return {
     ...voucher,
     date: voucher.date || dateAd,
     date_ad: dateAd,
     date_bs: dateBs,
     date_bs_key: voucher.date_bs_key || makeBsKey(dateBs),
+    simple_entry_type: simpleEntryType,
     status: (voucher as T & { status?: string | null }).status === 'Draft' ? 'Draft' : 'Completed',
   }
 }

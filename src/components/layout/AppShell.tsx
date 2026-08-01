@@ -59,6 +59,8 @@ const NAV_SECTIONS: {
       { to: '/purchase-returns', label: 'Purchase Returns', Icon: Redo2 },
       { to: '/receipts', label: 'Receipts', Icon: ArrowDownCircle },
       { to: '/payments', label: 'Payments', Icon: ArrowUpCircle },
+      { to: '/transactions/income', label: 'Add Income', Icon: TrendingUp },
+      { to: '/transactions/expenses', label: 'Add Expense', Icon: TrendingDown },
       { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
     ],
   },

@@ -18,6 +18,8 @@ const PurchaseReturnPage = lazy(() => import('@/pages/PurchaseReturn').then(m =>
 const ReceiptsPage = lazy(() => import('@/pages/Receipts').then(m => ({ default: m.ReceiptsPage })))
 const PaymentsPage = lazy(() => import('@/pages/Payments').then(m => ({ default: m.PaymentsPage })))
 const JournalPage = lazy(() => import('@/pages/Journal').then(m => ({ default: m.JournalPage })))
+const IncomeEntriesPage = lazy(() => import('@/pages/SimpleEntries').then(m => ({ default: m.IncomeEntriesPage })))
+const ExpenseEntriesPage = lazy(() => import('@/pages/SimpleEntries').then(m => ({ default: m.ExpenseEntriesPage })))
 const DraftVouchersPage = lazy(() => import('@/pages/DraftVouchers').then(m => ({ default: m.DraftVouchersPage })))
 const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
@@ -237,6 +239,8 @@ export default function App() {
             <Route path="transactions/receipts" element={<ReceiptsPage />} />
             <Route path="transactions/payments" element={<PaymentsPage />} />
             <Route path="transactions/journal" element={<JournalPage />} />
+            <Route path="transactions/income" element={<IncomeEntriesPage />} />
+            <Route path="transactions/expenses" element={<ExpenseEntriesPage />} />
             <Route path="transactions/drafts" element={<DraftVouchersPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />
