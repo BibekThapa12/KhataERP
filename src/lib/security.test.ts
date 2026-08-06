@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { auditFieldMarkers, backupFileValidationError, isSafePublicImageUrl, publicAuthErrorMessage, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from './security'
+import { auditFieldMarkers, backupFileValidationError, isSafePublicImageUrl, publicAuthErrorMessage, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging, userFacingErrorMessage } from './security'
 
 describe('secret-safe logging', () => {
   it('redacts credential-shaped text and sensitive object fields', () => {
@@ -37,6 +37,20 @@ describe('secret-safe logging', () => {
     expect(message).toMatch(/^Could not complete sign in\. Reference: /)
     expect(message).not.toContain('auth.users')
     expect(message).not.toContain('server')
+  })
+
+  it('turns invoice integrity errors into actionable messages', () => {
+    const error = { code: 'P0001', message: 'Invoice totals do not match server-calculated values' }
+    expect(userFacingErrorMessage(error)).toBe('The invoice total could not be verified. Check the item quantities, rates, discount, and VAT, then save again.')
+    const message = publicErrorMessage(error, 'saving purchase invoice')
+    expect(message).toContain('Check the item quantities, rates, discount, and VAT')
+    expect(message).not.toContain('server-calculated')
+  })
+
+  it('maps common database constraint and permission errors', () => {
+    expect(userFacingErrorMessage({ code: '23505', message: 'duplicate key value violates unique constraint' })).toContain('already exists')
+    expect(userFacingErrorMessage({ code: '42501', message: 'permission denied for table vouchers' })).toContain('permission')
+    expect(userFacingErrorMessage({ code: '22P02', message: 'invalid input syntax for type uuid' })).toContain('entered values')
   })
 
   it('maps expected authentication errors without exposing provider details', () => {

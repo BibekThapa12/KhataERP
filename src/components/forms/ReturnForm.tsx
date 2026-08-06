@@ -16,7 +16,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
@@ -268,7 +268,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         draft_payload: { partyAccountId, originalId, dateBs, lines, settlementMode, settlementAccountId, stockCondition, manualVatRate, reason },
       })
       onClose()
-    } catch (e: unknown) { setError(`${publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)} Detail: ${safeErrorMessage(e)}`) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)) }
     finally { setSaving(false) }
   }
 

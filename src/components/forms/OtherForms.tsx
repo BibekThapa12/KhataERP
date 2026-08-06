@@ -16,7 +16,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { Textarea } from '@/components/ui/misc'
-import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
@@ -306,7 +306,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         draft_payload: { dateBs, allocations, moneyAccountId, narration },
       })
       onClose()
-    } catch (e: unknown) { setError(`${publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)} Detail: ${safeErrorMessage(e)}`) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)) }
     finally { setSaving(false) }
   }
 
@@ -515,7 +515,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         draft_payload: { dateBs, journalInvoiceNo, jLines, narration },
       })
       onClose()
-    } catch (e: unknown) { setError(`${publicErrorMessage(e, 'saving journal draft')} Detail: ${safeErrorMessage(e)}`) }
+    } catch (e: unknown) { setError(publicErrorMessage(e, 'saving journal draft')) }
     finally { setSaving(false) }
   }
 

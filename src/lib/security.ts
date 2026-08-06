@@ -68,10 +68,78 @@ export function reportClientError(error: unknown, operation = 'request'): string
   return correlationId
 }
 
+type PublicErrorRule = { pattern: RegExp; message: string }
+
+// Database errors are intentionally translated through an allowlist. This
+// keeps SQL/schema details private while giving users a concrete correction.
+const PUBLIC_ERROR_RULES: PublicErrorRule[] = [
+  { pattern: /invoice totals do not match server-calculated values/i, message: 'The invoice total could not be verified. Check the item quantities, rates, discount, and VAT, then save again.' },
+  { pattern: /invoice items require positive quantities and non-negative rates/i, message: 'Every invoice row must have a valid item, a quantity greater than zero, and a rate of zero or more.' },
+  { pattern: /invoice discount is outside the valid range/i, message: 'The discount cannot be negative or greater than the invoice subtotal.' },
+  { pattern: /vat rate is outside the valid range/i, message: 'Enter a valid VAT rate.' },
+  { pattern: /insufficient stock|not enough stock/i, message: 'There is not enough available stock to complete this transaction. Check the item quantities.' },
+  { pattern: /voucher (?:is not balanced|debit and credit totals do not match)|lines do not balance/i, message: 'The accounting entry is not balanced. Review the amounts and try again.' },
+  { pattern: /voucher total (?:does not match|must be greater than zero)/i, message: 'The voucher total is invalid. Review the entered amounts and try again.' },
+  { pattern: /voucher date cannot be before|financial year start date/i, message: 'The transaction date is outside the allowed financial year. Select a valid date.' },
+  { pattern: /voucher date cannot be in a future financial period/i, message: 'The transaction date cannot be in a future financial period.' },
+  { pattern: /complete financial year setup/i, message: 'Complete the company Financial Year setup before posting transactions.' },
+  { pattern: /supplier invoice number cannot exceed/i, message: 'The supplier invoice number is too long. Use 100 characters or fewer.' },
+  { pattern: /enter the journal voucher number/i, message: 'Enter a Journal voucher number before saving.' },
+  { pattern: /return quantity exceeds|exceeds the remaining quantity/i, message: 'The return quantity is greater than the quantity still available to return.' },
+  { pattern: /return source invoice is invalid|original voucher.*another company/i, message: 'The selected original invoice is unavailable. Select another invoice and try again.' },
+  { pattern: /linked return vouchers before cancelling/i, message: 'Cancel the linked return voucher before cancelling this invoice.' },
+  { pattern: /ledger already exist/i, message: 'A ledger with this name already exists. Enter a different name.' },
+  { pattern: /account category already exist/i, message: 'An account category with this name already exists under this account type.' },
+  { pattern: /stock item already exist/i, message: 'A stock item with this name already exists. Enter a different name.' },
+  { pattern: /stock item category already exist/i, message: 'A stock category with this name already exists.' },
+  { pattern: /this issuing bank already exists/i, message: 'This issuing bank is already available. Select it from the existing bank list.' },
+  { pattern: /duplicate cheque|cheque number already|issued_cheque_number_unique/i, message: 'This cheque number already exists for the selected bank.' },
+  { pattern: /due date cannot be before issue date/i, message: 'The due date cannot be earlier than the cheque issue date.' },
+  { pattern: /completed cheques cannot be edited/i, message: 'A settled cheque cannot be edited.' },
+  { pattern: /only pending cheques/i, message: 'Only pending cheques can be changed or settled.' },
+  { pattern: /cheque settlement ledger is unavailable|select the cash or bank ledger/i, message: 'Select an active Cash or Bank ledger for cheque settlement.' },
+  { pattern: /issued cheque source must be/i, message: 'Select an active company Bank or Bank OD ledger in Paid From.' },
+  { pattern: /party ledger must be active|cheque party must be an active/i, message: 'Select an active party belonging to this company.' },
+  { pattern: /contra requires different source and destination/i, message: 'Transfer From and Transfer To must be different accounts.' },
+  { pattern: /contra source and destination must be/i, message: 'Select active Cash, Bank, or Bank OD ledgers for the transfer.' },
+  { pattern: /contra voucher lines are invalid/i, message: 'The Contra entry is invalid or unbalanced. Review the transfer amount and bank charge.' },
+  { pattern: /phone.*10|companies_phone_format|parties_phone_format|accounts_phone_format/i, message: 'Phone number must contain exactly 10 digits.' },
+  { pattern: /pan.*9|vat.*9|pan_vat.*check/i, message: 'PAN/VAT number must contain exactly 9 digits.' },
+  { pattern: /account number must match the selected bank/i, message: 'The cheque account number must match the selected bank.' },
+  { pattern: /account name must contain/i, message: 'Enter a valid ledger name within the allowed length.' },
+  { pattern: /item field length is invalid/i, message: 'One or more item fields are too long or empty. Review the item details.' },
+  { pattern: /party field length is invalid/i, message: 'One or more party fields are too long or empty. Review the party details.' },
+  { pattern: /credit days.*valid range/i, message: 'Credit Days must be a whole number of zero or more.' },
+  { pattern: /category hierarchy.*(?:three|four) levels|moving this category would exceed/i, message: 'The category cannot be placed there because the maximum hierarchy depth would be exceeded.' },
+  { pattern: /category hierarchy cycle|own parent|moved into itself/i, message: 'A category cannot be placed inside itself or one of its child categories.' },
+  { pattern: /company plan is inactive/i, message: 'This company plan is inactive and currently read-only.' },
+  { pattern: /access denied|permission|not authorized|row-level security/i, message: 'You do not have permission to perform this action.' },
+  { pattern: /failed to fetch|networkerror|network request|load failed/i, message: 'Could not connect to the server. Check your internet connection and try again.' },
+  { pattern: /schema cache|could not find the function|does not exist/i, message: 'The application database is not up to date. Ask an administrator to apply the latest database migration.' },
+]
+
+export function userFacingErrorMessage(error: unknown): string | null {
+  const rawMessage = safeErrorMessage(error)
+  const rule = PUBLIC_ERROR_RULES.find(entry => entry.pattern.test(rawMessage))
+  if (rule) return rule.message
+
+  const code = safeErrorCode(error)
+  if (code === '23505') return 'A record with the same unique details already exists.'
+  if (code === '23503') return 'This record is still being used elsewhere and cannot be changed or removed.'
+  if (code === '23514' || code === '22003' || code === '22P02') return 'One or more entered values are invalid. Review the highlighted fields and try again.'
+  if (code === '42501') return 'You do not have permission to perform this action.'
+  return null
+}
+
 export function publicErrorMessage(error: unknown, operation = 'request'): string {
   const correlationId = reportClientError(error, operation)
-  notifyError(`Could not complete ${operation}`, `Reference: ${correlationId}`)
-  return `Could not complete ${operation}. Reference: ${correlationId}`
+  const friendlyMessage = userFacingErrorMessage(error)
+  if (!friendlyMessage) {
+    notifyError(`Could not complete ${operation}`, `Reference: ${correlationId}`)
+    return `Could not complete ${operation}. Reference: ${correlationId}`
+  }
+  notifyError(friendlyMessage, `Reference: ${correlationId}`)
+  return `${friendlyMessage} Reference: ${correlationId}`
 }
 
 const AUTH_ERROR_MESSAGES: Record<string, string> = {

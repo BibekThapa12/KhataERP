@@ -16,7 +16,7 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
-import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
 import { VoucherNumberField } from './VoucherNumberField'
@@ -272,7 +272,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       })
       onClose()
     } catch (e: unknown) {
-      setError(`${publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)} Detail: ${safeErrorMessage(e)}`)
+      setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`))
     } finally {
       setSaving(false)
     }

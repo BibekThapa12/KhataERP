@@ -17,7 +17,7 @@ import { Label } from '@/components/ui/label'
 import { Card } from '@/components/ui/card'
 import { Badge, Textarea } from '@/components/ui/misc'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
-import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
+import { publicErrorMessage } from '@/lib/security'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
@@ -119,7 +119,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       onClose()
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
     } catch (error: unknown) {
-      setError(`${publicErrorMessage(error, 'saving stock adjustment draft')} Detail: ${safeErrorMessage(error)}`)
+      setError(publicErrorMessage(error, 'saving stock adjustment draft'))
     } finally { setSaving(false) }
   }
 
@@ -130,7 +130,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       await deleteDraftVoucher(voucher.id)
       onClose()
     } catch (error: unknown) {
-      setError(`${publicErrorMessage(error, 'deleting stock adjustment draft')} Detail: ${safeErrorMessage(error)}`)
+      setError(publicErrorMessage(error, 'deleting stock adjustment draft'))
     } finally { setSaving(false) }
   }
 
