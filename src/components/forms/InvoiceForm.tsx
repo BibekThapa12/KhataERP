@@ -4,7 +4,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { addDaysToBs } from '@/lib/nepaliDate'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
-import { resolveSystemAccountId } from '@/lib/engine'
+import { invoiceRateFromAmount, invoiceSubtotal, resolveSystemAccountId } from '@/lib/engine'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate, unitFactor, unitName, type UnitMode } from '@/lib/units'
 import { partyTerminology } from '@/lib/partyTerminology'
 import { Button } from '@/components/ui/button'
@@ -47,7 +47,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [partyAccountId, setPartyAccountId] = useState('')
   const [creditDays, setCreditDays] = useState(0)
   const [supplierInvoiceNo, setSupplierInvoiceNo] = useState('')
-  const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
+  const [lines, setLines] = useState<LineItem[]>([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }])
   const [vatRate, setVatRate] = useState(13)
   const [discount, setDiscount] = useState(0)
   const [discountMode, setDiscountMode] = useState<DiscountMode>('flat')
@@ -77,7 +77,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   })()
 
   // Totals
-  const subtotal = round2Local(lines.reduce((s, l) => s + l.qty * l.rate, 0))
+  const subtotal = invoiceSubtotal(lines)
   const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
   const taxable = round2Local(subtotal - discountAmount)
   const effectiveVatRate = vatEnabled ? vatRate : 0
@@ -113,7 +113,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setDateInvalid(false)
     } else if (!open) {
       setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
-      setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
+      setLines([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setDiscountMode('flat'); setNarration(''); setError(''); setDateInvalid(false)
     }
   }, [open, voucher, vatEnabled, items, parties, company])
@@ -148,6 +148,20 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setLines(next)
   }
 
+  const updateLineAmount = (idx: number, value: string) => {
+    const amount = Number(value)
+    const line = lines[idx]
+    if (!line || !Number.isFinite(amount) || amount < 0) return
+    if (!Number.isFinite(line.qty) || line.qty <= 0) {
+      setError('Enter a quantity greater than zero before entering the line amount.')
+      return
+    }
+    const next = [...lines]
+    next[idx] = { ...line, rate: invoiceRateFromAmount(amount, line.qty) ?? 0 }
+    setLines(next)
+    setError('')
+  }
+
   const updateUnit = (idx: number, mode: UnitMode) => {
     const next = [...lines]
     const line = next[idx]
@@ -161,7 +175,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   const addLine = () => {
     pendingLineFocus.current = lines.length
-    setLines(current => [...current, { item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
+    setLines(current => [...current, { item_id: '', qty: 0, rate: 0, unit_mode: 'main' }])
   }
 
   useEffect(() => {
@@ -226,7 +240,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setPartyAccountId('')
         setCreditDays(0)
         setSupplierInvoiceNo('')
-        setLines([{ item_id: '', qty: 1, rate: 0, unit_mode: 'main' }])
+        setLines([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }])
         setVatRate(vatEnabled ? 13 : 0)
         setDiscount(0)
         setDiscountMode('flat')
@@ -381,7 +395,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={Number.isFinite(line.rate) ? line.rate : ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
-                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><div className="invoice-entry-value flex h-8 min-w-0 items-center whitespace-nowrap num font-semibold">{fmtMoney(amt)}</div></div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={Number.isFinite(amt) ? amt : ''} onChange={event => updateLineAmount(idx, event.target.value)} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

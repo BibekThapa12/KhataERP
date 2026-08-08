@@ -515,7 +515,7 @@ create table if not exists invoice_items (
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
   qty              numeric(14,4) not null,
-  rate             numeric(14,2) not null
+  rate             numeric(18,6) not null
 );
 
 -- Voucher-to-invoice allocations. Historical receipts/payments without rows

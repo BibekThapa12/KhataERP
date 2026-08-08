@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   buildPaymentData, buildPurchaseVoucherData, buildReceiptData, buildReturnVoucherData,
-  applyVoucherBalanceDelta, buildSalesVoucherData, computeBalanceSheet, computeProfitAndLoss, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, recomputeAffectedBalances, recomputeAffectedStock, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
+  applyVoucherBalanceDelta, buildSalesVoucherData, computeBalanceSheet, computeProfitAndLoss, computeStockConditionSummary, computeStockLedger, computeStockSummary, computeTrialBalance, defaultChartOfAccounts, invoiceRateFromAmount, recomputeAffectedBalances, recomputeAffectedStock, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, stockConditionQuantity, validateBalanced,
 } from './engine'
 import type { Account, Item, Voucher, VoucherLine } from '@/types'
 import { formatStockQuantity, fromBaseRate, toBaseQty, toBaseRate } from './units'
@@ -20,6 +20,24 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(purchase.lines).valid).toBe(true)
     expect(validateBalanced(buildReceiptData([{ account_id: 'customer', amount: 500 }], 'cash').lines).valid).toBe(true)
     expect(validateBalanced(buildPaymentData([{ account_id: 'supplier', amount: 300 }], 'cash').lines).valid).toBe(true)
+  })
+
+  it('matches PostgreSQL per-line rounding for fractional invoice rates', () => {
+    const items = ['a', 'b', 'c', 'd'].map(item_id => ({ item_id, qty: 1, rate: 0.335 }))
+    const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items, vat_rate: 13, system_accounts: accounts })
+    const sale = buildSalesVoucherData({ party_account_id: 'customer', is_cash: false, items, vat_rate: 13, system_accounts: accounts })
+
+    expect(purchase).toMatchObject({ subtotal: 1.36, vat_amount: 0.18, total: 1.54 })
+    expect(sale).toMatchObject({ subtotal: 1.36, vat_amount: 0.18, total: 1.54 })
+    expect(validateBalanced(purchase.lines).valid).toBe(true)
+    expect(validateBalanced(sale.lines).valid).toBe(true)
+  })
+
+  it('calculates a precise rate from a user-entered line amount', () => {
+    const rate = invoiceRateFromAmount(1000, 3)
+    expect(rate).toBe(333.333333)
+    expect(Math.round((3 * (rate || 0) + Number.EPSILON) * 100) / 100).toBe(1000)
+    expect(invoiceRateFromAmount(1000, 0)).toBeNull()
   })
 
   it('posts zero-value sales, purchases, and returns while preserving item quantities', () => {

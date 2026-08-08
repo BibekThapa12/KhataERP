@@ -523,7 +523,7 @@ create table if not exists invoice_items (
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
   qty              numeric(14,4) not null,
-  rate             numeric(14,2) not null
+  rate             numeric(18,6) not null
 );
 
 -- Voucher-to-invoice allocations. Historical receipts/payments without rows
@@ -7536,6 +7536,19 @@ grant execute on function public.clear_cheque_atomic(uuid,date,text,integer,text
 commit;
 notify pgrst,'reload schema';
 -- END SYNCED DB FILE: supabase-incoming-outgoing-cheques-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-invoice-rate-precision-migration.sql
+-- Preserve rates calculated from an explicitly entered invoice-line amount.
+-- Six decimal places allow amount / quantity calculations to round back to
+-- the user's two-decimal line amount during server integrity validation.
+begin;
+
+alter table public.invoice_items
+  alter column rate type numeric(18,6) using rate::numeric(18,6);
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED DB FILE: supabase-invoice-rate-precision-migration.sql
 
 -- BEGIN SYNCED DB FILE: supabase-identity-validation-migration.sql
 -- Shared backend enforcement for company, party, ledger, bank, and cheque identity fields.

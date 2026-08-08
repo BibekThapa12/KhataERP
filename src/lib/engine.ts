@@ -555,9 +555,21 @@ interface InvoiceParams {
 
 const sys = (accounts: InvoiceParams['system_accounts'], key: SystemAccountKey) => accounts?.[key] || key
 
+// PostgreSQL validates invoice subtotals as SUM(ROUND(qty * rate, 2)). Keep
+// this calculation identical so fractional quantities/rates cannot produce a
+// one-paisa disagreement between the form and the integrity trigger.
+export function invoiceSubtotal(items: Pick<InvoiceEntryInput, 'qty' | 'rate'>[]) {
+  return round2(items.reduce((sum, item) => sum + round2(item.qty * item.rate), 0))
+}
+
+export function invoiceRateFromAmount(amount: number, quantity: number) {
+  if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(quantity) || quantity <= 0) return null
+  return Math.round((amount / quantity + Number.EPSILON) * 1_000_000) / 1_000_000
+}
+
 export function buildSalesVoucherData(p: InvoiceParams) {
-  const subtotal = round2(p.items.reduce((s, l) => s + l.qty * l.rate, 0))
-  const discount = p.discount || 0
+  const subtotal = invoiceSubtotal(p.items)
+  const discount = round2(p.discount || 0)
   const taxable = round2(subtotal - discount)
   const vat_amount = round2(taxable * (p.vat_rate / 100))
   const total = round2(taxable + vat_amount)
@@ -572,8 +584,8 @@ export function buildSalesVoucherData(p: InvoiceParams) {
 }
 
 export function buildPurchaseVoucherData(p: InvoiceParams) {
-  const subtotal = round2(p.items.reduce((s, l) => s + l.qty * l.rate, 0))
-  const discount = p.discount || 0
+  const subtotal = invoiceSubtotal(p.items)
+  const discount = round2(p.discount || 0)
   const taxable = round2(subtotal - discount)
   const vat_amount = round2(taxable * (p.vat_rate / 100))
   const total = round2(taxable + vat_amount)

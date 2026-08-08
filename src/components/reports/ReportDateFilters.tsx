@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import type { Company } from '@/types'
+import type { ReactNode } from 'react'
 
 export type ReportRange = 'today' | 'month' | 'fiscal' | 'custom'
 
@@ -15,9 +16,10 @@ interface ReportDateFiltersProps {
   onRangeChange: (range: ReportRange) => void
   onFromChange: (value: string) => void
   onToChange: (value: string) => void
+  endActions?: ReactNode
 }
 
-export function ReportDateFilters({ company, range, from, to, onRangeChange, onFromChange, onToChange }: ReportDateFiltersProps) {
+export function ReportDateFilters({ company, range, from, to, onRangeChange, onFromChange, onToChange, endActions }: ReportDateFiltersProps) {
   const fiscalStart = selectedFiscalYearStartBs(company)
   const fiscalEnd = selectedFiscalYearEndBs(company)
   const applyPreset = (preset: Exclude<ReportRange, 'custom'>) => {
@@ -53,6 +55,7 @@ export function ReportDateFilters({ company, range, from, to, onRangeChange, onF
         <Label>To</Label>
         <NepaliDateInput value={to} min={from > fiscalStart ? from : fiscalStart} max={fiscalEnd} onChange={value => { onToChange(value); onRangeChange('custom') }} className="w-full sm:w-40" />
       </div>
+      {endActions}
     </div>
   )
 }

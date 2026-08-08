@@ -1,8 +1,8 @@
-import { useMemo, useState } from 'react'
-import { ArrowDown, ArrowUp, Columns3, Download, FileText, Info, MoreVertical, Printer, ScanLine, Search, SlidersHorizontal } from 'lucide-react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Columns3, Download, FileText, Info, MoreVertical, Printer, ScanLine, Search, SlidersHorizontal } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { getDaybookRows } from '@/lib/reports'
-import { makeBsKey, todayBs } from '@/lib/nepaliDate'
+import { getDaybookRows, selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
+import { addDaysToBs, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { normalizeSearch } from '@/lib/search'
 import { legacySettlementAccountId } from '@/lib/banks'
@@ -50,6 +50,30 @@ export function DaybookPage() {
   const [columns, setColumns] = useState<Set<OptionalColumn>>(() => new Set(['narration', 'debit', 'credit', 'net', 'status']))
   const [selected, setSelected] = useState<Voucher | null>(null)
   const [editing, setEditing] = useState<Voucher | null>(null)
+
+  const navigateDay = useCallback((offset: -1 | 1) => {
+    const currentDay = from === to ? from : to
+    const nextDay = addDaysToBs(currentDay, offset)
+    const fiscalStart = selectedFiscalYearStartBs(company)
+    const fiscalEnd = selectedFiscalYearEndBs(company)
+    if (nextDay < fiscalStart || nextDay > fiscalEnd) return
+    setRange('custom')
+    setFrom(nextDay)
+    setTo(nextDay)
+  }, [company, from, to])
+
+  useEffect(() => {
+    const handleDayNavigation = (event: KeyboardEvent) => {
+      if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+      if (event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || selected || editing) return
+      const target = event.target as HTMLElement | null
+      if (target?.closest('input, textarea, select, [contenteditable="true"], [role="dialog"], [role="combobox"]')) return
+      event.preventDefault()
+      navigateDay(event.key === 'ArrowLeft' ? -1 : 1)
+    }
+    window.addEventListener('keydown', handleDayNavigation)
+    return () => window.removeEventListener('keydown', handleDayNavigation)
+  }, [editing, navigateDay, selected])
 
   const rows = useMemo(() => {
     const fromKey = makeBsKey(from)
@@ -100,7 +124,7 @@ export function DaybookPage() {
         <FormalReportPrintHeader company={company} title="Day Book" periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} />
         <Card className="report-controls">
           <CardContent className="p-4 flex flex-wrap items-end justify-between gap-4">
-            <ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} />
+            <ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} endActions={<div className="flex gap-1"><Button type="button" variant="outline" size="icon" aria-label="Previous day" title="Previous day (Left arrow)" onClick={() => navigateDay(-1)}><ChevronLeft className="h-4 w-4" /></Button><Button type="button" variant="outline" size="icon" aria-label="Next day" title="Next day (Right arrow)" onClick={() => navigateDay(1)}><ChevronRight className="h-4 w-4" /></Button></div>} />
             <label className="flex h-9 items-center gap-2 text-sm">
               <input type="checkbox" checked={showCancelled} onChange={event => setShowCancelled(event.target.checked)} className="h-4 w-4 accent-primary" />
               Show cancelled
