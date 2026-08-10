@@ -15,6 +15,7 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
+import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
 import { Textarea } from '@/components/ui/misc'
 import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
@@ -59,9 +60,9 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const [alternateUnit, setAlternateUnit] = useState('')
   const [alternateConversion, setAlternateConversion] = useState(0)
   const [openingUnitMode, setOpeningUnitMode] = useState<UnitMode>('main')
-  const [sellRate, setSellRate] = useState(0)
+  const [sellRate, setSellRate] = useState('0')
   const [openingQty, setOpeningQty] = useState(0)
-  const [openingRate, setOpeningRate] = useState(0)
+  const [openingRate, setOpeningRate] = useState('0')
   const [reorderLevel, setReorderLevel] = useState('')
   const [categoryId, setCategoryId] = useState('')
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
@@ -75,7 +76,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate(0); setOpeningQty(0); setOpeningRate(0); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
@@ -93,7 +94,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: sellRate, opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(openingRate, factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
+      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(rateInputNumber(openingRate), factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -128,7 +129,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             </div>}
             <div className="space-y-1.5">
               <Label>Default Sell Rate / Main Unit (Rs)</Label>
-              <Input type="number" step="any" value={sellRate || ''} onChange={e => setSellRate(Number(e.target.value))} placeholder="0" />
+              <Input type="number" step="any" value={sellRate} onChange={e => setSellRate(e.target.value)} onBlur={() => setSellRate(current => formatRateInput(current))} placeholder="0" />
             </div>
           </div>
           {!isService && <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -143,7 +144,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             </div>
             <div className="space-y-1.5">
               <Label>Opening Cost / Selected Unit (Rs)</Label>
-              <Input type="number" step="any" value={openingRate || ''} onChange={e => setOpeningRate(Number(e.target.value))} placeholder="0" />
+              <Input type="number" step="any" value={openingRate} onChange={e => setOpeningRate(e.target.value)} onBlur={() => setOpeningRate(current => formatRateInput(current))} placeholder="0" />
             </div>
           </div>
           {alternateUnit.trim() && alternateConversion > 1 && <div className="space-y-1.5"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: unit.trim() || 'pcs' }, { value: 'alternate', label: alternateUnit.trim() }]} /></div>}

@@ -19,13 +19,14 @@ import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
+import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
-interface LineItem { item_id: string; qty: number; rate: number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
+interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
 type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100 }
@@ -77,7 +78,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   })()
 
   // Totals
-  const subtotal = invoiceSubtotal(lines)
+  const numericLines = useMemo(() => lines.map(line => ({ ...line, rate: rateInputNumber(line.rate) })), [lines])
+  const subtotal = invoiceSubtotal(numericLines)
   const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
   const taxable = round2Local(subtotal - discountAmount)
   const effectiveVatRate = vatEnabled ? vatRate : 0
@@ -103,7 +105,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setLines(draft?.lines?.length ? draft.lines : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
-        return { item_id: i.item_id, qty: i.qty, rate: i.rate, unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
+        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
@@ -135,17 +137,23 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1 }
       if (!isSales) {
         const stock = getStockEntry(value as string)
-        if (stock.avg_cost > 0) next[idx].rate = stock.avg_cost
+        if (stock.avg_cost > 0) next[idx].rate = formatRateInput(stock.avg_cost)
         const item = items.find(i => i.id === value)
-        if (item?.sell_rate && isSales) next[idx].rate = item.sell_rate
+        if (item?.sell_rate && isSales) next[idx].rate = formatRateInput(item.sell_rate)
       } else {
         const item = items.find(i => i.id === value)
-        if (item?.sell_rate) next[idx].rate = item.sell_rate
+        if (item?.sell_rate) next[idx].rate = formatRateInput(item.sell_rate)
       }
+    } else if (field === 'rate') {
+      next[idx] = { ...next[idx], rate: value }
     } else {
       next[idx] = { ...next[idx], [field]: Number(value) }
     }
     setLines(next)
+  }
+
+  const roundLineRate = (idx: number) => {
+    setLines(current => current.map((line, row) => row === idx ? { ...line, rate: formatRateInput(line.rate) } : line))
   }
 
   const updateLineAmount = (idx: number, value: string) => {
@@ -157,7 +165,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       return
     }
     const next = [...lines]
-    next[idx] = { ...line, rate: invoiceRateFromAmount(amount, line.qty) ?? 0 }
+    next[idx] = { ...line, rate: formatRateInput(invoiceRateFromAmount(amount, line.qty) ?? 0) }
     setLines(next)
     setError('')
   }
@@ -167,9 +175,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const line = next[idx]
     const item = items.find(entry => entry.id === line.item_id)
     const oldFactor = line.conversion_factor || unitFactor(item, line.unit_mode)
-    const baseRate = toBaseRate(line.rate, oldFactor)
+    const baseRate = toBaseRate(rateInputNumber(line.rate), oldFactor)
     const factor = unitFactor(item, mode)
-    next[idx] = { ...line, unit_mode: mode, entry_unit: unitName(item, mode), conversion_factor: factor, rate: fromBaseRate(baseRate, factor) }
+    next[idx] = { ...line, unit_mode: mode, entry_unit: unitName(item, mode), conversion_factor: factor, rate: formatRateInput(fromBaseRate(baseRate, factor)) }
     setLines(next)
   }
 
@@ -196,7 +204,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       return
     }
     setError('')
-    const validLines = lines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
+    const validLines = numericLines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
     if (!lines.length || validLines.length !== lines.length) { setError('Select an item and enter a quantity greater than zero for every line. Rate can be zero but cannot be negative.'); return }
     if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
     if (!Number.isInteger(creditDays) || creditDays < 0) { setError('Credit Days must be a whole number of 0 or more.'); return }
@@ -282,7 +290,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         party_account_id: partyAccountId || null,
         is_cash: isCash,
         total,
-        draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, discountMode, narration },
+        draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines: numericLines.map(line => ({ ...line, rate: formatRateInput(line.rate) })), vatRate, discount, discountMode, narration },
       })
       onClose()
     } catch (e: unknown) {
@@ -366,7 +374,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               </div>
               <div className="space-y-2">
                 {lines.map((line, idx) => {
-                  const amt = round2Local(line.qty * line.rate)
+                  const rate = rateInputNumber(line.rate)
+                  const amt = round2Local(line.qty * rate)
                   const selectedItem = items.find(item => item.id === line.item_id)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   const isServiceLine = !!selectedItem?.is_service
@@ -394,7 +403,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={Number.isFinite(line.rate) ? line.rate : ''} onChange={e => updateLine(idx, 'rate', e.target.value)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
                       <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={Number.isFinite(amt) ? amt : ''} onChange={event => updateLineAmount(idx, event.target.value)} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
@@ -466,7 +475,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         onCreated={(item: import('@/types').Item) => {
           if (newItemLineIdx !== null) {
             const next = [...lines]
-            next[newItemLineIdx] = { ...next[newItemLineIdx], item_id: item.id, rate: item.sell_rate || 0, unit_mode: 'main', entry_unit: item.unit, conversion_factor: 1 }
+            next[newItemLineIdx] = { ...next[newItemLineIdx], item_id: item.id, rate: formatRateInput(item.sell_rate || 0), unit_mode: 'main', entry_unit: item.unit, conversion_factor: 1 }
             setLines(next)
           }
           setShowItemForm(false)

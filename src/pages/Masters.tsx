@@ -6,6 +6,7 @@ import { useAppStore } from '@/store/useAppStore'
 import { fetchMasterChangeLogs } from '@/lib/supabase'
 import { cn, fmtMoney } from '@/lib/utils'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
+import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Card } from '@/components/ui/card'
@@ -285,7 +286,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
     setSaving(true)
     try {
       const openingFactor = openingUnitMode === 'alternate' && altUnit ? altFactor : 1
-      await alterItem(item.id, { name: itemName, category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: Number(form.sell_rate) || 0, opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(Number(form.opening_rate) || 0, openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
+      await alterItem(item.id, { name: itemName, category_id: form.category_id || undefined, unit: isService ? 'Service' : form.unit.trim(), alternate_unit: isService ? null : (altUnit || null), alternate_conversion: !isService && altUnit ? altFactor : null, sell_rate: rateInputNumber(form.sell_rate), opening_qty: isService ? 0 : toBaseQty(Number(form.opening_qty) || 0, openingFactor), opening_rate: isService ? 0 : toBaseRate(rateInputNumber(form.opening_rate), openingFactor), reorder_level: isService ? null : (form.reorder_level === '' ? null : Number(form.reorder_level)), sku: form.sku.trim(), barcode: form.barcode.trim(), vat_applicable: form.vat_applicable, is_service: item.is_service })
       onClose()
     } catch (e: unknown) { setError(masterDialogError(e, 'saving item')) } finally { setSaving(false) }
   }
@@ -297,12 +298,12 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>
         {isService && <div className="sm:col-span-2 rounded-md border border-sky-200 bg-sky-50 px-3 py-2 text-sm text-sky-800">Service item</div>}
         {!isService && <div className="space-y-1.5"><Label>Main Unit</Label><UnitCombobox value={form.unit} onValueChange={value => setForm({ ...form, unit: value })} exclude={[form.alternate_unit]} /></div>}
-        <div className="space-y-1.5"><Label>Sell Rate</Label><Input type="number" value={form.sell_rate} onChange={event => setForm({ ...form, sell_rate: event.target.value })} /></div>
+        <div className="space-y-1.5"><Label>Sell Rate</Label><Input type="number" step="any" value={form.sell_rate} onChange={event => setForm({ ...form, sell_rate: event.target.value })} onBlur={() => setForm(current => ({ ...current, sell_rate: formatRateInput(current.sell_rate) }))} /></div>
         {!isService && <><div className="space-y-1.5"><Label>Alternative Unit</Label><UnitCombobox value={form.alternate_unit} onValueChange={value => { setForm({ ...form, alternate_unit: value, alternate_conversion: value ? form.alternate_conversion : '' }); if (!value) setOpeningUnitMode('main') }} optional exclude={[form.unit]} /></div>
         <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" placeholder={form.alternate_unit ? 'Enter manually' : 'Select alternative unit first'} value={form.alternate_conversion} onChange={event => setForm({ ...form, alternate_conversion: event.target.value })} disabled={!form.alternate_unit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
         {form.alternate_unit.trim() && Number(form.alternate_conversion) > 1 && <p className="text-xs text-muted-foreground sm:col-span-2">1 {form.unit.trim()} = {form.alternate_conversion} {form.alternate_unit.trim()}</p>}
         <div className="space-y-1.5"><Label>Opening Qty</Label><Input type="number" value={form.opening_qty} onChange={event => setForm({ ...form, opening_qty: event.target.value })} /></div>
-        <div className="space-y-1.5"><Label>Opening Rate</Label><Input type="number" value={form.opening_rate} onChange={event => setForm({ ...form, opening_rate: event.target.value })} /></div>
+        <div className="space-y-1.5"><Label>Opening Rate</Label><Input type="number" step="any" value={form.opening_rate} onChange={event => setForm({ ...form, opening_rate: event.target.value })} onBlur={() => setForm(current => ({ ...current, opening_rate: formatRateInput(current.opening_rate) }))} /></div>
         {form.alternate_unit.trim() && Number(form.alternate_conversion) > 1 && <div className="space-y-1.5 sm:col-span-2"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: form.unit }, { value: 'alternate', label: form.alternate_unit }]} /><p className="text-xs text-muted-foreground">Values are currently shown in the selected unit. Switching this selector does not convert already entered values.</p></div>}
         <div className="space-y-1.5"><Label>Reorder Level</Label><Input type="number" value={form.reorder_level} onChange={event => setForm({ ...form, reorder_level: event.target.value })} /></div></>}
         <div className="space-y-1.5"><Label>SKU</Label><Input value={form.sku} onChange={event => setForm({ ...form, sku: event.target.value })} /></div>

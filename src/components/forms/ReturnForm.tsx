@@ -19,6 +19,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
+import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
@@ -31,7 +32,8 @@ interface ReturnFormProps {
   voucher?: Voucher | null
 }
 
-interface ReturnLine extends ReturnItemInput {
+interface ReturnLine extends Omit<ReturnItemInput, 'rate'> {
+  rate: string | number
   original_qty: number
   returned_qty: number
 }
@@ -99,7 +101,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       conversion_factor: line.conversion_factor || 1,
       base_qty: toBaseQty(existing?.qty || 0, line.conversion_factor || 1),
       qty: existing?.qty || 0,
-      rate: line.rate,
+      rate: formatRateInput(line.rate),
       cost_rate: derivedCostRate ?? existing?.cost_rate ?? line.cost_rate ?? stock.find(entry => entry.id === line.item_id)?.avg_cost ?? 0,
       original_qty: line.qty,
       returned_qty: returned,
@@ -127,7 +129,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       setReason(draft?.reason ?? voucher.return_reason ?? voucher.narration ?? '')
       if (draft?.lines?.length) setLines(draft.lines)
       else if (source) setLines(makeLines(source, voucher))
-      else setLines((voucher.invoice_items || []).map(line => ({ ...line, source_invoice_item_id: undefined, item_name: line.item_name || items.find(item => item.id === line.item_id)?.name || '', unit: line.unit || items.find(item => item.id === line.item_id)?.unit || '', entry_unit: line.entry_unit || line.unit, conversion_factor: line.conversion_factor || 1, cost_rate: line.cost_rate || stock.find(entry => entry.id === line.item_id)?.avg_cost || 0, original_qty: 0, returned_qty: 0 })))
+      else setLines((voucher.invoice_items || []).map(line => ({ ...line, rate: formatRateInput(line.rate), source_invoice_item_id: undefined, item_name: line.item_name || items.find(item => item.id === line.item_id)?.name || '', unit: line.unit || items.find(item => item.id === line.item_id)?.unit || '', entry_unit: line.entry_unit || line.unit, conversion_factor: line.conversion_factor || 1, cost_rate: line.cost_rate || stock.find(entry => entry.id === line.item_id)?.avg_cost || 0, original_qty: 0, returned_qty: 0 })))
     } else {
       setLines(current => current.length ? current : [emptyManualLine()])
     }
@@ -171,12 +173,13 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     const item = items.find(entry => entry.id === line.item_id)
     const oldFactor = line.conversion_factor || 1
     const factor = unitFactor(item, mode)
-    return { ...line, entry_unit: unitName(item, mode), unit: unitName(item, mode), conversion_factor: factor, rate: fromBaseRate(toBaseRate(line.rate, oldFactor), factor) }
+    return { ...line, entry_unit: unitName(item, mode), unit: unitName(item, mode), conversion_factor: factor, rate: formatRateInput(fromBaseRate(toBaseRate(rateInputNumber(line.rate), oldFactor), factor)) }
   }))
 
   const selectedItems = lines.filter(line => original ? line.qty > 0 : !!line.item_id || line.qty > 0)
-  const preview = selectedItems.length && (original || partyAccountId) ? buildReturnVoucherData({
-    type, original, party_account_id: partyAccountId, vat_rate: manualVatRate, items: selectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? partyAccountId : settlementAccountId,
+  const numericSelectedItems = useMemo(() => selectedItems.map(line => ({ ...line, rate: rateInputNumber(line.rate) })), [selectedItems])
+  const preview = numericSelectedItems.length && (original || partyAccountId) ? buildReturnVoucherData({
+    type, original, party_account_id: partyAccountId, vat_rate: manualVatRate, items: numericSelectedItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? partyAccountId : settlementAccountId,
     restock_items: true, stock_condition: stockCondition, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
@@ -198,7 +201,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     if (!original && !partyAccountId) return setError(`Select a ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular}.`)
     if (!reason.trim()) return setError('Enter the reason for the return.')
     if (!selectedItems.length) return setError('Enter a quantity for at least one item.')
-    for (const line of selectedItems) {
+    for (const line of numericSelectedItems) {
       if (!line.item_id || !Number.isFinite(line.qty) || line.qty <= 0 || !Number.isFinite(line.rate) || line.rate < 0) return setError('Select an item and enter a quantity greater than zero for every return line. Rate can be zero but cannot be negative.')
       if (original) {
         const remaining = round2(line.original_qty - line.returned_qty)
@@ -206,7 +209,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       }
     }
     if (settlementMode !== 'party' && !settlementAccountId) return setError('Select a settlement account.')
-    const returnItems: ReturnItemInput[] = selectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
+    const returnItems: ReturnItemInput[] = numericSelectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
     const params: ReturnSaveParams = { type, original_voucher_id: original?.id, party_account_id: original?.party_account_id || partyAccountId, vat_rate: original ? original.vat_rate : manualVatRate, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? (original?.party_account_id || partyAccountId) : settlementAccountId, restock_items: true, stock_condition: stockCondition, return_reason: reason.trim(), date_bs: dateBs }
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
@@ -265,7 +268,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         party_account_id: partyAccountId || null,
         is_cash: settlementMode === 'cash',
         total: preview?.total || 0,
-        draft_payload: { partyAccountId, originalId, dateBs, lines, settlementMode, settlementAccountId, stockCondition, manualVatRate, reason },
+        draft_payload: { partyAccountId, originalId, dateBs, lines: numericSelectedItems.map(line => ({ ...line, rate: formatRateInput(line.rate) })), settlementMode, settlementAccountId, stockCondition, manualVatRate, reason },
       })
       onClose()
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)) }
@@ -296,9 +299,9 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
 
           {original && <div className="rounded-md border bg-muted/20 p-3 text-sm"><span className="font-medium">Original document:</span> {original.invoice_no || original.seq} | {party?.name || 'Cash'} | VAT {original.vat_rate || 0}% | Total {fmtMoney(original.total)}</div>}
 
-          {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(line.rate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</td></tr>})}</tbody></table></div>}
+          {original && <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Item</th><th className="report-th text-right">Original</th><th className="report-th text-right">Returned</th><th className="report-th text-right">Remaining</th><th className="report-th text-right">Return Qty</th><th className="report-th text-right">Rate</th><th className="report-th text-right">Amount</th></tr></thead><tbody>{lines.map((line, index) => { const remaining = round2(line.original_qty - line.returned_qty); const lineRate = rateInputNumber(line.rate); return <tr key={line.source_invoice_item_id} className="border-t"><td className="report-td font-medium">{line.item_name}<span className="ml-1 text-xs text-muted-foreground">({line.unit})</span></td><td className="report-td text-right num">{line.original_qty}</td><td className="report-td text-right num">{line.returned_qty}</td><td className="report-td text-right num font-semibold">{remaining}</td><td className="report-td"><Input type="number" min="0" max={remaining} step="any" value={line.qty || ''} onChange={event => setLines(lines.map((item, itemIndex) => itemIndex === index ? { ...item, qty: Number(event.target.value) } : item))} className="ml-auto w-28 text-right" /></td><td className="report-td text-right num">{fmtMoney(lineRate)}</td><td className="report-td text-right num font-semibold">{fmtMoney(line.qty * lineRate)}</td></tr>})}</tbody></table></div>}
 
-          {!original && <div className="space-y-2 overflow-x-auto rounded-md border p-2"><div className="grid min-w-[700px] grid-cols-[minmax(15rem,1fr)_7rem_8rem_9rem_10rem_2rem] gap-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"><span>Item</span><span>Qty</span><span>Unit</span><span>Rate</span><span className="text-right">Amount</span><span /></div>{lines.map((line, index) => { const item = items.find(entry => entry.id === line.item_id); const mode: UnitMode = item?.alternate_unit && !item.is_service && line.entry_unit === item.alternate_unit ? 'alternate' : 'main'; return <div key={index} className="grid min-w-[700px] grid-cols-[minmax(15rem,1fr)_7rem_8rem_9rem_10rem_2rem] items-center gap-2"><SearchableSelect value={line.item_id} onValueChange={value => updateManualItem(index, value)} placeholder="Select item..." searchPlaceholder="Search item, SKU or barcode..." options={items.filter(entry => !entry.is_archived).map(entry => ({ value: entry.id, label: entry.is_service ? `${entry.name} (Service)` : entry.name, searchText: `${entry.sku || ''} ${entry.barcode || ''} ${entry.unit} ${entry.alternate_unit || ''} ${entry.is_service ? 'service' : ''}` }))} /><Input type="number" min="0" step="any" value={line.qty || ''} onChange={event => setLines(current => current.map((entry, row) => row === index ? { ...entry, qty: Number(event.target.value) } : entry))} placeholder="Qty" />{item?.alternate_unit && !item.is_service ? <SearchableSelect value={mode} onValueChange={value => updateManualUnit(index, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} /> : <div className="flex h-8 items-center px-2 text-sm">{item?.is_service ? 'Service' : item?.unit || '—'}</div>}<Input type="number" min="0" step="any" value={Number.isFinite(line.rate) ? line.rate : ''} onChange={event => setLines(current => current.map((entry, row) => row === index ? { ...entry, rate: Number(event.target.value) } : entry))} placeholder="Rate" /><div className="text-right num font-semibold">{fmtMoney(line.qty * line.rate)}</div><Button type="button" variant="ghost" size="icon" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>})}<Button type="button" variant="outline" size="sm" onClick={() => setLines(current => [...current, emptyManualLine()])}><Plus className="mr-1 h-4 w-4" />Add item</Button></div>}
+          {!original && <div className="space-y-2 overflow-x-auto rounded-md border p-2"><div className="grid min-w-[700px] grid-cols-[minmax(15rem,1fr)_7rem_8rem_9rem_10rem_2rem] gap-2 px-1 text-xs font-semibold uppercase tracking-wider text-muted-foreground"><span>Item</span><span>Qty</span><span>Unit</span><span>Rate</span><span className="text-right">Amount</span><span /></div>{lines.map((line, index) => { const item = items.find(entry => entry.id === line.item_id); const mode: UnitMode = item?.alternate_unit && !item.is_service && line.entry_unit === item.alternate_unit ? 'alternate' : 'main'; const lineRate = rateInputNumber(line.rate); return <div key={index} className="grid min-w-[700px] grid-cols-[minmax(15rem,1fr)_7rem_8rem_9rem_10rem_2rem] items-center gap-2"><SearchableSelect value={line.item_id} onValueChange={value => updateManualItem(index, value)} placeholder="Select item..." searchPlaceholder="Search item, SKU or barcode..." options={items.filter(entry => !entry.is_archived).map(entry => ({ value: entry.id, label: entry.is_service ? `${entry.name} (Service)` : entry.name, searchText: `${entry.sku || ''} ${entry.barcode || ''} ${entry.unit} ${entry.alternate_unit || ''} ${entry.is_service ? 'service' : ''}` }))} /><Input type="number" min="0" step="any" value={line.qty || ''} onChange={event => setLines(current => current.map((entry, row) => row === index ? { ...entry, qty: Number(event.target.value) } : entry))} placeholder="Qty" />{item?.alternate_unit && !item.is_service ? <SearchableSelect value={mode} onValueChange={value => updateManualUnit(index, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} /> : <div className="flex h-8 items-center px-2 text-sm">{item?.is_service ? 'Service' : item?.unit || '—'}</div>}<Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={event => setLines(current => current.map((entry, row) => row === index ? { ...entry, rate: event.target.value } : entry))} onBlur={() => setLines(current => current.map((entry, row) => row === index ? { ...entry, rate: formatRateInput(entry.rate) } : entry))} placeholder="Rate" /><div className="text-right num font-semibold">{fmtMoney(line.qty * lineRate)}</div><Button type="button" variant="ghost" size="icon" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button></div>})}<Button type="button" variant="outline" size="sm" onClick={() => setLines(current => [...current, emptyManualLine()])}><Plus className="mr-1 h-4 w-4" />Add item</Button></div>}
 
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Settlement</Label><SearchableSelect autoFocus={!!voucher} value={settlementMode} onValueChange={value => { const mode = value as 'party' | 'cash' | 'bank'; setSettlementMode(mode); if (mode === 'cash') setSettlementAccountId(cashAccountId); if (mode === 'bank') setSettlementAccountId(defaultBankId) }} options={[...(partyAccountId ? [{ value: 'party', label: `Adjust ${partyTerminology(isSalesReturn ? 'customer' : 'supplier').singular} balance` }] : []), { value: 'cash', label: `Cash ${isSalesReturn ? 'refund' : 'received'}` }, { value: 'bank', label: `Bank account ${isSalesReturn ? 'refund' : 'received'}` }]} />{settlementMode === 'bank' && <SearchableSelect value={settlementAccountId} onValueChange={setSettlementAccountId} placeholder="Select bank account" options={banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank`, disabled: !!account.is_archived }))} />}<LedgerBalanceHint account={activeSettlementAccount} party={settlementMode === 'party' ? party : null} /></div>

@@ -8,12 +8,30 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import type { InvoiceItem, StockLine, Voucher, VoucherLine } from '@/types'
+import type { InvoiceItem, Item, StockLine, Voucher, VoucherLine } from '@/types'
 import { legacySettlementAccountId } from '@/lib/banks'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
+
+const qtyText = (value: number) => Number(value.toFixed(2)).toLocaleString('en-NP', { maximumFractionDigits: 2 })
+
+function invoicePrimaryQty(line: InvoiceItem, item?: Item) {
+  const unit = line.entry_unit || line.unit || item?.unit || ''
+  return `${qtyText(Number(line.qty) || 0)}${unit ? ` ${unit}` : ''}`
+}
+
+function invoiceAlternativeQty(line: InvoiceItem, item?: Item) {
+  const factor = Number(item?.alternate_conversion || 0)
+  if (!item?.alternate_unit || factor <= 1) return ''
+  const entryUnit = (line.entry_unit || line.unit || item.unit || '').trim().toLowerCase()
+  const alternateUnit = item.alternate_unit.trim().toLowerCase()
+  if (entryUnit === alternateUnit || Number(line.conversion_factor || 1) > 1) {
+    return `${qtyText((Number(line.qty) || 0) / factor)} ${item.unit}`
+  }
+  return `${qtyText((Number(line.qty) || 0) * factor)} ${item.alternate_unit}`
+}
 
 function voucherBadgeVariant(type: string, cancelled: boolean) {
   if (cancelled) return 'cancelled' as const
@@ -141,6 +159,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
               <tr className="bg-muted/50">
                 <th className="text-left text-xs uppercase tracking-wider text-muted-foreground px-3 py-2 font-semibold">Item</th>
                 <th className="text-right text-xs uppercase tracking-wider text-muted-foreground px-3 py-2 font-semibold">Qty</th>
+                <th className="text-right text-xs uppercase tracking-wider text-muted-foreground px-3 py-2 font-semibold">Alt. Qty</th>
                 <th className="text-right text-xs uppercase tracking-wider text-muted-foreground px-3 py-2 font-semibold">Rate</th>
                 <th className="text-right text-xs uppercase tracking-wider text-muted-foreground px-3 py-2 font-semibold">Amount</th>
               </tr>
@@ -151,7 +170,8 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
                 return (
                   <tr key={i} className="border-t border-border">
                     <td className="px-3 py-2">{it.item_name || item?.name || it.item_id}</td>
-                    <td className="px-3 py-2 text-right num">{it.qty}</td>
+                    <td className="px-3 py-2 text-right num">{invoicePrimaryQty(it, item)}</td>
+                    <td className="px-3 py-2 text-right num text-muted-foreground">{invoiceAlternativeQty(it, item)}</td>
                     <td className="px-3 py-2 text-right num">{fmtMoney(it.rate)}</td>
                     <td className="px-3 py-2 text-right num font-semibold">{fmtMoney(it.qty * it.rate)}</td>
                   </tr>
@@ -273,7 +293,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <tr>
           <td>${index + 1}</td>
           <td>${esc(it.item_name || item?.name || it.item_id)}</td>
-          <td class="right">${esc(it.qty)}</td>
+          <td class="right">${esc(invoicePrimaryQty(it, item))}</td>
+          <td class="right muted">${esc(invoiceAlternativeQty(it, item))}</td>
           <td class="right">${esc(fmtMoney(it.rate))}</td>
           <td class="right">${esc(fmtMoney(it.qty * it.rate))}</td>
         </tr>
@@ -309,7 +330,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     const vatEnabled = company?.vat_enabled ?? true
     const rows = isInvoice ? invoiceRows : isStock ? stockRows : ledgerRows
     const head = isInvoice
-      ? '<tr><th>#</th><th>Item</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>'
+      ? '<tr><th class="col-no">#</th><th class="col-item">Item</th><th class="right col-qty">Qty</th><th class="right col-alt">Alt. Qty</th><th class="right col-rate">Rate</th><th class="right col-amount">Amount</th></tr>'
       : isStock
         ? '<tr><th>#</th><th>Item</th><th>Movement</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>'
         : '<tr><th>#</th><th>Account</th><th>Debit</th><th>Credit</th></tr>'
@@ -345,19 +366,28 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             @page { size: ${esc(printFormat)}; margin: 10mm; }
             * { box-sizing: border-box; }
             body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; }
-            .sheet { width: 100%; min-height: 190mm; padding: 2mm; }
-            .top { display: flex; justify-content: space-between; gap: 12px; border-bottom: 1px solid #111827; padding-bottom: 8px; }
-            h1 { margin: 0; font-size: 20px; letter-spacing: 0; }
-            h2 { margin: 2px 0 0; font-size: 13px; font-weight: 600; }
-            p { margin: 2px 0; }
+            .sheet { width: 100%; min-height: 190mm; padding: 0 1mm; }
+            .invoice-head { display: grid; grid-template-columns: minmax(0,1fr) 50mm; gap: 8mm; align-items: start; border-top: 1.5px solid #111827; padding: 8mm 2mm 7mm; }
+            h1 { margin: 0 0 5px; font-size: 24px; line-height: 1.05; letter-spacing: 0; }
+            h2 { margin: 0 0 4px; font-size: 24px; line-height: 1; text-align: left; text-transform: uppercase; }
+            p { margin: 3px 0; }
             .muted { color: #4b5563; }
-            .meta { text-align: right; min-width: 35mm; }
-            .party { margin: 10px 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px; }
-            .box { border: 1px solid #d1d5db; padding: 6px; min-height: 20mm; }
-            table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+            .company-lines { font-size: 12px; line-height: 1.35; }
+            .meta { width: 44mm; margin-left: auto; text-align: left; }
+            .meta-row { display: grid; grid-template-columns: 20mm 2mm 1fr; gap: 2mm; align-items: baseline; margin: 3px 0; }
+            .meta-row strong { text-align: left; }
+            .meta-row strong, .meta-row span { white-space: nowrap; }
+            .party { margin: 0 0 4mm; display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
+            .box { border: 1px solid #111827; padding: 4mm; min-height: 21mm; }
+            .box-title { margin-bottom: 4mm; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin-top: 5px; }
             th, td { border: 1px solid #d1d5db; padding: 5px; vertical-align: top; }
             th { text-align: left; background: #f3f4f6; font-size: 10px; text-transform: uppercase; }
             .right { text-align: right; }
+            .col-no { width: 7mm; }
+            .col-item { width: auto; }
+            .col-qty, .col-alt { width: 15mm; }
+            .col-rate, .col-amount { width: 23mm; }
             .totals { margin-left: auto; margin-top: 8px; width: 55mm; }
             .totals div { display: flex; justify-content: space-between; padding: 3px 0; }
             .totals .grand { border-top: 1px solid #111827; font-size: 13px; padding-top: 6px; }
@@ -369,33 +399,36 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         </head>
         <body>
           <main class="sheet">
-            <section class="top">
+            <section class="invoice-head">
               <div>
                 ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" referrerpolicy="no-referrer" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
                 <h1>${esc(company?.name || 'KhataERP')}</h1>
-                <p class="muted">${esc(company?.address || '')}</p>
-                <p class="muted">${company?.pan_vat ? `PAN/VAT: ${esc(company.pan_vat)}` : ''} ${company?.phone ? ` | Phone: ${esc(company.phone)}` : ''}</p>
+                <div class="company-lines">
+                  ${company?.address ? `<p>${esc(company.address)}</p>` : ''}
+                  ${company?.phone ? `<p>Phone: ${esc(company.phone)}</p>` : ''}
+                  ${company?.pan_vat ? `<p>PAN/VAT: ${esc(company.pan_vat)}</p>` : ''}
+                </div>
               </div>
               <div class="meta">
                 <h2>${esc(documentTitle)}</h2>
-                <p><strong>No:</strong> ${esc(savedVoucherNumber(voucher))}</p>
-                ${voucher.type === 'Purchase' && (voucher.supplier_invoice_no || invoiceDraft?.supplierInvoiceNo) ? `<p><strong>Supplier Invoice No:</strong> ${esc(voucher.supplier_invoice_no || invoiceDraft?.supplierInvoiceNo)}</p>` : ''}
-                <p><strong>Date:</strong> ${esc(fmtDate(voucher.date_bs))}</p>
-                ${(voucher.type === 'Sales' || voucher.type === 'Purchase') ? `<p><strong>Credit Days:</strong> ${esc(invoiceDraft?.creditDays ?? voucher.credit_days ?? 0)}</p><p><strong>Due Date:</strong> ${esc(fmtDate(voucher.due_date_bs || voucher.date_bs))}</p>` : ''}
-                ${originalVoucher ? `<p><strong>Original Invoice:</strong> ${esc(originalVoucher.invoice_no || originalVoucher.seq)}</p><p><strong>Original Date:</strong> ${esc(fmtDate(originalVoucher.date_bs))}</p>` : ''}
+                <p class="meta-row"><strong>No.</strong><span>:</span><span>${esc(savedVoucherNumber(voucher))}</span></p>
+                ${voucher.type === 'Purchase' && (voucher.supplier_invoice_no || invoiceDraft?.supplierInvoiceNo) ? `<p class="meta-row"><strong>Supplier No.</strong><span>:</span><span>${esc(voucher.supplier_invoice_no || invoiceDraft?.supplierInvoiceNo)}</span></p>` : ''}
+                <p class="meta-row"><strong>Date</strong><span>:</span><span>${esc(fmtDate(voucher.date_bs))}</span></p>
+                ${(voucher.type === 'Sales' || voucher.type === 'Purchase') ? `<p class="meta-row"><strong>Credit Days</strong><span>:</span><span>${esc(invoiceDraft?.creditDays ?? voucher.credit_days ?? 0)}</span></p><p class="meta-row"><strong>Due Date</strong><span>:</span><span>${esc(fmtDate(voucher.due_date_bs || voucher.date_bs))}</span></p>` : ''}
+                ${originalVoucher ? `<p class="meta-row"><strong>Original</strong><span>:</span><span>${esc(originalVoucher.invoice_no || originalVoucher.seq)}</span></p><p class="meta-row"><strong>Orig. Date</strong><span>:</span><span>${esc(fmtDate(originalVoucher.date_bs))}</span></p>` : ''}
               </div>
             </section>
             <section class="party">
               <div class="box">
-                <p class="muted">${voucher.type === 'Payment' ? 'Paid to' : voucher.type === 'Receipt' ? 'Received from' : voucher.type === 'Sales Return' ? 'Returned by' : voucher.type === 'Purchase Return' ? 'Returned to' : 'Party'}</p>
+                <p class="box-title">Party Details</p>
                 <p><strong>${esc(partyName)}</strong></p>
                 <p>${esc(party?.address || '')}</p>
                 <p>${party?.pan_vat ? `PAN/VAT: ${esc(party.pan_vat)}` : ''}</p>
               </div>
               <div class="box">
-                <p class="muted">Voucher Type</p>
-                <p><strong>${esc(voucher.type)}</strong></p>
-                <p>${voucher.cancelled ? 'Cancelled' : 'Active'}</p>
+                <p class="box-title">Voucher Details</p>
+                <p class="meta-row"><strong>Voucher Type</strong><span>:</span><span>${esc(voucher.type)}</span></p>
+                <p class="meta-row"><strong>Status</strong><span>:</span><span>${voucher.cancelled ? 'Cancelled' : 'Active'}</span></p>
               </div>
             </section>
             <table>
