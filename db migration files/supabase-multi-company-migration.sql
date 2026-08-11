@@ -253,10 +253,23 @@ begin
     on category.company_id = target_company_id
    and category.name = seed.group_name
    and category.account_type = seed.account_type
+  where not exists (
+    select 1 from public.accounts existing
+    where existing.company_id = target_company_id
+      and (
+        existing.id = target_company_id::text || ':' || seed.account_key
+        or lower(btrim(existing.name)) = lower(btrim(seed.account_name))
+      )
+  )
   on conflict (id) do nothing;
 
   insert into public.item_categories(company_id, name, is_archived)
-  values (target_company_id, 'General', false)
+  select target_company_id, 'General', false
+  where not exists (
+    select 1 from public.item_categories existing
+    where existing.company_id = target_company_id
+      and lower(btrim(existing.name)) = lower('General')
+  )
   on conflict (company_id, name) do nothing;
 end;
 $$;

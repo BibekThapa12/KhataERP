@@ -992,10 +992,23 @@ begin
     on category.company_id = target_company_id
    and category.name = seed.group_name
    and category.account_type = seed.account_type
+  where not exists (
+    select 1 from public.accounts existing
+    where existing.company_id = target_company_id
+      and (
+        existing.id = target_company_id::text || ':' || seed.account_key
+        or lower(btrim(existing.name)) = lower(btrim(seed.account_name))
+      )
+  )
   on conflict (id) do nothing;
 
   insert into public.item_categories(company_id, name, is_archived)
-  values (target_company_id, 'General', false)
+  select target_company_id, 'General', false
+  where not exists (
+    select 1 from public.item_categories existing
+    where existing.company_id = target_company_id
+      and lower(btrim(existing.name)) = lower('General')
+  )
   on conflict (company_id, name) do nothing;
 end;
 $$;
@@ -2360,6 +2373,12 @@ begin
     ('Incomes', 'Income'),
     ('Expenses', 'Expense')
   ) root(name, account_type)
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = root.account_type
+      and lower(btrim(existing.name)) = lower(btrim(root.name))
+  )
   on conflict (company_id, name, account_type) do update
   set parent_category_id = null, is_system = true, is_archived = false;
 
@@ -2384,6 +2403,12 @@ begin
     on parent.company_id = target_company_id
    and parent.name = child.parent_name
    and parent.account_type = child.account_type
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = child.account_type
+      and lower(btrim(existing.name)) = lower(btrim(child.name))
+  )
   on conflict (company_id, name, account_type) do update
   set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
 
@@ -2407,6 +2432,12 @@ begin
     on parent.company_id = target_company_id
    and parent.name = child.parent_name
    and parent.account_type = child.account_type
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = child.account_type
+      and lower(btrim(existing.name)) = lower(btrim(child.name))
+  )
   on conflict (company_id, name, account_type) do update
   set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
 
@@ -2416,6 +2447,12 @@ begin
   where parent.company_id = target_company_id
     and parent.name = 'Loans & Advances (Asset)'
     and parent.account_type = 'Asset'
+    and not exists (
+      select 1 from public.account_categories existing
+      where existing.company_id = target_company_id
+        and existing.account_type = 'Asset'
+        and lower(btrim(existing.name)) = lower('Employees / Staffs')
+    )
   on conflict (company_id, name, account_type) do update
   set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
 end;
@@ -5952,10 +5989,23 @@ begin
     on category.company_id = target_company_id
    and category.name = seed.group_name
    and category.account_type = seed.account_type
+  where not exists (
+    select 1 from public.accounts existing
+    where existing.company_id = target_company_id
+      and (
+        existing.id = target_company_id::text || ':' || seed.account_key
+        or lower(btrim(existing.name)) = lower(btrim(seed.account_name))
+      )
+  )
   on conflict (id) do nothing;
 
   insert into public.item_categories(company_id, name, is_archived)
-  values (target_company_id, 'General', false)
+  select target_company_id, 'General', false
+  where not exists (
+    select 1 from public.item_categories existing
+    where existing.company_id = target_company_id
+      and lower(btrim(existing.name)) = lower('General')
+  )
   on conflict (company_id, name) do nothing;
 end;
 $$;

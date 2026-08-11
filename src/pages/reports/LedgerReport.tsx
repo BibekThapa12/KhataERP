@@ -190,6 +190,16 @@ function PrintableLedgerStatement({ company, mode, title, groupLabel, account, p
       </div>
     </div>
     <table className="ledger-statement-table">
+      <colgroup>
+        <col className="ledger-col-serial" />
+        <col className="ledger-col-date" />
+        <col className="ledger-col-type" />
+        <col className="ledger-col-number" />
+        <col className="ledger-col-particulars" />
+        <col className="ledger-col-debit" />
+        <col className="ledger-col-credit" />
+        <col className="ledger-col-balance" />
+      </colgroup>
       <thead><tr><th>S.No.</th><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead>
       <tbody>
         <tr className="ledger-opening-row"><td /><td /><td /><td /><td>Opening Balance</td><td>-</td><td>-</td><td>{formatLedgerBalance(opening, account)}</td></tr>

@@ -239,21 +239,26 @@
   .ledger-statement-meta p { display: grid; grid-template-columns: 88px 8px minmax(0, 1fr); gap: 3px; margin: 2px 0; }
   .ledger-statement-meta strong { font-weight: 600; }
   .ledger-statement-meta b { min-width: 0; overflow-wrap: anywhere; }
-  .ledger-statement-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 8px; }
+  .ledger-statement-table { width: 100%; height: auto !important; table-layout: fixed; border-collapse: collapse; font-size: 8px; line-height: 1.2; }
   .ledger-statement-table thead { display: table-header-group; }
+  .ledger-statement-table tbody { display: table-row-group !important; height: auto !important; }
+  .ledger-statement-table tr { height: auto !important; min-height: 0 !important; break-inside: avoid; page-break-inside: avoid; }
   .ledger-statement-table th,
-  .ledger-statement-table td { border-bottom: 1px solid #9ca3af; border-right: 1px solid #9ca3af; padding: 4px 4px; overflow-wrap: anywhere; vertical-align: middle; }
+  .ledger-statement-table td { height: auto !important; min-height: 0 !important; border-bottom: 1px solid #9ca3af; border-right: 1px solid #9ca3af; padding: 4px 4px !important; overflow-wrap: anywhere; vertical-align: top; }
   .ledger-statement-table th:last-child,
   .ledger-statement-table td:last-child { border-right: 0; }
   .ledger-statement-table th { background: #f3f4f6 !important; color: #111827; font-weight: 700; text-align: center; }
-  .ledger-statement-table th:nth-child(1), .ledger-statement-table td:nth-child(1) { width: 11%; }
-  .ledger-statement-table th:nth-child(2), .ledger-statement-table td:nth-child(2) { width: 12%; }
-  .ledger-statement-table th:nth-child(3), .ledger-statement-table td:nth-child(3) { width: 13%; }
-  .ledger-statement-table th:nth-child(4), .ledger-statement-table td:nth-child(4) { width: 25%; }
-  .ledger-statement-table th:nth-child(5), .ledger-statement-table td:nth-child(5),
-  .ledger-statement-table th:nth-child(6), .ledger-statement-table td:nth-child(6) { width: 13%; text-align: right; white-space: nowrap; }
-  .ledger-statement-table th:nth-child(7), .ledger-statement-table td:nth-child(7) { width: 13%; text-align: right; white-space: nowrap; }
-  .ledger-opening-row td:nth-child(4) { font-weight: 700; }
+  .ledger-statement-table .ledger-col-serial { width: 5%; }
+  .ledger-statement-table .ledger-col-date { width: 10%; }
+  .ledger-statement-table .ledger-col-type { width: 10%; }
+  .ledger-statement-table .ledger-col-number { width: 12%; }
+  .ledger-statement-table .ledger-col-particulars { width: 27%; }
+  .ledger-statement-table .ledger-col-debit,
+  .ledger-statement-table .ledger-col-credit { width: 11%; }
+  .ledger-statement-table .ledger-col-balance { width: 14%; }
+  .ledger-statement-table th:nth-child(n+6),
+  .ledger-statement-table td:nth-child(n+6) { text-align: right; white-space: nowrap; }
+  .ledger-opening-row td:nth-child(5) { font-weight: 700; }
   .ledger-opening-row td:last-child,
   .ledger-total-row,
   .ledger-closing-row { font-weight: 700; }
@@ -301,11 +306,12 @@
   .report-page.stock-summary-report-page .report-content .stock-summary-compact td { padding: 5px !important; font-size: 10px !important; line-height: 1.3; }
   .report-page.stock-summary-report-page .report-content .stock-summary-compact th *,
   .report-page.stock-summary-report-page .report-content .stock-summary-compact td * { font-size: inherit !important; }
-  .stock-summary-report-page .stock-summary-compact th:nth-child(1) { width: 27%; }
-  .stock-summary-report-page .stock-summary-compact th:nth-child(3) { width: 27%; }
-  .stock-summary-report-page .stock-summary-compact th:nth-child(4) { width: 15%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(1) { width: 6%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(2) { width: 36%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(4) { width: 16%; }
   .stock-summary-report-page .stock-summary-compact th:nth-child(5) { width: 14%; }
-  .stock-summary-report-page .stock-summary-compact th:nth-child(6) { width: 17%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(6) { width: 13%; }
+  .stock-summary-report-page .stock-summary-compact th:nth-child(7) { width: 15%; }
   .report-page.stock-summary-report-page .report-content .stock-summary-detailed { table-layout: fixed; font-size: 9px !important; }
   .report-page.stock-summary-report-page .report-content .stock-summary-detailed th,
   .report-page.stock-summary-report-page .report-content .stock-summary-detailed td { padding: 2.5px !important; font-size: 9px !important; line-height: 1.25; }
@@ -320,14 +326,15 @@
   .stock-summary-report-page .report-table-card > div { width: 100% !important; max-width: 100% !important; overflow: visible !important; }
   .stock-summary-report-page * { scrollbar-width: none; }
   .stock-summary-report-page *::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(1) { width: 18%; }
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(3) { width: 15%; }
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(4),
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(1) { width: 4%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(2) { width: 21%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(4) { width: 13%; }
   .stock-summary-report-page .stock-summary-detailed th:nth-child(5),
   .stock-summary-report-page .stock-summary-detailed th:nth-child(6),
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(7) { width: 11%; }
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(8) { width: 11%; }
-  .stock-summary-report-page .stock-summary-detailed th:nth-child(9) { width: 12%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(7),
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(8) { width: 10%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(9) { width: 10%; }
+  .stock-summary-report-page .stock-summary-detailed th:nth-child(10) { width: 12%; }
   .stock-ledger-screen-header,
   .stock-ledger-screen-opening,
   .stock-ledger-screen-total { display: none !important; }
