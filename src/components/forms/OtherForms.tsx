@@ -192,6 +192,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
@@ -315,6 +316,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
   return (
+    <>
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
@@ -335,7 +337,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
               const selectedParty = parties.find(party => party.account_id === allocation.account_id)
               return <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
                 <div className="min-w-0 space-y-1.5">
-                  <SearchableSelect value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
+                  <div className="flex min-w-0 gap-1.5">
+                    <SearchableSelect className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
+                    <Button type="button" variant="outline" size="icon" title="Create ledger" aria-label="Create ledger" className="h-9 w-9 shrink-0" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /></Button>
+                  </div>
                   <LedgerBalanceHint account={selectedAccount} party={selectedParty} />
                 </div>
                 <Input type="number" min="0.01" step="any" value={allocation.amount} onChange={event => updateAllocation(index, 'amount', event.target.value)} placeholder="0.00" className="text-right" />
@@ -368,6 +373,11 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         </DialogFooter>
       </DialogContent>
     </Dialog>
+    {ledgerLineIndex !== null && <LedgerDialog open onClose={() => setLedgerLineIndex(null)} onCreated={account => {
+      updateAllocation(ledgerLineIndex, 'account_id', account.id)
+      setLedgerLineIndex(null)
+    }} />}
+    </>
   )
 }
 

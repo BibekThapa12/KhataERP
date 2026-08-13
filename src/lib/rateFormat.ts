@@ -7,5 +7,5 @@ export function formatRateInput(value: string | number | null | undefined) {
 
 export function rateInputNumber(value: string | number | null | undefined) {
   const numeric = Number(value)
-  return Number.isFinite(numeric) ? Number(numeric.toFixed(2)) : 0
+  return Number.isFinite(numeric) ? numeric : 0
 }

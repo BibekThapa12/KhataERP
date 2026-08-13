@@ -26,7 +26,7 @@ import type { Voucher } from '@/types'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
-interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number }
+interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string }
 type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100 }
@@ -134,7 +134,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const next = [...lines]
     if (field === 'item_id') {
       const item = items.find(i => i.id === value)
-      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1 }
+      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined }
       if (!isSales) {
         const stock = getStockEntry(value as string)
         if (stock.avg_cost > 0) next[idx].rate = formatRateInput(stock.avg_cost)
@@ -145,7 +145,14 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         if (item?.sell_rate) next[idx].rate = formatRateInput(item.sell_rate)
       }
     } else if (field === 'rate') {
-      next[idx] = { ...next[idx], rate: value }
+      next[idx] = { ...next[idx], rate: value, amount_input: undefined }
+    } else if (field === 'qty') {
+      const qty = Number(value)
+      const enteredAmount = next[idx].amount_input
+      const derivedRate = enteredAmount !== undefined && enteredAmount !== ''
+        ? invoiceRateFromAmount(Number(enteredAmount), qty)
+        : null
+      next[idx] = { ...next[idx], qty, ...(derivedRate !== null ? { rate: String(derivedRate) } : {}) }
     } else {
       next[idx] = { ...next[idx], [field]: Number(value) }
     }
@@ -157,15 +164,22 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   }
 
   const updateLineAmount = (idx: number, value: string) => {
-    const amount = Number(value)
     const line = lines[idx]
-    if (!line || !Number.isFinite(amount) || amount < 0) return
+    if (!line) return
+    if (value === '') {
+      const next = [...lines]
+      next[idx] = { ...line, amount_input: '', rate: '' }
+      setLines(next)
+      return
+    }
+    const amount = Number(value)
+    if (!Number.isFinite(amount) || amount < 0) return
     if (!Number.isFinite(line.qty) || line.qty <= 0) {
       setError('Enter a quantity greater than zero before entering the line amount.')
       return
     }
     const next = [...lines]
-    next[idx] = { ...line, rate: formatRateInput(invoiceRateFromAmount(amount, line.qty) ?? 0) }
+    next[idx] = { ...line, amount_input: value, rate: String(invoiceRateFromAmount(amount, line.qty) ?? 0) }
     setLines(next)
     setError('')
   }
@@ -375,7 +389,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               <div className="space-y-2">
                 {lines.map((line, idx) => {
                   const rate = rateInputNumber(line.rate)
-                  const amt = round2Local(line.qty * rate)
+                  const calculatedAmount = round2Local(line.qty * rate)
+                  const amountValue = line.amount_input !== undefined ? line.amount_input : (Number.isFinite(calculatedAmount) ? calculatedAmount : '')
                   const selectedItem = items.find(item => item.id === line.item_id)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   const isServiceLine = !!selectedItem?.is_service
@@ -404,7 +419,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
-                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={Number.isFinite(amt) ? amt : ''} onChange={event => updateLineAmount(idx, event.target.value)} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
