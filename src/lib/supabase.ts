@@ -349,12 +349,31 @@ export async function fetchDeveloperUserCompanyLicenses(): Promise<DeveloperUser
 
 export interface DeveloperBackupRun {
   id: string; started_at: string; completed_at?: string | null; initiated_by: string
+  initiator_type?: 'manual' | 'automated' | 'agent_retry'
   total_companies: number; successful_companies: number; failed_companies: number
   status: 'running' | 'successful' | 'partial' | 'failed'
 }
 export interface DeveloperCompanyBackupStatus {
   company_id: string; last_exported_at?: string | null; last_attempted_at?: string | null
   last_export_status: 'successful' | 'failed'; last_exported_by?: string | null; last_error?: string | null
+}
+export interface DeveloperBackupAgent { id: string; name: string; created_at: string; last_seen_at?: string | null; revoked_at?: string | null }
+
+export async function listDeveloperBackupAgents() {
+  const { data, error } = await supabase.rpc('list_developer_backup_agents')
+  if (error) throw error
+  return (data || []) as DeveloperBackupAgent[]
+}
+
+export async function createDeveloperBackupAgent(name: string) {
+  const { data, error } = await supabase.rpc('create_developer_backup_agent', { p_name: name })
+  if (error) throw error
+  return data as { id: string; name: string; token: string; created_at: string }
+}
+
+export async function revokeDeveloperBackupAgent(id: string) {
+  const { error } = await supabase.rpc('revoke_developer_backup_agent', { p_agent_id: id })
+  if (error) throw error
 }
 
 export async function fetchDeveloperBackupStatus() {

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, ArrowLeft, Building2, CheckCircle2, ChevronDown, Database,
-  Download, FileText, Grid2X2, HardDrive, ListChecks, Loader2, Mail, NotebookText, PackageCheck,
+  Copy, Download, FileText, Grid2X2, HardDrive, KeyRound, ListChecks, Loader2, Mail, NotebookText, PackageCheck,
   RefreshCcw, ShieldCheck, Trash2, UserRound, Users,
 } from 'lucide-react'
 import {
@@ -16,6 +16,10 @@ import {
   exportDeveloperCompanySnapshot,
   recordDeveloperCompanyBackupResult,
   completeDeveloperBackupRun,
+  listDeveloperBackupAgents,
+  createDeveloperBackupAgent,
+  revokeDeveloperBackupAgent,
+  supabaseProjectHost,
   isDeveloperAdmin,
   updateDeveloperCompany,
   updateUserCompanyLimit,
@@ -23,6 +27,7 @@ import {
   type DeveloperSchemaStatusItem,
   type DeveloperBackupRun,
   type DeveloperCompanyBackupStatus,
+  type DeveloperBackupAgent,
 } from '@/lib/supabase'
 import { fmtDate } from '@/lib/utils'
 import { publicErrorMessage } from '@/lib/security'
@@ -986,6 +991,8 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
   const [results, setResults] = useState<BackupResult[]>([])
   const [error, setError] = useState('')
   const [details, setDetails] = useState(false)
+  const [agents, setAgents] = useState<DeveloperBackupAgent[]>([])
+  const [newAgentToken, setNewAgentToken] = useState('')
   const directorySupported = supportsDirectoryBackup()
   const targets = useMemo(() => {
     const seen = new Set<string>()
@@ -993,7 +1000,10 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
   }, [users])
 
   const refreshStatus = async () => {
-    try { const status = await fetchDeveloperBackupStatus(); setRuns(status.runs); setCompanyStatuses(status.companies) } catch { /* migration may not be installed yet */ }
+    try {
+      const [status, agentRows] = await Promise.all([fetchDeveloperBackupStatus(), listDeveloperBackupAgents()])
+      setRuns(status.runs); setCompanyStatuses(status.companies); setAgents(agentRows)
+    } catch { /* migrations may not be installed yet */ }
   }
 
   useEffect(() => {
@@ -1068,6 +1078,17 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
   const lastFullRun = runs.find(run => run.total_companies === companyCount && run.status !== 'running')
   const lastRun = runs.find(run => run.status !== 'running')
   const statusByCompany = new Map(companyStatuses.map(status => [status.company_id, status]))
+  const createAgent = async () => {
+    const name = window.prompt('Name this Windows backup agent:', 'B Drive Backup Agent')?.trim()
+    if (!name) return
+    try { const created = await createDeveloperBackupAgent(name); setNewAgentToken(created.token); await refreshStatus() }
+    catch (caught) { setError(publicErrorMessage(caught, 'creating Windows backup agent')) }
+  }
+  const revokeAgent = async (agent: DeveloperBackupAgent) => {
+    if (!window.confirm(`Revoke ${agent.name}? Its Windows task will no longer be able to download backups.`)) return
+    try { await revokeDeveloperBackupAgent(agent.id); await refreshStatus() }
+    catch (caught) { setError(publicErrorMessage(caught, 'revoking Windows backup agent')) }
+  }
 
   return <Card>
     <CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><div><CardTitle className="flex items-center gap-2 text-base"><HardDrive className="h-4 w-4" />Local Backup</CardTitle><p className="mt-1 text-xs text-muted-foreground">Portable company backups for every managed user and company.</p></div><Button variant="outline" size="sm" onClick={selectLocation} disabled={exporting}>{directory ? 'Change Location' : 'Select Backup Location'}</Button></div></CardHeader>
@@ -1076,11 +1097,16 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Backup Location</span><strong className="mt-1 block truncate">{directory?.name || (directorySupported ? 'Not selected' : 'ZIP download fallback')}</strong></div>
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Full Backup</span><strong className="mt-1 block">{lastFullRun?.completed_at ? new Date(lastFullRun.completed_at).toLocaleString() : 'Never'}</strong></div>
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Companies</span><strong className="mt-1 block num">{companyCount}</strong></div>
-        <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Result</span><strong className="mt-1 block">{lastRun ? `${lastRun.successful_companies} successful / ${lastRun.failed_companies} failed` : 'No backup yet'}</strong></div>
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Result</span><strong className="mt-1 block">{lastRun ? `${lastRun.successful_companies} successful / ${lastRun.failed_companies} failed` : 'No backup yet'}</strong>{lastRun?.initiator_type && <span className="capitalize text-muted-foreground">{lastRun.initiator_type}</span>}</div>
       </div>
       {!directorySupported && <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">This browser cannot write directly to B:\ or another folder. Export All downloads one ZIP; automatic replacement requires a Chromium browser with directory permission.</p>}
       {exporting && <div className="rounded-md border bg-muted/30 p-3 text-xs"><p className="font-semibold">Exporting backups...</p><p className="mt-1">Users: {users.length} · Companies: {exportTotal} · Completed: {completed} / {exportTotal}</p>{current && <p className="mt-1 text-muted-foreground">Current: {current}</p>}</div>}
       {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="rounded-md border p-3 text-xs">
+        <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold">Windows Background Agent</p><p className="text-muted-foreground">Runs at logon and every two hours, even when KhataERP is closed.</p></div><Button size="sm" variant="outline" onClick={() => void createAgent()}><KeyRound className="mr-1.5 h-4 w-4" />Create Agent Token</Button></div>
+        {newAgentToken && <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-900"><strong>Copy this token now. It is shown only once.</strong><div className="mt-1 flex items-center gap-2"><code className="min-w-0 flex-1 break-all rounded bg-white p-1">{newAgentToken}</code><Button size="icon" variant="outline" aria-label="Copy agent token" onClick={() => void navigator.clipboard.writeText(newAgentToken)}><Copy className="h-4 w-4" /></Button></div><p className="mt-1">Project URL: <code>https://{supabaseProjectHost}</code></p><p className="mt-1">Run <code>windows-backup-agent/Install-KhataERPBackupAgent.ps1</code> on the backup computer.</p></div>}
+        {agents.length > 0 && <div className="mt-2 space-y-1">{agents.map(agent => <div key={agent.id} className="flex items-center justify-between gap-2 border-t pt-1"><span><strong>{agent.name}</strong><span className="ml-2 text-muted-foreground">{agent.revoked_at ? 'Revoked' : agent.last_seen_at ? `Last synced ${new Date(agent.last_seen_at).toLocaleString()}` : 'Never connected'}</span></span>{!agent.revoked_at && <Button size="sm" variant="ghost" onClick={() => void revokeAgent(agent)}>Revoke</Button>}</div>)}</div>}
+      </div>
       <div className="flex flex-wrap gap-2"><Button onClick={() => void runExport()} disabled={exporting || !companyCount}><Download className="mr-1.5 h-4 w-4" />{exporting ? 'Exporting...' : results.length ? 'Export Again' : 'Export All Company Data'}</Button>{failedIds.size > 0 && <Button variant="outline" onClick={() => void runExport(failedIds)} disabled={exporting}>Retry Failed</Button>}{companyCount > 0 && <Button variant="ghost" onClick={() => setDetails(value => !value)}>{results.length ? 'View Details' : 'Company Status'}</Button>}</div>
       {details && <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2 text-xs">{results.map(result => <div key={result.companyId} className="flex items-start justify-between gap-3 border-b py-1 last:border-0"><div><strong>{result.companyName}</strong><span className="block text-muted-foreground">{result.userName}{result.error ? ` · ${result.error}` : ''}</span></div><Badge variant={result.successful ? 'default' : 'destructive'}>{result.successful ? 'Successful' : 'Failed'}</Badge></div>)}{!results.length && targets.map(target => { const status = statusByCompany.get(target.company.id); return <div key={target.company.id}>{target.company.name}: {status?.last_export_status || 'Not exported'}</div> })}</div>}
     </CardContent>

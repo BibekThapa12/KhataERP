@@ -1,0 +1,2 @@
+[functions.developer-backup]
+verify_jwt = false
