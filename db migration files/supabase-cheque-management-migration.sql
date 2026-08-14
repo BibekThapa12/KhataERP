@@ -3,7 +3,7 @@ begin;
 
 create table if not exists public.modules (
   id uuid primary key default gen_random_uuid(), key text not null unique, name text not null,
-  description text, default_price numeric(14,2) not null default 0, is_active boolean not null default true,
+  description text, default_price numeric(18,6) not null default 0, is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 insert into public.modules(key,name,description,default_price,is_active)
@@ -15,7 +15,7 @@ create table if not exists public.company_modules (
   module_id uuid not null references public.modules(id), is_enabled boolean not null default false,
   status text not null default 'disabled' check(status in ('active','trial','grace_period','read_only','disabled')),
   billing_type text not null default 'included' check(billing_type in ('included','monthly','yearly','one_time','custom')),
-  price numeric(14,2) not null default 0, payment_status text not null default 'pending' check(payment_status in ('paid','pending','overdue','waived','cancelled')),
+  price numeric(18,6) not null default 0, payment_status text not null default 'pending' check(payment_status in ('paid','pending','overdue','waived','cancelled')),
   starts_at date, expires_at date, settings jsonb not null default '{"enable_dashboard_widgets":true,"allow_due_date_before_issue_date":false,"default_upcoming_days":7,"require_status_reason_for_bounce":true,"require_status_reason_for_cancel":true,"allow_account_number_override":false,"enable_cheque_notifications":false,"enable_read_only_after_expiry":true}'::jsonb,
   internal_notes text, enabled_by uuid references auth.users(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   unique(company_id,module_id), check(expires_at is null or starts_at is null or expires_at >= starts_at)
@@ -98,7 +98,7 @@ create table if not exists public.cheques (
   id uuid primary key default gen_random_uuid(), company_id uuid not null references public.companies(id) on delete cascade,
   cheque_number text not null check(cheque_number ~ '^[A-Za-z0-9][A-Za-z0-9 /._-]{0,49}$'),
   bank_id uuid not null references public.cheque_banks(id), account_number text not null,
-  party_ledger_id text not null references public.accounts(id), amount numeric(14,2) not null check(amount>0),
+  party_ledger_id text not null references public.accounts(id), amount numeric(18,6) not null check(amount>0),
   issue_date date not null, issue_date_bs text not null, issue_date_bs_key integer not null,
   due_date date not null, due_date_bs text not null, due_date_bs_key integer not null,
   notes text, status text not null default 'pending' check(status in ('pending','cleared','bounced','cancelled')),

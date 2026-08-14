@@ -292,7 +292,7 @@ begin
         or (coalesce(line.debit, 0) > 0 and coalesce(line.credit, 0) > 0))
   ) then raise exception 'Voucher lines must contain one non-negative debit or credit'; end if;
 
-  if abs(debit_total - credit_total) > 0.01 then
+  if abs(debit_total - credit_total) > 0.000001 then
     raise exception 'Voucher debit and credit totals do not match';
   end if;
 
@@ -371,7 +371,7 @@ begin
 
   if voucher_record.type <> 'Stock Adjustment' then
     if line_count < 2 then raise exception 'Posted vouchers require at least two ledger lines'; end if;
-    if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.01 then
+    if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.000001 then
       raise exception 'Voucher total does not match its ledger posting';
     end if;
     if voucher_record.type in ('Receipt','Payment','Journal')
@@ -388,9 +388,9 @@ begin
 
   if voucher_record.type in ('Sales','Purchase','Sales Return','Purchase Return') then
     select count(*),
-           coalesce(sum(round(item.qty * item.rate, 2)), 0),
+           coalesce(sum(item.amount), 0),
            coalesce(sum(coalesce(item.discount_amount, 0)), 0),
-           coalesce(sum(coalesce(item.taxable_amount, round(item.qty * item.rate, 2))), 0),
+           coalesce(sum(coalesce(item.taxable_amount, item.amount)), 0),
            coalesce(sum(coalesce(item.vat_amount, 0)), 0)
       into item_count, calculated_subtotal, calculated_discount,
            calculated_taxable, calculated_vat
@@ -409,35 +409,35 @@ begin
       if calculated_discount < 0 or calculated_discount > calculated_subtotal then
         raise exception 'Invoice discount is outside the valid range';
       end if;
-      calculated_taxable := round(calculated_subtotal - calculated_discount, 2);
+      calculated_taxable := round(calculated_subtotal - calculated_discount, 6);
       if coalesce(voucher_record.vat_rate, 0) < 0 or coalesce(voucher_record.vat_rate, 0) > 100 then
         raise exception 'VAT rate is outside the valid range';
       end if;
-      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2);
+      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
     else
       if calculated_discount < 0 or calculated_discount > calculated_subtotal then
         raise exception 'Return discount is outside the valid range';
       end if;
-      if abs(calculated_taxable - round(calculated_subtotal - calculated_discount, 2)) > 0.01 then
+      if abs(calculated_taxable - round(calculated_subtotal - calculated_discount, 6)) > 0.000001 then
         raise exception 'Return taxable amounts are inconsistent';
       end if;
       if coalesce(voucher_record.vat_rate, 0) < 0 or coalesce(voucher_record.vat_rate, 0) > 100 then
         raise exception 'Return VAT rate is outside the valid range';
       end if;
-      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2)) > 0.01 then
+      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6)) > 0.000001 then
         raise exception 'Return VAT does not match server-calculated VAT';
       end if;
-      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2);
+      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
       if voucher_record.original_voucher_id is null and calculated_discount <> 0 then
         raise exception 'A manual return cannot introduce an invoice discount';
       end if;
     end if;
 
-    calculated_total := round(calculated_taxable + calculated_vat, 2);
-    if abs(coalesce(voucher_record.subtotal, 0) - calculated_subtotal) > 0.01
-      or abs(coalesce(voucher_record.discount, 0) - calculated_discount) > 0.01
-      or abs(coalesce(voucher_record.vat_amount, 0) - calculated_vat) > 0.01
-      or abs(coalesce(voucher_record.total, 0) - calculated_total) > 0.01 then
+    calculated_total := round(calculated_taxable + calculated_vat, 6);
+    if abs(coalesce(voucher_record.subtotal, 0) - calculated_subtotal) > 0.000001
+      or abs(coalesce(voucher_record.discount, 0) - calculated_discount) > 0.000001
+      or abs(coalesce(voucher_record.vat_amount, 0) - calculated_vat) > 0.000001
+      or abs(coalesce(voucher_record.total, 0) - calculated_total) > 0.000001 then
       raise exception 'Invoice totals do not match server-calculated values';
     end if;
 
@@ -500,10 +500,10 @@ begin
 
     expected_discount := case
       when coalesce(source_voucher.subtotal, 0) > 0
-        then round(coalesce(source_voucher.discount, 0) * calculated_subtotal / source_voucher.subtotal, 2)
+        then round(coalesce(source_voucher.discount, 0) * calculated_subtotal / source_voucher.subtotal, 6)
       else 0
     end;
-    if abs(calculated_discount - expected_discount) > greatest(0.02, item_count * 0.01) then
+    if abs(calculated_discount - expected_discount) > greatest(0.000002, item_count * 0.000001) then
       raise exception 'Return discount does not match the source invoice allocation';
     end if;
 
@@ -515,7 +515,7 @@ begin
        and source.voucher_id = voucher_record.original_voucher_id
       where returned.voucher_id = target_voucher_id
         and (source.id is null or source.item_id is distinct from returned.item_id
-          or abs(source.rate - returned.rate) > 0.01)
+          or abs(source.rate - returned.rate) > 0.000001)
     ) then raise exception 'Returned item does not match its source invoice'; end if;
 
     if exists (
@@ -621,8 +621,8 @@ begin
   where line.voucher_id = receipt.id
     and line.account_id = new.party_ledger_id;
 
-  if abs(destination_debit - new.amount) > 0.01
-    or abs(party_credit - new.amount) > 0.01 then
+  if abs(destination_debit - new.amount) > 0.000001
+    or abs(party_credit - new.amount) > 0.000001 then
     raise exception 'Linked Receipt posting does not match the cleared cheque amount';
   end if;
   return null;

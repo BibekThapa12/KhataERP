@@ -31,9 +31,9 @@ describe('buildSimpleEntryLines', () => {
       { category_id: 'income-category', account_id: 'interest', amount: 100.125 },
       { category_id: 'income-category', account_id: 'rebate', amount: 49.875 },
     ] }, accounts, categories)).toEqual([
-      { account_id: 'cash', debit: 150.01, credit: 0 },
-      { account_id: 'interest', debit: 0, credit: 100.13 },
-      { account_id: 'rebate', debit: 0, credit: 49.88 },
+      { account_id: 'cash', debit: 150, credit: 0 },
+      { account_id: 'interest', debit: 0, credit: 100.125 },
+      { account_id: 'rebate', debit: 0, credit: 49.875 },
     ])
   })
 

@@ -12,10 +12,10 @@ alter table vouchers add column if not exists restock_items boolean;
 alter table invoice_items add column if not exists source_invoice_item_id uuid references invoice_items(id) on delete restrict;
 alter table invoice_items add column if not exists item_name text;
 alter table invoice_items add column if not exists unit text;
-alter table invoice_items add column if not exists discount_amount numeric(14,2);
-alter table invoice_items add column if not exists taxable_amount numeric(14,2);
-alter table invoice_items add column if not exists vat_amount numeric(14,2);
-alter table invoice_items add column if not exists cost_rate numeric(14,2);
+alter table invoice_items add column if not exists discount_amount numeric(18,6);
+alter table invoice_items add column if not exists taxable_amount numeric(18,6);
+alter table invoice_items add column if not exists vat_amount numeric(18,6);
+alter table invoice_items add column if not exists cost_rate numeric(18,6);
 
 do $$
 declare

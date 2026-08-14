@@ -118,7 +118,7 @@ const VOUCHER_SETTLEMENT_FIELDS = 'id,company_id,settlement_voucher_id,invoice_v
 const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,draft_no,supplier_invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,simple_entry_type,contra_entry,contra_destination_account_id,contra_charge_amount,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,status,seq,created_by,updated_by,created_at,updated_at,completed_by,completed_at,draft_payload'
 const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
 const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
-const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
+const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,amount,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
 const VOUCHER_WITH_CHILDREN_FIELDS = `${VOUCHER_FIELDS},lines:voucher_lines(${VOUCHER_LINE_FIELDS}),stock_lines:stock_lines(${STOCK_LINE_FIELDS}),invoice_items:invoice_items(${INVOICE_ITEM_FIELDS})`
 export const supabaseProjectHost = (() => {
   if (!supabaseUrl) return ''

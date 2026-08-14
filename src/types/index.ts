@@ -85,6 +85,7 @@ export interface StockLine {
   item_id: string
   qty: number
   rate: number
+  amount?: number
   direction: 'in' | 'out'
   stock_condition?: StockCondition
   is_transfer?: boolean

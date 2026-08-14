@@ -19,7 +19,7 @@ import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { publicErrorMessage } from '@/lib/security'
 import { friendlyVoucherDateError, validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
 import { notifyError } from '@/lib/notifications'
-import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
+import { formatRateInput, hasAtMostSixDecimalPlaces, rateInputNumber } from '@/lib/rateFormat'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import type { Voucher } from '@/types'
@@ -29,7 +29,7 @@ const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ defa
 interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string }
 type DiscountMode = 'flat' | 'percent'
 
-function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 100) / 100 }
+function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000 }
 
 interface InvoiceFormProps {
   type: 'Sales' | 'Purchase'
@@ -78,7 +78,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   })()
 
   // Totals
-  const numericLines = useMemo(() => lines.map(line => ({ ...line, rate: rateInputNumber(line.rate) })), [lines])
+  const numericLines = useMemo(() => lines.map(line => ({
+    ...line,
+    rate: rateInputNumber(line.rate),
+    amount: round2Local(line.amount_input !== undefined && line.amount_input !== '' ? Number(line.amount_input) : line.qty * rateInputNumber(line.rate)),
+  })), [lines])
   const subtotal = invoiceSubtotal(numericLines)
   const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
   const taxable = round2Local(subtotal - discountAmount)
@@ -105,7 +109,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setLines(draft?.lines?.length ? draft.lines : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
-        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
+        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
@@ -218,8 +222,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       return
     }
     setError('')
-    const validLines = numericLines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0)
+    const validLines = numericLines.filter(line => line.item_id && Number.isFinite(line.qty) && line.qty > 0 && Number.isFinite(line.rate) && line.rate >= 0 && Number.isFinite(line.amount) && line.amount >= 0)
     if (!lines.length || validLines.length !== lines.length) { setError('Select an item and enter a quantity greater than zero for every line. Rate can be zero but cannot be negative.'); return }
+    if (lines.some(line => !hasAtMostSixDecimalPlaces(line.qty) || !hasAtMostSixDecimalPlaces(line.rate) || (line.amount_input !== undefined && line.amount_input !== '' && !hasAtMostSixDecimalPlaces(line.amount_input)))) { setError('Quantity, rate, and amount support up to six decimal places.'); return }
     if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
     if (!Number.isInteger(creditDays) || creditDays < 0) { setError('Credit Days must be a whole number of 0 or more.'); return }
     if (!isSales && supplierInvoiceNo.trim().length > 100) { setError('Supplier Invoice No. cannot exceed 100 characters.'); return }
@@ -246,7 +251,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, amount_input: _amountInput, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
       if (isSales) {
         if (voucher) await updateSalesVoucher(voucher.id, params, status)
         else await saveSalesVoucher(params, status)

@@ -53,7 +53,7 @@ function PartyLedger({ party }: { party: Party }) {
     const dr = partyLines.reduce((sum, line) => sum + (line.debit || 0), 0)
     const cr = partyLines.reduce((sum, line) => sum + (line.credit || 0), 0)
     const particulars = [...new Set((v.lines || []).filter(line => line.account_id !== party.account_id).map(line => accountMap.get(line.account_id) || line.account_id))].join(', ') || v.type
-    running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 100) / 100
+    running = Math.round((running + (isCustomer ? dr - cr : cr - dr) + Number.EPSILON) * 1_000_000) / 1_000_000
     return { v, dr, cr, particulars, balance: running }
   })
 

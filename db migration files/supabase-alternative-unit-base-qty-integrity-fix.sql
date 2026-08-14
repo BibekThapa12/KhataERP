@@ -7,8 +7,8 @@
 begin;
 
 alter table public.invoice_items add column if not exists entry_unit text;
-alter table public.invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table public.invoice_items add column if not exists base_qty numeric(14,4);
+alter table public.invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table public.invoice_items add column if not exists base_qty numeric(18,6);
 
 update public.invoice_items
 set base_qty = round(qty / nullif(coalesce(conversion_factor, 1), 0), 4),

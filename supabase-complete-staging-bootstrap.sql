@@ -257,7 +257,7 @@ create table if not exists accounts (
   "group"          text not null,
   is_system        boolean not null default false,
   is_party         boolean not null default false,
-  opening_balance  numeric(14,2) not null default 0,
+  opening_balance  numeric(18,6) not null default 0,
   address          text,
   contact_no       text,
   pan_no           text,
@@ -319,11 +319,11 @@ create table if not exists items (
   name             text not null,
   unit             text not null default 'pcs',
   alternate_unit   text,
-  alternate_conversion numeric(14,4),
-  sell_rate        numeric(14,2) not null default 0,
-  opening_qty      numeric(14,4) not null default 0,
-  opening_rate     numeric(14,2) not null default 0,
-  reorder_level    numeric(14,4),
+  alternate_conversion numeric(18,6),
+  sell_rate        numeric(18,6) not null default 0,
+  opening_qty      numeric(18,6) not null default 0,
+  opening_rate     numeric(18,6) not null default 0,
+  reorder_level    numeric(18,6),
   is_service        boolean not null default false,
   created_at       timestamptz not null default now()
 );
@@ -338,7 +338,7 @@ create table if not exists item_categories (
   unique(company_id, name)
 );
 alter table items add column if not exists alternate_unit text;
-alter table items add column if not exists alternate_conversion numeric(14,4);
+alter table items add column if not exists alternate_conversion numeric(18,6);
 
 alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
 alter table items add column if not exists sku text;
@@ -407,15 +407,15 @@ create table if not exists vouchers (
   simple_entry_type text check (simple_entry_type in ('Income','Expense')),
   contra_entry boolean not null default false,
   contra_destination_account_id text references accounts(id),
-  contra_charge_amount numeric(14,2) not null default 0,
+  contra_charge_amount numeric(18,6) not null default 0,
   restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
-  subtotal         numeric(14,2),
-  discount         numeric(14,2),
+  subtotal         numeric(18,6),
+  discount         numeric(18,6),
   vat_rate         numeric(5,2),
-  vat_amount       numeric(14,2),
-  total            numeric(14,2) not null default 0,
+  vat_amount       numeric(18,6),
+  total            numeric(18,6) not null default 0,
   cancelled        boolean not null default false,
   status           text not null default 'Completed' check (status in ('Draft','Completed')),
   seq              integer not null,
@@ -448,7 +448,7 @@ alter table vouchers add column if not exists supplier_invoice_no text;
 alter table vouchers add column if not exists simple_entry_type text;
 alter table vouchers add column if not exists contra_entry boolean not null default false;
 alter table vouchers add column if not exists contra_destination_account_id text references accounts(id);
-alter table vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table vouchers add column if not exists contra_charge_amount numeric(18,6) not null default 0;
 alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
@@ -474,8 +474,8 @@ create table if not exists voucher_lines (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   account_id       text not null references accounts(id),
-  debit            numeric(14,2) not null default 0,
-  credit           numeric(14,2) not null default 0
+  debit            numeric(18,6) not null default 0,
+  credit           numeric(18,6) not null default 0
 );
 
 -- ── Stock Lines (inventory movements) ────────────────────────────────────────
@@ -483,8 +483,8 @@ create table if not exists stock_lines (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
-  qty              numeric(14,4) not null,
-  rate             numeric(14,2) not null,
+  qty              numeric(18,6) not null,
+  rate             numeric(18,6) not null,
   direction        text not null check (direction in ('in','out')),
   stock_condition  text not null default 'saleable' check (stock_condition in ('saleable','damaged','expired')),
   is_transfer      boolean not null default false
@@ -522,9 +522,13 @@ create table if not exists invoice_items (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
-  qty              numeric(14,4) not null,
-  rate             numeric(18,6) not null
+  qty              numeric(18,6) not null,
+  rate             numeric(18,6) not null,
+  amount           numeric(18,6) not null
 );
+alter table invoice_items add column if not exists amount numeric(18,6);
+update invoice_items set amount = round(qty * rate, 6) where amount is null;
+alter table invoice_items alter column amount set not null;
 
 -- Voucher-to-invoice allocations. Historical receipts/payments without rows
 -- remain valid and are allocated FIFO by the reporting layer.
@@ -534,7 +538,7 @@ create table if not exists voucher_settlements (
   settlement_voucher_id uuid not null references vouchers(id) on delete cascade,
   invoice_voucher_id    uuid not null references vouchers(id) on delete cascade,
   party_account_id      text not null references accounts(id),
-  amount                numeric(14,2) not null check (amount > 0),
+  amount                numeric(18,6) not null check (amount > 0),
   created_at            timestamptz not null default now(),
   unique (settlement_voucher_id, invoice_voucher_id, party_account_id),
   check (settlement_voucher_id <> invoice_voucher_id)
@@ -565,13 +569,13 @@ for each row execute function validate_voucher_settlement();
 alter table invoice_items add column if not exists source_invoice_item_id uuid references invoice_items(id) on delete restrict;
 alter table invoice_items add column if not exists item_name text;
 alter table invoice_items add column if not exists unit text;
-alter table invoice_items add column if not exists discount_amount numeric(14,2);
-alter table invoice_items add column if not exists taxable_amount numeric(14,2);
-alter table invoice_items add column if not exists vat_amount numeric(14,2);
-alter table invoice_items add column if not exists cost_rate numeric(14,2);
+alter table invoice_items add column if not exists discount_amount numeric(18,6);
+alter table invoice_items add column if not exists taxable_amount numeric(18,6);
+alter table invoice_items add column if not exists vat_amount numeric(18,6);
+alter table invoice_items add column if not exists cost_rate numeric(18,6);
 alter table invoice_items add column if not exists entry_unit text;
-alter table invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table invoice_items add column if not exists base_qty numeric(14,4);
+alter table invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table invoice_items add column if not exists base_qty numeric(18,6);
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 create index if not exists idx_accounts_company   on accounts(company_id);
@@ -1880,10 +1884,10 @@ alter table vouchers add column if not exists restock_items boolean;
 alter table invoice_items add column if not exists source_invoice_item_id uuid references invoice_items(id) on delete restrict;
 alter table invoice_items add column if not exists item_name text;
 alter table invoice_items add column if not exists unit text;
-alter table invoice_items add column if not exists discount_amount numeric(14,2);
-alter table invoice_items add column if not exists taxable_amount numeric(14,2);
-alter table invoice_items add column if not exists vat_amount numeric(14,2);
-alter table invoice_items add column if not exists cost_rate numeric(14,2);
+alter table invoice_items add column if not exists discount_amount numeric(18,6);
+alter table invoice_items add column if not exists taxable_amount numeric(18,6);
+alter table invoice_items add column if not exists vat_amount numeric(18,6);
+alter table invoice_items add column if not exists cost_rate numeric(18,6);
 
 do $$
 declare
@@ -2075,7 +2079,7 @@ notify pgrst, 'reload schema';
 begin;
 
 alter table public.items add column if not exists alternate_unit text;
-alter table public.items add column if not exists alternate_conversion numeric(14,4);
+alter table public.items add column if not exists alternate_conversion numeric(18,6);
 
 alter table public.items drop constraint if exists items_alternate_unit_check;
 alter table public.items add constraint items_alternate_unit_check check (
@@ -2088,8 +2092,8 @@ alter table public.items add constraint items_alternate_unit_check check (
 );
 
 alter table public.invoice_items add column if not exists entry_unit text;
-alter table public.invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table public.invoice_items add column if not exists base_qty numeric(14,4);
+alter table public.invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table public.invoice_items add column if not exists base_qty numeric(18,6);
 
 update public.invoice_items
 set entry_unit = coalesce(entry_unit, unit),
@@ -2998,7 +3002,7 @@ create table if not exists voucher_settlements (
   settlement_voucher_id uuid not null references vouchers(id) on delete cascade,
   invoice_voucher_id    uuid not null references vouchers(id) on delete cascade,
   party_account_id      text not null references accounts(id),
-  amount                numeric(14,2) not null check (amount > 0),
+  amount                numeric(18,6) not null check (amount > 0),
   created_at            timestamptz not null default now(),
   unique (settlement_voucher_id, invoice_voucher_id, party_account_id),
   check (settlement_voucher_id <> invoice_voucher_id)
@@ -3051,7 +3055,7 @@ begin;
 
 create table if not exists public.modules (
   id uuid primary key default gen_random_uuid(), key text not null unique, name text not null,
-  description text, default_price numeric(14,2) not null default 0, is_active boolean not null default true,
+  description text, default_price numeric(18,6) not null default 0, is_active boolean not null default true,
   created_at timestamptz not null default now()
 );
 insert into public.modules(key,name,description,default_price,is_active)
@@ -3063,7 +3067,7 @@ create table if not exists public.company_modules (
   module_id uuid not null references public.modules(id), is_enabled boolean not null default false,
   status text not null default 'disabled' check(status in ('active','trial','grace_period','read_only','disabled')),
   billing_type text not null default 'included' check(billing_type in ('included','monthly','yearly','one_time','custom')),
-  price numeric(14,2) not null default 0, payment_status text not null default 'pending' check(payment_status in ('paid','pending','overdue','waived','cancelled')),
+  price numeric(18,6) not null default 0, payment_status text not null default 'pending' check(payment_status in ('paid','pending','overdue','waived','cancelled')),
   starts_at date, expires_at date, settings jsonb not null default '{"enable_dashboard_widgets":true,"allow_due_date_before_issue_date":false,"default_upcoming_days":7,"require_status_reason_for_bounce":true,"require_status_reason_for_cancel":true,"allow_account_number_override":false,"enable_cheque_notifications":false,"enable_read_only_after_expiry":true}'::jsonb,
   internal_notes text, enabled_by uuid references auth.users(id), created_at timestamptz not null default now(), updated_at timestamptz not null default now(),
   unique(company_id,module_id), check(expires_at is null or starts_at is null or expires_at >= starts_at)
@@ -3146,7 +3150,7 @@ create table if not exists public.cheques (
   id uuid primary key default gen_random_uuid(), company_id uuid not null references public.companies(id) on delete cascade,
   cheque_number text not null check(cheque_number ~ '^[A-Za-z0-9][A-Za-z0-9 /._-]{0,49}$'),
   bank_id uuid not null references public.cheque_banks(id), account_number text not null,
-  party_ledger_id text not null references public.accounts(id), amount numeric(14,2) not null check(amount>0),
+  party_ledger_id text not null references public.accounts(id), amount numeric(18,6) not null check(amount>0),
   issue_date date not null, issue_date_bs text not null, issue_date_bs_key integer not null,
   due_date date not null, due_date_bs text not null, due_date_bs_key integer not null,
   notes text, status text not null default 'pending' check(status in ('pending','cleared','bounced','cancelled')),
@@ -3298,6 +3302,17 @@ create unique index if not exists vouchers_company_idempotency_unique
   on public.vouchers(company_id, idempotency_key)
   where idempotency_key is not null;
 
+create or replace function public.numeric_json_scale_valid(payload jsonb, numeric_keys text[])
+returns boolean language sql immutable set search_path = public as $$
+  select not exists (
+    select 1
+    from jsonb_array_elements(case when jsonb_typeof(payload)='array' then payload else jsonb_build_array(payload) end) object_value
+    cross join unnest(numeric_keys) key_name
+    where object_value ? key_name and nullif(object_value->>key_name,'') is not null
+      and (object_value->>key_name)::numeric <> round((object_value->>key_name)::numeric,6)
+  );
+$$;
+
 create or replace function public.voucher_atomic_response(target_voucher_id uuid)
 returns jsonb
 language sql
@@ -3315,7 +3330,7 @@ as $$
       'is_transfer', line.is_transfer
     )) from public.stock_lines line where line.voucher_id = voucher.id), '[]'::jsonb),
     'invoice_items', coalesce((select jsonb_agg(jsonb_build_object(
-      'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate,
+      'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate, 'amount', item.amount,
       'source_invoice_item_id', item.source_invoice_item_id,
       'item_name', item.item_name, 'unit', item.unit, 'entry_unit', item.entry_unit,
       'conversion_factor', item.conversion_factor, 'base_qty', item.base_qty,
@@ -3358,8 +3373,8 @@ declare
   next_seq integer;
   highest_number bigint;
   generated_number text;
-  debit_total numeric(14,2);
-  credit_total numeric(14,2);
+  debit_total numeric(18,6);
+  credit_total numeric(18,6);
   result jsonb;
   requested_idempotency uuid;
   posting_stage text := 'payload_validation';
@@ -3381,13 +3396,20 @@ begin
     or jsonb_typeof(coalesce(p_settlements, '[]'::jsonb)) <> 'array' then
     raise exception 'Voucher child payloads must be arrays';
   end if;
+  if not public.numeric_json_scale_valid(p_voucher, array['subtotal','discount','vat_amount','total','contra_charge_amount'])
+    or not public.numeric_json_scale_valid(coalesce(p_lines,'[]'::jsonb), array['debit','credit'])
+    or not public.numeric_json_scale_valid(coalesce(p_stock_lines,'[]'::jsonb), array['qty','rate'])
+    or not public.numeric_json_scale_valid(coalesce(p_invoice_items,'[]'::jsonb), array['qty','rate','amount','discount_amount','taxable_amount','vat_amount','cost_rate','conversion_factor','base_qty'])
+    or not public.numeric_json_scale_valid(coalesce(p_settlements,'[]'::jsonb), array['amount']) then
+    raise exception 'Accounting values support at most six decimal places';
+  end if;
 
   select coalesce(sum(coalesce(line.debit, 0)), 0),
          coalesce(sum(coalesce(line.credit, 0)), 0)
     into debit_total, credit_total
   from jsonb_to_recordset(coalesce(p_lines, '[]'::jsonb))
     as line(account_id text, debit numeric, credit numeric);
-  if abs(debit_total - credit_total) > 0.01 then
+  if abs(debit_total - credit_total) > 0.000001 then
     raise exception 'Voucher is not balanced: debit %, credit %', debit_total, credit_total;
   end if;
 
@@ -3595,15 +3617,15 @@ begin
 
   posting_stage := 'invoice_items_insert';
   insert into public.invoice_items (
-    voucher_id, item_id, qty, rate, source_invoice_item_id, item_name, unit,
+    voucher_id, item_id, qty, rate, amount, source_invoice_item_id, item_name, unit,
     entry_unit, conversion_factor, base_qty, discount_amount, taxable_amount,
     vat_amount, cost_rate
   )
-  select saved.id, item.item_id, item.qty, item.rate, item.source_invoice_item_id,
+  select saved.id, item.item_id, item.qty, item.rate, coalesce(item.amount, round(item.qty * item.rate, 6)), item.source_invoice_item_id,
          item.item_name, item.unit, item.entry_unit, coalesce(item.conversion_factor, 1),
          item.base_qty, item.discount_amount, item.taxable_amount, item.vat_amount, item.cost_rate
   from jsonb_to_recordset(coalesce(p_invoice_items, '[]'::jsonb)) as item(
-    item_id uuid, qty numeric, rate numeric, source_invoice_item_id uuid,
+    item_id uuid, qty numeric, rate numeric, amount numeric, source_invoice_item_id uuid,
     item_name text, unit text, entry_unit text, conversion_factor numeric,
     base_qty numeric, discount_amount numeric, taxable_amount numeric,
     vat_amount numeric, cost_rate numeric
@@ -4525,7 +4547,7 @@ begin
         or (coalesce(line.debit, 0) > 0 and coalesce(line.credit, 0) > 0))
   ) then raise exception 'Voucher lines must contain one non-negative debit or credit'; end if;
 
-  if abs(debit_total - credit_total) > 0.01 then
+  if abs(debit_total - credit_total) > 0.000001 then
     raise exception 'Voucher debit and credit totals do not match';
   end if;
 
@@ -4604,7 +4626,7 @@ begin
 
   if voucher_record.type <> 'Stock Adjustment' then
     if line_count < 2 then raise exception 'Posted vouchers require at least two ledger lines'; end if;
-    if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.01 then
+    if abs(coalesce(voucher_record.total, 0) - debit_total) > 0.000001 then
       raise exception 'Voucher total does not match its ledger posting';
     end if;
     if voucher_record.type in ('Receipt','Payment','Journal')
@@ -4621,9 +4643,9 @@ begin
 
   if voucher_record.type in ('Sales','Purchase','Sales Return','Purchase Return') then
     select count(*),
-           coalesce(sum(round(item.qty * item.rate, 2)), 0),
+           coalesce(sum(item.amount), 0),
            coalesce(sum(coalesce(item.discount_amount, 0)), 0),
-           coalesce(sum(coalesce(item.taxable_amount, round(item.qty * item.rate, 2))), 0),
+           coalesce(sum(coalesce(item.taxable_amount, item.amount)), 0),
            coalesce(sum(coalesce(item.vat_amount, 0)), 0)
       into item_count, calculated_subtotal, calculated_discount,
            calculated_taxable, calculated_vat
@@ -4642,35 +4664,35 @@ begin
       if calculated_discount < 0 or calculated_discount > calculated_subtotal then
         raise exception 'Invoice discount is outside the valid range';
       end if;
-      calculated_taxable := round(calculated_subtotal - calculated_discount, 2);
+      calculated_taxable := round(calculated_subtotal - calculated_discount, 6);
       if coalesce(voucher_record.vat_rate, 0) < 0 or coalesce(voucher_record.vat_rate, 0) > 100 then
         raise exception 'VAT rate is outside the valid range';
       end if;
-      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2);
+      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
     else
       if calculated_discount < 0 or calculated_discount > calculated_subtotal then
         raise exception 'Return discount is outside the valid range';
       end if;
-      if abs(calculated_taxable - round(calculated_subtotal - calculated_discount, 2)) > 0.01 then
+      if abs(calculated_taxable - round(calculated_subtotal - calculated_discount, 6)) > 0.000001 then
         raise exception 'Return taxable amounts are inconsistent';
       end if;
       if coalesce(voucher_record.vat_rate, 0) < 0 or coalesce(voucher_record.vat_rate, 0) > 100 then
         raise exception 'Return VAT rate is outside the valid range';
       end if;
-      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2)) > 0.01 then
+      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6)) > 0.000001 then
         raise exception 'Return VAT does not match server-calculated VAT';
       end if;
-      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 2);
+      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
       if voucher_record.original_voucher_id is null and calculated_discount <> 0 then
         raise exception 'A manual return cannot introduce an invoice discount';
       end if;
     end if;
 
-    calculated_total := round(calculated_taxable + calculated_vat, 2);
-    if abs(coalesce(voucher_record.subtotal, 0) - calculated_subtotal) > 0.01
-      or abs(coalesce(voucher_record.discount, 0) - calculated_discount) > 0.01
-      or abs(coalesce(voucher_record.vat_amount, 0) - calculated_vat) > 0.01
-      or abs(coalesce(voucher_record.total, 0) - calculated_total) > 0.01 then
+    calculated_total := round(calculated_taxable + calculated_vat, 6);
+    if abs(coalesce(voucher_record.subtotal, 0) - calculated_subtotal) > 0.000001
+      or abs(coalesce(voucher_record.discount, 0) - calculated_discount) > 0.000001
+      or abs(coalesce(voucher_record.vat_amount, 0) - calculated_vat) > 0.000001
+      or abs(coalesce(voucher_record.total, 0) - calculated_total) > 0.000001 then
       raise exception 'Invoice totals do not match server-calculated values';
     end if;
 
@@ -4733,10 +4755,10 @@ begin
 
     expected_discount := case
       when coalesce(source_voucher.subtotal, 0) > 0
-        then round(coalesce(source_voucher.discount, 0) * calculated_subtotal / source_voucher.subtotal, 2)
+        then round(coalesce(source_voucher.discount, 0) * calculated_subtotal / source_voucher.subtotal, 6)
       else 0
     end;
-    if abs(calculated_discount - expected_discount) > greatest(0.02, item_count * 0.01) then
+    if abs(calculated_discount - expected_discount) > greatest(0.000002, item_count * 0.000001) then
       raise exception 'Return discount does not match the source invoice allocation';
     end if;
 
@@ -4748,7 +4770,7 @@ begin
        and source.voucher_id = voucher_record.original_voucher_id
       where returned.voucher_id = target_voucher_id
         and (source.id is null or source.item_id is distinct from returned.item_id
-          or abs(source.rate - returned.rate) > 0.01)
+          or abs(source.rate - returned.rate) > 0.000001)
     ) then raise exception 'Returned item does not match its source invoice'; end if;
 
     if exists (
@@ -4854,8 +4876,8 @@ begin
   where line.voucher_id = receipt.id
     and line.account_id = new.party_ledger_id;
 
-  if abs(destination_debit - new.amount) > 0.01
-    or abs(party_credit - new.amount) > 0.01 then
+  if abs(destination_debit - new.amount) > 0.000001
+    or abs(party_credit - new.amount) > 0.000001 then
     raise exception 'Linked Receipt posting does not match the cleared cheque amount';
   end if;
   return null;
@@ -5587,8 +5609,8 @@ notify pgrst, 'reload schema';
 begin;
 
 alter table public.invoice_items add column if not exists entry_unit text;
-alter table public.invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table public.invoice_items add column if not exists base_qty numeric(14,4);
+alter table public.invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table public.invoice_items add column if not exists base_qty numeric(18,6);
 
 update public.invoice_items
 set base_qty = round(qty / nullif(coalesce(conversion_factor, 1), 0), 4),
@@ -7315,7 +7337,7 @@ begin
      or detail_count <> (select count(*) from public.voucher_lines where voucher_id = target_id and account_id <> voucher_row.settlement_account_id)
      or (expected_type = 'Income' and (counter_debit <> detail_total or counter_credit <> 0))
      or (expected_type = 'Expense' and (counter_credit <> detail_total or counter_debit <> 0))
-     or round(detail_total, 2) <> round(voucher_row.total, 2) then
+     or round(detail_total, 6) <> round(voucher_row.total, 6) then
     raise exception 'Simple entry ledger lines are invalid or unbalanced';
   end if;
   return null;
@@ -7340,7 +7362,7 @@ revoke all on function public.validate_simple_entry_voucher() from public;
 -- Journal-backed Contra vouchers and their protected Bank Charges ledger.
 alter table public.vouchers add column if not exists contra_entry boolean not null default false;
 alter table public.vouchers add column if not exists contra_destination_account_id text references public.accounts(id);
-alter table public.vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table public.vouchers add column if not exists contra_charge_amount numeric(18,6) not null default 0;
 alter table public.vouchers drop constraint if exists vouchers_contra_metadata_check;
 alter table public.vouchers add constraint vouchers_contra_metadata_check check (
   contra_charge_amount >= 0 and (not contra_entry or (type = 'Journal' and (status = 'Draft' or (settlement_account_id is not null and contra_destination_account_id is not null))))
@@ -7436,7 +7458,7 @@ begin
   select coalesce(sum(line.debit),0) into charge_debit from public.voucher_lines line join public.accounts account on account.id = line.account_id
     where line.voucher_id = target_id and account.company_id = v.company_id and lower(btrim(account.name)) = lower('Bank Charges') and account.is_system and account.type = 'Expense';
   expected_line_count := case when v.contra_charge_amount > 0 then 3 else 2 end;
-  if destination_debit <= 0 or round(charge_debit,2) <> round(v.contra_charge_amount,2) or round(source_credit,2) <> round(destination_debit + charge_debit,2)
+  if destination_debit <= 0 or round(charge_debit,6) <> round(v.contra_charge_amount,6) or round(source_credit,6) <> round(destination_debit + charge_debit,6)
      or line_count <> expected_line_count
      or exists (select 1 from public.voucher_lines where voucher_id = target_id and debit > 0 and credit > 0)
   then raise exception 'Contra voucher lines are invalid or unbalanced'; end if;
@@ -7997,6 +8019,54 @@ order by lock_record.granted, activity.xact_start;
 -- =============================================================================
 -- FINAL BOOTSTRAP VERIFICATION
 -- =============================================================================
+-- Six-decimal accounting precision (must remain immediately before release verification).
+drop table if exists pg_temp.six_decimal_trigger_restore;
+create temporary table six_decimal_trigger_restore(trigger_name text primary key, definition text not null);
+insert into six_decimal_trigger_restore(trigger_name,definition)
+select t.tgname,pg_get_triggerdef(t.oid,true) from pg_trigger t
+where t.tgrelid='public.vouchers'::regclass and not t.tgisinternal
+  and t.tgname in ('vouchers_sync_contra_metadata','vouchers_validate_contra','vouchers_validate_simple_entry');
+drop trigger if exists vouchers_sync_contra_metadata on public.vouchers;
+drop trigger if exists vouchers_validate_contra on public.vouchers;
+drop trigger if exists vouchers_validate_simple_entry on public.vouchers;
+
+do $six_decimal_precision$
+declare target record;
+begin
+  for target in select * from (values
+    ('accounts','opening_balance'),
+    ('items','alternate_conversion'), ('items','sell_rate'), ('items','opening_qty'), ('items','opening_rate'), ('items','reorder_level'),
+    ('vouchers','contra_charge_amount'), ('vouchers','subtotal'), ('vouchers','discount'), ('vouchers','vat_amount'), ('vouchers','total'),
+    ('voucher_lines','debit'), ('voucher_lines','credit'),
+    ('stock_lines','qty'), ('stock_lines','rate'),
+    ('invoice_items','qty'), ('invoice_items','rate'), ('invoice_items','discount_amount'), ('invoice_items','taxable_amount'),
+    ('invoice_items','vat_amount'), ('invoice_items','cost_rate'), ('invoice_items','conversion_factor'), ('invoice_items','base_qty'),
+    ('voucher_settlements','amount'), ('cheques','amount'),
+    ('cheque_subscription_plans','default_price'), ('company_cheque_subscriptions','price')
+  ) as columns_to_widen(table_name, column_name)
+  loop
+    if exists (select 1 from information_schema.columns c where c.table_schema='public' and c.table_name=target.table_name and c.column_name=target.column_name) then
+      execute format('alter table public.%I alter column %I type numeric(18,6) using %I::numeric(18,6)', target.table_name, target.column_name, target.column_name);
+    end if;
+  end loop;
+end;
+$six_decimal_precision$;
+
+do $restore_six_decimal_triggers$
+declare saved_trigger record;
+begin
+  for saved_trigger in select definition from six_decimal_trigger_restore order by trigger_name loop execute saved_trigger.definition; end loop;
+end;
+$restore_six_decimal_triggers$;
+drop table pg_temp.six_decimal_trigger_restore;
+
+alter table public.invoice_items add column if not exists amount numeric(18,6);
+alter table public.invoice_items disable trigger user;
+update public.invoice_items set amount=round(qty*rate,6) where amount is null;
+alter table public.invoice_items alter column amount set not null;
+alter table public.invoice_items enable trigger user;
+alter table public.invoice_items drop constraint if exists invoice_items_amount_nonnegative;
+
 do $bootstrap_verification$
 declare
   required_table text;
@@ -8113,6 +8183,8 @@ begin
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'updated_by')
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'completed_by')
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'vouchers' and column_name = 'completed_at')
+    or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'invoice_items' and column_name = 'amount' and numeric_scale = 6)
+    or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'voucher_lines' and column_name = 'debit' and numeric_scale = 6)
     or not exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'items' and column_name = 'is_service') then
     raise exception 'Bootstrap verification failed: current release columns are missing';
   end if;

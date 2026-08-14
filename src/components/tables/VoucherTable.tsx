@@ -42,7 +42,7 @@ function voucherBadgeVariant(type: string, cancelled: boolean) {
 }
 
 type DraftInvoicePayload = {
-  lines?: Array<{ item_id: string; qty: number; rate: number; entry_unit?: string; conversion_factor?: number }>
+  lines?: Array<{ item_id: string; qty: number; rate: number; amount?: number; amount_input?: string; entry_unit?: string; conversion_factor?: number }>
   vatRate?: number
   discount?: number
   supplierInvoiceNo?: string
@@ -79,6 +79,7 @@ function draftInvoiceItems(voucher: Voucher): InvoiceItem[] {
     item_id: line.item_id,
     qty: Number(line.qty) || 0,
     rate: Number(line.rate) || 0,
+    amount: line.amount ?? (line.amount_input === undefined || line.amount_input === '' ? undefined : Number(line.amount_input)),
     entry_unit: line.entry_unit,
     conversion_factor: line.conversion_factor || 1,
   }))
@@ -135,10 +136,10 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
     ? getPartyByAccountId(voucher.party_account_id)?.name ?? getAccount(voucher.party_account_id)?.name
     : getAccount(settlementId || '')?.name || (voucher.is_cash ? 'Cash' : '—'))
   const settlementName = getAccount(settlementId || '')?.name
-  const subtotal = invoiceItems.length ? invoiceItems.reduce((sum, item) => sum + item.qty * item.rate, 0) : voucher.subtotal || 0
+  const subtotal = invoiceItems.length ? invoiceItems.reduce((sum, item) => sum + (item.amount ?? item.qty * item.rate), 0) : voucher.subtotal || 0
   const discount = invoiceDraft?.discount ?? voucher.discount ?? 0
   const vatRate = invoiceDraft?.vatRate ?? voucher.vat_rate ?? 0
-  const vatAmount = invoiceItems.length ? Math.round(((subtotal - discount) * vatRate / 100 + Number.EPSILON) * 100) / 100 : voucher.vat_amount || 0
+  const vatAmount = invoiceItems.length ? Math.round(((subtotal - discount) * vatRate / 100 + Number.EPSILON) * 1_000_000) / 1_000_000 : voucher.vat_amount || 0
 
   return (
     <div className="space-y-4">
@@ -173,7 +174,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
                     <td className="px-3 py-2 text-right num">{invoicePrimaryQty(it, item)}</td>
                     <td className="px-3 py-2 text-right num text-muted-foreground">{invoiceAlternativeQty(it, item)}</td>
                     <td className="px-3 py-2 text-right num">{fmtMoney(it.rate)}</td>
-                    <td className="px-3 py-2 text-right num font-semibold">{fmtMoney(it.qty * it.rate)}</td>
+                    <td className="px-3 py-2 text-right num font-semibold">{fmtMoney(it.amount ?? it.qty * it.rate)}</td>
                   </tr>
                 )
               })}
@@ -296,7 +297,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
           <td class="right">${esc(invoicePrimaryQty(it, item))}</td>
           <td class="right muted">${esc(invoiceAlternativeQty(it, item))}</td>
           <td class="right">${esc(fmtMoney(it.rate))}</td>
-          <td class="right">${esc(fmtMoney(it.qty * it.rate))}</td>
+          <td class="right">${esc(fmtMoney(it.amount ?? it.qty * it.rate))}</td>
         </tr>
       `
     }).join('')
@@ -334,10 +335,10 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
       : isStock
         ? '<tr><th>#</th><th>Item</th><th>Movement</th><th>Qty</th><th>Rate</th><th>Amount</th></tr>'
         : '<tr><th>#</th><th>Account</th><th>Debit</th><th>Credit</th></tr>'
-    const subtotal = invoiceItems.length ? invoiceItems.reduce((sum, item) => sum + item.qty * item.rate, 0) : voucher.subtotal || 0
+    const subtotal = invoiceItems.length ? invoiceItems.reduce((sum, item) => sum + (item.amount ?? item.qty * item.rate), 0) : voucher.subtotal || 0
     const discount = invoiceDraft?.discount ?? voucher.discount ?? 0
     const vatRate = invoiceDraft?.vatRate ?? voucher.vat_rate ?? 0
-    const vatAmount = invoiceItems.length ? Math.round(((subtotal - discount) * vatRate / 100 + Number.EPSILON) * 100) / 100 : voucher.vat_amount || 0
+    const vatAmount = invoiceItems.length ? Math.round(((subtotal - discount) * vatRate / 100 + Number.EPSILON) * 1_000_000) / 1_000_000 : voucher.vat_amount || 0
     const totals = isInvoice ? `
       <div class="totals">
         <div><span>Subtotal</span><strong>${esc(fmtMoney(subtotal))}</strong></div>

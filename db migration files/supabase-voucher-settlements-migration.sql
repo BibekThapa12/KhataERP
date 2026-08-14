@@ -9,7 +9,7 @@ create table if not exists voucher_settlements (
   settlement_voucher_id uuid not null references vouchers(id) on delete cascade,
   invoice_voucher_id    uuid not null references vouchers(id) on delete cascade,
   party_account_id      text not null references accounts(id),
-  amount                numeric(14,2) not null check (amount > 0),
+  amount                numeric(18,6) not null check (amount > 0),
   created_at            timestamptz not null default now(),
   unique (settlement_voucher_id, invoice_voucher_id, party_account_id),
   check (settlement_voucher_id <> invoice_voucher_id)

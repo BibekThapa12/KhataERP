@@ -2,7 +2,7 @@
 begin;
 
 alter table public.items add column if not exists alternate_unit text;
-alter table public.items add column if not exists alternate_conversion numeric(14,4);
+alter table public.items add column if not exists alternate_conversion numeric(18,6);
 
 alter table public.items drop constraint if exists items_alternate_unit_check;
 alter table public.items add constraint items_alternate_unit_check check (
@@ -15,8 +15,8 @@ alter table public.items add constraint items_alternate_unit_check check (
 );
 
 alter table public.invoice_items add column if not exists entry_unit text;
-alter table public.invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table public.invoice_items add column if not exists base_qty numeric(14,4);
+alter table public.invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table public.invoice_items add column if not exists base_qty numeric(18,6);
 
 update public.invoice_items
 set entry_unit = coalesce(entry_unit, unit),

@@ -249,7 +249,7 @@ create table if not exists accounts (
   "group"          text not null,
   is_system        boolean not null default false,
   is_party         boolean not null default false,
-  opening_balance  numeric(14,2) not null default 0,
+  opening_balance  numeric(18,6) not null default 0,
   address          text,
   contact_no       text,
   pan_no           text,
@@ -311,11 +311,11 @@ create table if not exists items (
   name             text not null,
   unit             text not null default 'pcs',
   alternate_unit   text,
-  alternate_conversion numeric(14,4),
-  sell_rate        numeric(14,2) not null default 0,
-  opening_qty      numeric(14,4) not null default 0,
-  opening_rate     numeric(14,2) not null default 0,
-  reorder_level    numeric(14,4),
+  alternate_conversion numeric(18,6),
+  sell_rate        numeric(18,6) not null default 0,
+  opening_qty      numeric(18,6) not null default 0,
+  opening_rate     numeric(18,6) not null default 0,
+  reorder_level    numeric(18,6),
   is_service        boolean not null default false,
   created_at       timestamptz not null default now()
 );
@@ -330,7 +330,7 @@ create table if not exists item_categories (
   unique(company_id, name)
 );
 alter table items add column if not exists alternate_unit text;
-alter table items add column if not exists alternate_conversion numeric(14,4);
+alter table items add column if not exists alternate_conversion numeric(18,6);
 
 alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
 alter table items add column if not exists sku text;
@@ -399,15 +399,15 @@ create table if not exists vouchers (
   simple_entry_type text check (simple_entry_type in ('Income','Expense')),
   contra_entry boolean not null default false,
   contra_destination_account_id text references accounts(id),
-  contra_charge_amount numeric(14,2) not null default 0,
+  contra_charge_amount numeric(18,6) not null default 0,
   restock_items    boolean,
   party_account_id text references accounts(id),
   is_cash          boolean not null default false,
-  subtotal         numeric(14,2),
-  discount         numeric(14,2),
+  subtotal         numeric(18,6),
+  discount         numeric(18,6),
   vat_rate         numeric(5,2),
-  vat_amount       numeric(14,2),
-  total            numeric(14,2) not null default 0,
+  vat_amount       numeric(18,6),
+  total            numeric(18,6) not null default 0,
   cancelled        boolean not null default false,
   status           text not null default 'Completed' check (status in ('Draft','Completed')),
   seq              integer not null,
@@ -440,7 +440,7 @@ alter table vouchers add column if not exists supplier_invoice_no text;
 alter table vouchers add column if not exists simple_entry_type text;
 alter table vouchers add column if not exists contra_entry boolean not null default false;
 alter table vouchers add column if not exists contra_destination_account_id text references accounts(id);
-alter table vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table vouchers add column if not exists contra_charge_amount numeric(18,6) not null default 0;
 alter table vouchers add column if not exists draft_no text;
 alter table vouchers drop constraint if exists vouchers_supplier_invoice_no_length_check;
 alter table vouchers add constraint vouchers_supplier_invoice_no_length_check check (supplier_invoice_no is null or char_length(supplier_invoice_no) <= 100);
@@ -466,8 +466,8 @@ create table if not exists voucher_lines (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   account_id       text not null references accounts(id),
-  debit            numeric(14,2) not null default 0,
-  credit           numeric(14,2) not null default 0
+  debit            numeric(18,6) not null default 0,
+  credit           numeric(18,6) not null default 0
 );
 
 -- ── Stock Lines (inventory movements) ────────────────────────────────────────
@@ -475,8 +475,8 @@ create table if not exists stock_lines (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
-  qty              numeric(14,4) not null,
-  rate             numeric(14,2) not null,
+  qty              numeric(18,6) not null,
+  rate             numeric(18,6) not null,
   direction        text not null check (direction in ('in','out')),
   stock_condition  text not null default 'saleable' check (stock_condition in ('saleable','damaged','expired')),
   is_transfer      boolean not null default false
@@ -514,9 +514,15 @@ create table if not exists invoice_items (
   id               uuid primary key default uuid_generate_v4(),
   voucher_id       uuid not null references vouchers(id) on delete cascade,
   item_id          uuid not null references items(id),
-  qty              numeric(14,4) not null,
-  rate             numeric(18,6) not null
+  qty              numeric(18,6) not null,
+  rate             numeric(18,6) not null,
+  amount           numeric(18,6) not null
 );
+alter table invoice_items add column if not exists amount numeric(18,6);
+alter table invoice_items disable trigger user;
+update invoice_items set amount = round(qty * rate, 6) where amount is null;
+alter table invoice_items alter column amount set not null;
+alter table invoice_items enable trigger user;
 
 -- Voucher-to-invoice allocations. Historical receipts/payments without rows
 -- remain valid and are allocated FIFO by the reporting layer.
@@ -526,7 +532,7 @@ create table if not exists voucher_settlements (
   settlement_voucher_id uuid not null references vouchers(id) on delete cascade,
   invoice_voucher_id    uuid not null references vouchers(id) on delete cascade,
   party_account_id      text not null references accounts(id),
-  amount                numeric(14,2) not null check (amount > 0),
+  amount                numeric(18,6) not null check (amount > 0),
   created_at            timestamptz not null default now(),
   unique (settlement_voucher_id, invoice_voucher_id, party_account_id),
   check (settlement_voucher_id <> invoice_voucher_id)
@@ -557,13 +563,13 @@ for each row execute function validate_voucher_settlement();
 alter table invoice_items add column if not exists source_invoice_item_id uuid references invoice_items(id) on delete restrict;
 alter table invoice_items add column if not exists item_name text;
 alter table invoice_items add column if not exists unit text;
-alter table invoice_items add column if not exists discount_amount numeric(14,2);
-alter table invoice_items add column if not exists taxable_amount numeric(14,2);
-alter table invoice_items add column if not exists vat_amount numeric(14,2);
-alter table invoice_items add column if not exists cost_rate numeric(14,2);
+alter table invoice_items add column if not exists discount_amount numeric(18,6);
+alter table invoice_items add column if not exists taxable_amount numeric(18,6);
+alter table invoice_items add column if not exists vat_amount numeric(18,6);
+alter table invoice_items add column if not exists cost_rate numeric(18,6);
 alter table invoice_items add column if not exists entry_unit text;
-alter table invoice_items add column if not exists conversion_factor numeric(14,4) not null default 1;
-alter table invoice_items add column if not exists base_qty numeric(14,4);
+alter table invoice_items add column if not exists conversion_factor numeric(18,6) not null default 1;
+alter table invoice_items add column if not exists base_qty numeric(18,6);
 
 -- ── Indexes ───────────────────────────────────────────────────────────────────
 create index if not exists idx_accounts_company   on accounts(company_id);

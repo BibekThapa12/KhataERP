@@ -1,7 +1,7 @@
 -- Journal-backed Contra vouchers and their protected Bank Charges ledger.
 alter table public.vouchers add column if not exists contra_entry boolean not null default false;
 alter table public.vouchers add column if not exists contra_destination_account_id text references public.accounts(id);
-alter table public.vouchers add column if not exists contra_charge_amount numeric(14,2) not null default 0;
+alter table public.vouchers add column if not exists contra_charge_amount numeric(18,6) not null default 0;
 alter table public.vouchers drop constraint if exists vouchers_contra_metadata_check;
 alter table public.vouchers add constraint vouchers_contra_metadata_check check (
   contra_charge_amount >= 0 and (not contra_entry or (type = 'Journal' and (status = 'Draft' or (settlement_account_id is not null and contra_destination_account_id is not null))))
@@ -97,7 +97,7 @@ begin
   select coalesce(sum(line.debit),0) into charge_debit from public.voucher_lines line join public.accounts account on account.id = line.account_id
     where line.voucher_id = target_id and account.company_id = v.company_id and lower(btrim(account.name)) = lower('Bank Charges') and account.is_system and account.type = 'Expense';
   expected_line_count := case when v.contra_charge_amount > 0 then 3 else 2 end;
-  if destination_debit <= 0 or round(charge_debit,2) <> round(v.contra_charge_amount,2) or round(source_credit,2) <> round(destination_debit + charge_debit,2)
+  if destination_debit <= 0 or round(charge_debit,6) <> round(v.contra_charge_amount,6) or round(source_credit,6) <> round(destination_debit + charge_debit,6)
      or line_count <> expected_line_count
      or exists (select 1 from public.voucher_lines where voucher_id = target_id and debit > 0 and credit > 0)
   then raise exception 'Contra voucher lines are invalid or unbalanced'; end if;

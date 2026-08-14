@@ -94,7 +94,7 @@ function portablePositiveNumber(value: unknown, fallback: number) {
 }
 
 function portableRound(value: number) {
-  return Math.round((value + Number.EPSILON) * 100) / 100
+  return Math.round((value + Number.EPSILON) * 1_000_000) / 1_000_000
 }
 
 function allocatePortableAmount(total: number, weight: number, used: number, isLast: boolean) {
@@ -102,7 +102,10 @@ function allocatePortableAmount(total: number, weight: number, used: number, isL
 }
 
 function portableInvoiceItemsForRestore(voucher: Voucher, originalVoucher?: Voucher): InvoiceItem[] {
-  if (voucher.invoice_items?.length) return voucher.invoice_items
+  if (voucher.invoice_items?.length) return voucher.invoice_items.map(item => ({
+    ...item,
+    amount: portableRound(portableNumber(item.amount, portableNumber(item.qty, 0) * portableNumber(item.rate, 0))),
+  }))
   if (!['Sales', 'Purchase', 'Sales Return', 'Purchase Return'].includes(voucher.type) || !voucher.stock_lines?.length) return []
 
   const stockLines = voucher.stock_lines.filter(line => line.item_id)
@@ -136,6 +139,7 @@ function portableInvoiceItemsForRestore(voucher: Voucher, originalVoucher?: Vouc
       item_id: line.item_id,
       qty,
       rate: source ? portableNumber(source.rate, qty ? gross / qty : gross) : (qty ? gross / qty : gross),
+      amount: gross,
       source_invoice_item_id: source?.id,
       entry_unit: line.item?.unit,
       unit: line.item?.unit,
@@ -684,6 +688,7 @@ export function SettingsPage() {
           voucher_id: idMap.get(voucher.id),
           item_id: idMap.get(item.item_id) || item.item_id,
           qty,
+          amount: portableRound(portableNumber(item.amount, qty * portableNumber(item.rate, 0))),
           conversion_factor: conversionFactor,
           base_qty: baseQty,
           source_invoice_item_id: null,
@@ -701,7 +706,7 @@ export function SettingsPage() {
         const sourcePlan = invoiceItemPlans.find(source =>
           source.voucher.id === originalVoucher?.id &&
           source.row.item_id === plan.row.item_id &&
-          Math.abs(portableNumber(source.row.rate, 0) - portableNumber(plan.row.rate, 0)) <= 0.01
+          Math.abs(portableNumber(source.row.rate, 0) - portableNumber(plan.row.rate, 0)) <= 0.000001
         )
         const sourceIdFromBackup = plan.item.source_invoice_item_id ? invoiceItemIdMap.get(plan.item.source_invoice_item_id) : null
         const sourceInvoiceItemId = sourcePlan?.row.id || sourceIdFromBackup

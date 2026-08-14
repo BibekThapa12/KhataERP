@@ -27,8 +27,8 @@ describe('accounting engine integrity', () => {
     const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items, vat_rate: 13, system_accounts: accounts })
     const sale = buildSalesVoucherData({ party_account_id: 'customer', is_cash: false, items, vat_rate: 13, system_accounts: accounts })
 
-    expect(purchase).toMatchObject({ subtotal: 1.36, vat_amount: 0.18, total: 1.54 })
-    expect(sale).toMatchObject({ subtotal: 1.36, vat_amount: 0.18, total: 1.54 })
+    expect(purchase).toMatchObject({ subtotal: 1.34, vat_amount: 0.1742, total: 1.5142 })
+    expect(sale).toMatchObject({ subtotal: 1.34, vat_amount: 0.1742, total: 1.5142 })
     expect(validateBalanced(purchase.lines).valid).toBe(true)
     expect(validateBalanced(sale.lines).valid).toBe(true)
   })
@@ -38,6 +38,19 @@ describe('accounting engine integrity', () => {
     expect(rate).toBe(333.333333)
     expect(Math.round((3 * (rate || 0) + Number.EPSILON) * 100) / 100).toBe(1000)
     expect(invoiceRateFromAmount(1000, 0)).toBeNull()
+  })
+
+  it('uses authoritative six-decimal invoice amounts in grand totals', () => {
+    const items = [
+      { item_id: 'a', qty: 3, rate: invoiceRateFromAmount(1000.123456, 3) || 0, amount: 1000.123456 },
+      { item_id: 'b', qty: 7, rate: invoiceRateFromAmount(2.000001, 7) || 0, amount: 2.000001 },
+      { item_id: 'c', qty: 50, rate: invoiceRateFromAmount(96.123456, 50) || 0, amount: 96.123456 },
+    ]
+    const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items, vat_rate: 0, system_accounts: accounts })
+    expect(purchase.subtotal).toBe(1098.246913)
+    expect(purchase.total).toBe(1098.246913)
+    expect(purchase.invoice_items.map(item => item.amount)).toEqual([1000.123456, 2.000001, 96.123456])
+    expect(validateBalanced(purchase.lines).valid).toBe(true)
   })
 
   it('posts zero-value sales, purchases, and returns while preserving item quantities', () => {
@@ -141,8 +154,8 @@ describe('accounting engine integrity', () => {
     const purchasesAndSale = [voucher('purchase', 1, 'Purchase', 'in', 10, 20), voucher('sale', 2, 'Sales', 'out', 5, 999)]
 
     expect(recomputeStock([item], purchasesAndSale, 'weighted_average')[0]).toMatchObject({ qty: 15, avg_cost: 15, value: 225 })
-    expect(recomputeStock([item], purchasesAndSale, 'fifo')[0]).toMatchObject({ qty: 15, avg_cost: 16.67, value: 250 })
-    expect(recomputeStock([item], purchasesAndSale, 'lifo')[0]).toMatchObject({ qty: 15, avg_cost: 13.33, value: 200 })
+    expect(recomputeStock([item], purchasesAndSale, 'fifo')[0]).toMatchObject({ qty: 15, avg_cost: 16.666667, value: 250 })
+    expect(recomputeStock([item], purchasesAndSale, 'lifo')[0]).toMatchObject({ qty: 15, avg_cost: 13.333333, value: 200 })
 
     const withSalesReturn = [...purchasesAndSale, voucher('return', 3, 'Sales Return', 'in', 2, 0, 'sale')]
     expect(recomputeStock([item], withSalesReturn, 'fifo')[0]).toMatchObject({ qty: 17, value: 270 })
@@ -171,7 +184,7 @@ describe('accounting engine integrity', () => {
     const fifo = computeStockLedger(item, vouchers, '2082-09-17', '2082-09-17', 'fifo')
     expect(fifo).toMatchObject({ opening_qty: 20, opening_value: 300, outward_qty: 5, outward_value: 50, closing_qty: 15, closing_value: 250 })
     expect(fifo.movements).toHaveLength(1)
-    expect(fifo.movements[0]).toMatchObject({ voucher_id: 'sale', outward_rate: 10, outward_value: 50, balance_qty: 15, balance_rate: 16.67, balance_value: 250 })
+    expect(fifo.movements[0]).toMatchObject({ voucher_id: 'sale', outward_rate: 10, outward_value: 50, balance_qty: 15, balance_rate: 16.666667, balance_value: 250 })
     const weighted = computeStockLedger(item, vouchers, '2082-09-17', '2082-09-17', 'weighted_average')
     expect(weighted).toMatchObject({ outward_value: 75, closing_value: 225 })
   })

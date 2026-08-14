@@ -522,7 +522,7 @@ async function saveDraftGroup(module: ImportModule, rows: Record<string, unknown
     const subtotal = lines.reduce((sum, row) => sum + row.qty * row.rate, 0)
     const discount = num(first.discount_flat)
     const vatRate = first.vat_rate === '' ? 13 : num(first.vat_rate)
-    const total = Math.round((subtotal - discount + ((subtotal - discount) * vatRate / 100) + Number.EPSILON) * 100) / 100
+    const total = Math.round((subtotal - discount + ((subtotal - discount) * vatRate / 100) + Number.EPSILON) * 1_000_000) / 1_000_000
     await context.saveDraftVoucher({ type: isSales ? 'Sales' : 'Purchase', date_bs: dateBs, narration, party_account_id: isCash ? null : party?.account_id || null, is_cash: isCash, total, draft_payload: { dateBs, isCash, partyAccountId: isCash ? '' : party?.account_id || '', creditDays: num(first.credit_days), supplierInvoiceNo: str(first.supplier_invoice_no), lines, vatRate, discount, discountMode: 'flat', narration } })
     return
   }

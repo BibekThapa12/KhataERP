@@ -7,8 +7,12 @@ import { toBaseQty, toBaseRate } from '@/lib/units'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-export const round2 = (n: number): number =>
-  Math.round((Number(n) + Number.EPSILON) * 100) / 100
+export const round6 = (n: number): number =>
+  Math.round((Number(n) + Number.EPSILON) * 1_000_000) / 1_000_000
+
+// Kept as a compatibility alias while domain code migrates to the clearer name.
+// Accounting calculations now preserve six decimal places everywhere.
+export const round2 = round6
 
 export function normalSide(type: AccountType): 'debit' | 'credit' {
   return type === 'Asset' || type === 'Expense' ? 'debit' : 'credit'
@@ -18,7 +22,7 @@ export function validateBalanced(lines: VoucherLine[]): { valid: boolean; total_
   const total_debit = round2(lines.reduce((s, l) => s + (l.debit || 0), 0))
   const total_credit = round2(lines.reduce((s, l) => s + (l.credit || 0), 0))
   const diff = round2(total_debit - total_credit)
-  return { valid: Math.abs(diff) < 0.005, total_debit, total_credit, diff }
+  return { valid: Math.abs(diff) < 0.0000005, total_debit, total_credit, diff }
 }
 
 export function voucherStatus(voucher: Voucher): 'Draft' | 'Completed' {
@@ -534,6 +538,7 @@ export interface InvoiceEntryInput {
   item_id: string
   qty: number
   rate: number
+  amount?: number
   entry_unit?: string
   conversion_factor?: number
   cost_rate?: number
@@ -558,13 +563,13 @@ const sys = (accounts: InvoiceParams['system_accounts'], key: SystemAccountKey) 
 // PostgreSQL validates invoice subtotals as SUM(ROUND(qty * rate, 2)). Keep
 // this calculation identical so fractional quantities/rates cannot produce a
 // one-paisa disagreement between the form and the integrity trigger.
-export function invoiceSubtotal(items: Pick<InvoiceEntryInput, 'qty' | 'rate'>[]) {
-  return round2(items.reduce((sum, item) => sum + round2(item.qty * item.rate), 0))
+export function invoiceSubtotal(items: Pick<InvoiceEntryInput, 'qty' | 'rate' | 'amount'>[]) {
+  return round6(items.reduce((sum, item) => sum + round6(item.amount ?? item.qty * item.rate), 0))
 }
 
 export function invoiceRateFromAmount(amount: number, quantity: number) {
   if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(quantity) || quantity <= 0) return null
-  return Math.round((amount / quantity + Number.EPSILON) * 1_000_000) / 1_000_000
+  return round6(amount / quantity)
 }
 
 export function buildSalesVoucherData(p: InvoiceParams) {
@@ -578,7 +583,7 @@ export function buildSalesVoucherData(p: InvoiceParams) {
     { account_id: sys(p.system_accounts, 'sales'), debit: 0, credit: taxable },
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
-  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
+  const invoice_items = p.items.map(l => ({ ...l, amount: round6(l.amount ?? l.qty * l.rate), conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
   const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const, stock_condition: 'saleable' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
@@ -594,7 +599,7 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
   lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
-  const invoice_items = p.items.map(l => ({ ...l, conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
+  const invoice_items = p.items.map(l => ({ ...l, amount: round6(l.amount ?? l.qty * l.rate), conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
   const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const, stock_condition: 'saleable' as const }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
@@ -629,7 +634,7 @@ export interface ReturnVoucherParams {
 
 export function buildReturnVoucherData(p: ReturnVoucherParams) {
   const subtotal = round2(p.items.reduce((sum, item) => sum + item.qty * item.rate, 0))
-  const originalSubtotal = p.original?.subtotal || (p.original?.invoice_items || []).reduce((sum, item) => sum + item.qty * item.rate, 0) || subtotal
+  const originalSubtotal = p.original?.subtotal || (p.original?.invoice_items || []).reduce((sum, item) => sum + (item.amount ?? item.qty * item.rate), 0) || subtotal
   const originalDiscount = p.original?.discount || 0
   const vatRate = p.original ? (p.original.vat_rate || 0) : (p.vat_rate || 0)
   let invoice_items = p.items.map(item => {
@@ -637,7 +642,7 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
     const discount_amount = originalSubtotal > 0 ? round2(originalDiscount * gross / originalSubtotal) : 0
     const taxable_amount = round2(gross - discount_amount)
     const vat_amount = round2(taxable_amount * vatRate / 100)
-    return { ...item, discount_amount, taxable_amount, vat_amount }
+    return { ...item, amount: gross, discount_amount, taxable_amount, vat_amount }
   })
   const fullOriginalReturn = !!p.original && (p.original.invoice_items || []).length === invoice_items.length &&
     (p.original.invoice_items || []).every(source => {

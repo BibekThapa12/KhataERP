@@ -17,6 +17,18 @@ create unique index if not exists vouchers_company_idempotency_unique
   on public.vouchers(company_id, idempotency_key)
   where idempotency_key is not null;
 
+create or replace function public.numeric_json_scale_valid(payload jsonb, numeric_keys text[])
+returns boolean language sql immutable set search_path = public as $$
+  select not exists (
+    select 1
+    from jsonb_array_elements(case when jsonb_typeof(payload) = 'array' then payload else jsonb_build_array(payload) end) object_value
+    cross join unnest(numeric_keys) key_name
+    where object_value ? key_name
+      and nullif(object_value->>key_name, '') is not null
+      and (object_value->>key_name)::numeric <> round((object_value->>key_name)::numeric, 6)
+  );
+$$;
+
 create or replace function public.voucher_atomic_response(target_voucher_id uuid)
 returns jsonb
 language sql
@@ -34,7 +46,7 @@ as $$
       'is_transfer', line.is_transfer
     )) from public.stock_lines line where line.voucher_id = voucher.id), '[]'::jsonb),
     'invoice_items', coalesce((select jsonb_agg(jsonb_build_object(
-      'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate,
+      'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate, 'amount', item.amount,
       'source_invoice_item_id', item.source_invoice_item_id,
       'item_name', item.item_name, 'unit', item.unit, 'entry_unit', item.entry_unit,
       'conversion_factor', item.conversion_factor, 'base_qty', item.base_qty,
@@ -77,8 +89,8 @@ declare
   next_seq integer;
   highest_number bigint;
   generated_number text;
-  debit_total numeric(14,2);
-  credit_total numeric(14,2);
+  debit_total numeric(18,6);
+  credit_total numeric(18,6);
   result jsonb;
   requested_idempotency uuid;
   posting_stage text := 'payload_validation';
@@ -100,13 +112,20 @@ begin
     or jsonb_typeof(coalesce(p_settlements, '[]'::jsonb)) <> 'array' then
     raise exception 'Voucher child payloads must be arrays';
   end if;
+  if not public.numeric_json_scale_valid(p_voucher, array['subtotal','discount','vat_amount','total','contra_charge_amount'])
+    or not public.numeric_json_scale_valid(coalesce(p_lines,'[]'::jsonb), array['debit','credit'])
+    or not public.numeric_json_scale_valid(coalesce(p_stock_lines,'[]'::jsonb), array['qty','rate'])
+    or not public.numeric_json_scale_valid(coalesce(p_invoice_items,'[]'::jsonb), array['qty','rate','amount','discount_amount','taxable_amount','vat_amount','cost_rate','conversion_factor','base_qty'])
+    or not public.numeric_json_scale_valid(coalesce(p_settlements,'[]'::jsonb), array['amount']) then
+    raise exception 'Accounting values support at most six decimal places';
+  end if;
 
   select coalesce(sum(coalesce(line.debit, 0)), 0),
          coalesce(sum(coalesce(line.credit, 0)), 0)
     into debit_total, credit_total
   from jsonb_to_recordset(coalesce(p_lines, '[]'::jsonb))
     as line(account_id text, debit numeric, credit numeric);
-  if abs(debit_total - credit_total) > 0.01 then
+  if abs(debit_total - credit_total) > 0.000001 then
     raise exception 'Voucher is not balanced: debit %, credit %', debit_total, credit_total;
   end if;
 
@@ -314,15 +333,15 @@ begin
 
   posting_stage := 'invoice_items_insert';
   insert into public.invoice_items (
-    voucher_id, item_id, qty, rate, source_invoice_item_id, item_name, unit,
+    voucher_id, item_id, qty, rate, amount, source_invoice_item_id, item_name, unit,
     entry_unit, conversion_factor, base_qty, discount_amount, taxable_amount,
     vat_amount, cost_rate
   )
-  select saved.id, item.item_id, item.qty, item.rate, item.source_invoice_item_id,
+  select saved.id, item.item_id, item.qty, item.rate, coalesce(item.amount, round(item.qty * item.rate, 6)), item.source_invoice_item_id,
          item.item_name, item.unit, item.entry_unit, coalesce(item.conversion_factor, 1),
          item.base_qty, item.discount_amount, item.taxable_amount, item.vat_amount, item.cost_rate
   from jsonb_to_recordset(coalesce(p_invoice_items, '[]'::jsonb)) as item(
-    item_id uuid, qty numeric, rate numeric, source_invoice_item_id uuid,
+    item_id uuid, qty numeric, rate numeric, amount numeric, source_invoice_item_id uuid,
     item_name text, unit text, entry_unit text, conversion_factor numeric,
     base_qty numeric, discount_amount numeric, taxable_amount numeric,
     vat_amount numeric, cost_rate numeric

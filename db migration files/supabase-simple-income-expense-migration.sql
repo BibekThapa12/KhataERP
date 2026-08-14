@@ -71,7 +71,7 @@ begin
      or detail_count <> (select count(*) from public.voucher_lines where voucher_id = target_id and account_id <> voucher_row.settlement_account_id)
      or (expected_type = 'Income' and (counter_debit <> detail_total or counter_credit <> 0))
      or (expected_type = 'Expense' and (counter_credit <> detail_total or counter_debit <> 0))
-     or round(detail_total, 2) <> round(voucher_row.total, 2) then
+     or round(detail_total, 6) <> round(voucher_row.total, 6) then
     raise exception 'Simple entry ledger lines are invalid or unbalanced';
   end if;
   return null;

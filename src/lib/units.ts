@@ -17,11 +17,11 @@ export function toBaseQty(qty: number, factor: number) {
 }
 
 export function toBaseRate(rate: number, factor: number) {
-  return Math.round((rate * factor + Number.EPSILON) * 100) / 100
+  return Math.round((rate * factor + Number.EPSILON) * 1_000_000) / 1_000_000
 }
 
 export function fromBaseRate(rate: number, factor: number) {
-  return Math.round((rate / factor + Number.EPSILON) * 100) / 100
+  return Math.round((rate / factor + Number.EPSILON) * 1_000_000) / 1_000_000
 }
 
 const qtyText = (qty: number) => Number(qty.toFixed(4)).toLocaleString('en-NP', { maximumFractionDigits: 4 })

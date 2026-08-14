@@ -27,9 +27,9 @@ describe('buildContraLines', () => {
   })
   it('rounds transfer and charge values to ledger precision', () => {
     expect(buildContraLines({ source_account_id: 'bank-a', destination_account_id: 'bank-b', amount: 10.005, charge_amount: 0.005 }, accounts, categories, 'co', 'co:bank_charges')).toEqual([
-      { account_id: 'bank-b', debit: 10.01, credit: 0 },
-      { account_id: 'co:bank_charges', debit: 0.01, credit: 0 },
-      { account_id: 'bank-a', debit: 0, credit: 10.02 },
+      { account_id: 'bank-b', debit: 10.005, credit: 0 },
+      { account_id: 'co:bank_charges', debit: 0.005, credit: 0 },
+      { account_id: 'bank-a', debit: 0, credit: 10.01 },
     ])
   })
   it('supports Bank OD and rejects invalid transfers', () => {
