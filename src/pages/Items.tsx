@@ -25,6 +25,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import type { Item, ItemCategory, StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 
@@ -43,6 +44,9 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const [error, setError] = useState('')
   const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
   const stockItems = useMemo(() => items.filter(item => !item.is_service), [items])
   const selectedItem = stockItems.find(item => item.id === itemId)
   const selectedStock = stock.find(entry => entry.id === itemId)
@@ -52,10 +56,15 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const availableInSelectedUnit = availableSaleable * conversionFactor
 
   useEffect(() => {
+    const formIdentity = `StockAdjustment:${voucher?.id || 'new'}`
     if (!open) {
+      initializedFormRef.current = null; baselineRef.current = ''
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       return
     }
+    if (initializedFormRef.current === formIdentity) return
+    initializedFormRef.current = formIdentity
+    baselineRef.current = ''
     if (voucher?.status === 'Draft') {
       const draft = voucher.draft_payload as Partial<{ dateBs:string; mode:'adjustment'|'transfer'; itemId:string; stockCondition:StockCondition; transferTo:'damaged'|'expired'; unitMode:UnitMode; qtyDelta:string; rate:string; narration:string }> | null
       setDateBs(draft?.dateBs || voucher.date_bs)
@@ -69,7 +78,13 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       setNarration(draft?.narration || voucher.narration || '')
       setError('')
     }
+    window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
   }, [open, voucher, company])
+
+  const formSnapshot = stableFormSnapshot({ dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration })
+  snapshotRef.current = formSnapshot
+  const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
 
   const changeUnitMode = (nextMode: UnitMode) => {
     const previousFactor = unitFactor(selectedItem, unitMode)
@@ -138,7 +153,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const canSaveDraft = !voucher || voucher.status === 'Draft'
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
-  return <Dialog open={open} onOpenChange={value => !value && onClose()}>
+  return <Dialog open={open} onOpenChange={value => { if (!value && confirmDiscard()) onClose() }}>
     <DialogContent className="voucher-dialog max-w-md">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">

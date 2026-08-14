@@ -16,7 +16,9 @@ import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -51,13 +53,21 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   const [error, setError] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
+  const pendingLineFocus = useRef(false)
 
   const activeAccounts = useMemo(() => rawAccounts.filter(account => !account.is_archived).sort((a, b) => a.name.localeCompare(b.name)), [rawAccounts])
   const counterChoices = useMemo(() => company ? simpleEntryCounterAccounts(rawAccounts, accountCategories, parties, company.id) : { cashAndBanks: [], partyAccounts: [], partyByAccount: new Map() }, [company, rawAccounts, accountCategories, parties])
   const total = lines.reduce((sum, line) => sum + (Number(line.amount) || 0), 0)
 
   useEffect(() => {
-    if (!open) return
+    const formIdentity = `${entryType}:${voucher?.id || 'new'}`
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; return }
+    if (initializedFormRef.current === formIdentity) return
+    initializedFormRef.current = formIdentity
+    baselineRef.current = ''
     const draft = (voucher?.draft_payload || {}) as DraftPayload
     const storedLines = draft.lines?.length
       ? draft.lines
@@ -72,9 +82,21 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
     setLines(storedLines.length ? storedLines : [blankLine()])
     setNarration(draft.narration ?? voucher?.narration ?? '')
     setError('')
+    window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
   }, [open, voucher, entryType, rawAccounts, company])
 
+  const formSnapshot = stableFormSnapshot({ dateBs, invoiceNo, counterAccountId, lines, narration })
+  snapshotRef.current = formSnapshot
+  const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+
   const updateLine = (index: number, updates: Partial<SimpleEntryLineInput>) => setLines(current => current.map((line, lineIndex) => lineIndex === index ? { ...line, ...updates } : line))
+  useEffect(() => {
+    if (!pendingLineFocus.current) return
+    pendingLineFocus.current = false
+    const frame = window.requestAnimationFrame(() => focusLastSearchableSelect(`Select ${entryType.toLowerCase()} ledger`))
+    return () => window.cancelAnimationFrame(frame)
+  }, [lines.length, entryType])
   const params = () => ({ entry_type: entryType, counter_account_id: counterAccountId, lines, narration: narration.trim(), date_bs: dateBs, invoice_no: manualNumbering ? invoiceNo.trim() : undefined })
 
   const complete = async () => {
@@ -118,7 +140,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   }
 
   return <>
-    <Dialog open={open} onOpenChange={next => !next && onClose()}>
+    <Dialog open={open} onOpenChange={next => { if (!next && confirmDiscard()) onClose() }}>
       <DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Edit' : 'Add'} {entryType}</DialogTitle></DialogHeader>
         <p className="-mt-2 text-sm text-muted-foreground">No debit or credit knowledge needed. Choose where the money moved and what it was for.</p>
@@ -144,7 +166,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
                 <Button type="button" variant="ghost" size="icon" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, lineIndex) => lineIndex !== index))}><Trash2 className="h-4 w-4" /></Button>
               </div>
             })}
-            <Button type="button" variant="outline" size="sm" onClick={() => setLines(current => [...current, blankLine()])}><Plus className="mr-1 h-4 w-4" />Add line</Button>
+            <Button type="button" variant="outline" size="sm" onClick={() => setLines(current => { pendingLineFocus.current = true; return [...current, blankLine()] })}><Plus className="mr-1 h-4 w-4" />Add line</Button>
           </div>
           <div className="flex justify-between rounded-lg bg-muted/40 p-3 text-sm font-semibold"><span>Total</span><span className="num">{fmtMoney(total)}</span></div>
           <div className="space-y-1.5"><Label>Note</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder={`What was this ${entryType.toLowerCase()} for?`} /></div>

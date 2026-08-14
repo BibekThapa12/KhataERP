@@ -14,6 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { Textarea } from '@/components/ui/misc'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { publicErrorMessage } from '@/lib/security'
@@ -24,6 +25,7 @@ import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 
 interface ReturnFormProps {
   type: 'Sales Return' | 'Purchase Return'
@@ -61,6 +63,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const [error, setError] = useState('')
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
+  const pendingManualLineFocus = useRef(false)
 
   const emptyManualLine = useCallback((): ReturnLine => ({
     item_id: '', item_name: '', unit: '', entry_unit: '', conversion_factor: 1,
@@ -110,10 +116,16 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   }), [company?.inventory_valuation_method, items, stock, type, voucher?.id, vouchers])
 
   useEffect(() => {
+    const formIdentity = `${type}:${voucher?.id || 'new'}`
     if (!open) {
+      initializedFormRef.current = null
+      baselineRef.current = ''
       setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError(''); setDateInvalid(false)
       return
     }
+    if (initializedFormRef.current === formIdentity) return
+    initializedFormRef.current = formIdentity
+    baselineRef.current = ''
     if (voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
         partyAccountId: string; originalId: string; dateBs: string; lines: ReturnLine[]; settlementMode: 'party' | 'cash' | 'bank'; settlementAccountId: string; stockCondition: StockCondition; manualVatRate: number; reason: string
@@ -133,7 +145,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     } else {
       setLines(current => current.length ? current : [emptyManualLine()])
     }
-  }, [open, voucher, vouchers, makeLines, cashAccountId, defaultBankId, emptyManualLine, items, stock, vatEnabled, company])
+    window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+  }, [open, voucher, vouchers, makeLines, cashAccountId, defaultBankId, emptyManualLine, items, stock, vatEnabled, company, type])
 
   const selectParty = (accountId: string) => {
     setPartyAccountId(accountId)
@@ -183,6 +196,16 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     restock_items: true, stock_condition: stockCondition, system_accounts: { cash: 'cash', bank: 'bank', sales_return: 'sales_return', purchase_return: 'purchase_return', vat_payable: 'vat_payable', vat_receivable: 'vat_receivable' },
   }) : null
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
+  const formSnapshot = stableFormSnapshot({ partyAccountId, originalId, dateBs, lines, settlementMode, settlementAccountId, stockCondition, manualVatRate, reason })
+  snapshotRef.current = formSnapshot
+  const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+  useEffect(() => {
+    if (!pendingManualLineFocus.current) return
+    pendingManualLineFocus.current = false
+    const frame = window.requestAnimationFrame(() => focusLastSearchableSelect('Select item...'))
+    return () => window.cancelAnimationFrame(frame)
+  }, [lines.length])
 
   useEffect(() => {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
@@ -219,6 +242,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       if (voucher) {
         onClose()
       } else {
+        baselineRef.current = ''
         setPartyAccountId('')
         setOriginalId('')
         setDateBs(selectedFiscalYearEndBs(company))
@@ -230,6 +254,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setReason('')
         setError('')
         setDateInvalid(false)
+        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
@@ -283,8 +308,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
   return (
-    <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="voucher-dialog max-w-4xl max-h-[92vh] overflow-y-auto">
+    <Dialog open={open} onOpenChange={value => { if (!value && confirmDiscard()) onClose() }}>
+      <DialogContent onClickCapture={event => { const target = event.target; if (target instanceof Element && target.closest('button')?.textContent?.includes('Add item')) pendingManualLineFocus.current = true }} className="voucher-dialog max-w-4xl max-h-[92vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">

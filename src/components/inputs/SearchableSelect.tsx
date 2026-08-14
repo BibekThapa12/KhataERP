@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import type { FocusEvent, Ref } from 'react'
+import type { Ref } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
@@ -114,7 +114,7 @@ export function SearchableSelect({
     setOpen(false)
   }
 
-  const openOnFocus = (event: FocusEvent<HTMLButtonElement>) => {
+  const openOnFocus = () => {
     if (suppressNextFocus.current) {
       suppressNextFocus.current = false
       return
@@ -124,7 +124,7 @@ export function SearchableSelect({
       return
     }
     if (!focusCameFromTab.current) {
-      event.currentTarget.blur()
+      window.setTimeout(() => setOpen(true), 0)
       return
     }
     focusCameFromTab.current = false

@@ -13,6 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
@@ -25,6 +26,7 @@ import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { formatMasterName } from '@/lib/nameFormat'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 
@@ -194,11 +196,19 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [error, setError] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const pendingAllocationFocus = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
   const [dateInvalid, setDateInvalid] = useState(false)
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
 
   useEffect(() => {
+    const formIdentity = `${type}:${voucher?.id || 'new'}`
+    if (!open) { initializedFormRef.current = null; baselineRef.current = '' }
+    else if (initializedFormRef.current === formIdentity) return
+    else { initializedFormRef.current = formIdentity; baselineRef.current = '' }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; allocations: typeof allocations; moneyAccountId: string; narration: string }> | null : null
       setDateBs(voucher.date_bs)
@@ -214,12 +224,17 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     } else if (!open) {
       setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
     }
-  }, [open, voucher, cashAccountId, isReceipt, company])
+    if (open) window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+  }, [open, voucher, cashAccountId, isReceipt, company, type])
 
   const moneyIds = new Set([cashAccountId, ...bankAccounts(accounts, accountCategories, true).map(account => account.id)])
   const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
   const allocationAccounts = accounts.filter(account => !moneyIds.has(account.id) && (!account.is_archived || (!!voucher && selectedIds.has(account.id))))
   const total = round2(allocations.reduce((sum, allocation) => sum + (Number(allocation.amount) || 0), 0))
+  const receiptPaymentSnapshot = stableFormSnapshot({ dateBs, allocations, moneyAccountId, narration })
+  snapshotRef.current = receiptPaymentSnapshot
+  const receiptPaymentDirty = open && baselineRef.current !== '' && receiptPaymentSnapshot !== baselineRef.current
+  const confirmReceiptPaymentDiscard = useUnsavedChangesGuard(open, receiptPaymentDirty)
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
   useEffect(() => {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
@@ -234,6 +249,13 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     return next
   }))
   const updateInvoiceAllocation = (allocationIndex: number, invoiceId: string, value: string) => setAllocations(current => current.map((allocation, index) => index === allocationIndex ? { ...allocation, invoice_allocations: allocation.invoice_allocations.map(row => row.invoice_voucher_id === invoiceId ? { ...row, amount: value } : row) } : allocation))
+
+  useEffect(() => {
+    if (pendingAllocationFocus.current === null) return
+    pendingAllocationFocus.current = null
+    const frame = window.requestAnimationFrame(() => focusLastSearchableSelect('Select ledger...'))
+    return () => window.cancelAnimationFrame(frame)
+  }, [allocations.length])
 
   const handleSave = async (status: Voucher['status'] = 'Completed') => {
     if (status === 'Completed' && !dateValidation.valid) {
@@ -261,12 +283,14 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       if (voucher) {
         onClose()
       } else {
+        baselineRef.current = ''
         setDateBs(selectedFiscalYearEndBs(company))
         setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }])
         setMoneyAccountId(cashAccountId)
         setNarration('')
         setError('')
         setDateInvalid(false)
+        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
@@ -317,7 +341,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   return (
     <>
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+    <Dialog open={open} onOpenChange={o => { if (!o && confirmReceiptPaymentDiscard()) onClose() }}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
@@ -347,7 +371,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
                 <Button type="button" variant="ghost" size="icon" disabled={allocations.length === 1} onClick={() => setAllocations(current => current.filter((_, row) => row !== index))}><Trash2 className="h-4 w-4" /></Button>
               </div>
             })}
-            <div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => [...current, { account_id: '', amount: '', invoice_allocations: [] }])}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div>
+            <div className="flex flex-wrap items-center justify-between gap-2"><Button type="button" variant="outline" size="sm" onClick={() => setAllocations(current => { pendingAllocationFocus.current = current.length; return [...current, { account_id: '', amount: '', invoice_allocations: [] }] })}><Plus className="mr-1.5 h-4 w-4" />Add ledger</Button><p className="text-sm font-semibold">Total: <span className="num">{fmtMoney(total)}</span></p></div>
           </div>
           {allocations.some(allocation => allocation.invoice_allocations.length > 0) && (
             <div className="space-y-2 rounded-md border border-border p-3">
@@ -408,11 +432,19 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [error, setError] = useState('')
   const [dateInvalid, setDateInvalid] = useState(false)
   const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const pendingJournalLineFocus = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
 
   useEffect(() => {
+    const formIdentity = `Journal:${voucher?.id || 'new'}`
+    if (!open) { initializedFormRef.current = null; baselineRef.current = '' }
+    else if (initializedFormRef.current === formIdentity) return
+    else { initializedFormRef.current = formIdentity; baselineRef.current = '' }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; journalInvoiceNo: string; jLines: JLine[]; narration: string }> | null : null
       setDateBs(voucher.date_bs)
@@ -436,11 +468,16 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       setLedgerLineIndex(null)
       setDateInvalid(false)
     }
+    if (open) window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
   }, [open, voucher, company])
 
   const totalDebit = round2(jLines.reduce((s, l) => s + (l.debit || 0), 0))
   const totalCredit = round2(jLines.reduce((s, l) => s + (l.credit || 0), 0))
   const diff = round2(totalDebit - totalCredit)
+  const journalSnapshot = stableFormSnapshot({ dateBs, journalInvoiceNo, jLines, narration })
+  snapshotRef.current = journalSnapshot
+  const journalDirty = open && baselineRef.current !== '' && journalSnapshot !== baselineRef.current
+  const confirmJournalDiscard = useUnsavedChangesGuard(open, journalDirty)
   const balanced = Math.abs(diff) < 0.005
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type: 'Journal', dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: company.journal_numbering_mode === 'manual' ? journalInvoiceNo : voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status, journalInvoiceNo])
   useEffect(() => {
@@ -454,6 +491,13 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     else next[idx] = { ...next[idx], [field]: field === 'account_id' ? value : Number(value) }
     setJLines(next)
   }
+
+  useEffect(() => {
+    if (pendingJournalLineFocus.current === null) return
+    pendingJournalLineFocus.current = null
+    const frame = window.requestAnimationFrame(() => focusLastSearchableSelect('Select account…'))
+    return () => window.cancelAnimationFrame(frame)
+  }, [jLines.length])
 
   const handleSave = async (status: Voucher['status'] = 'Completed') => {
     if (manualJournalNumbering && !journalInvoiceNo.trim()) { setError('Enter the Journal voucher number.'); return }
@@ -481,12 +525,14 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       if (voucher) {
         onClose()
       } else {
+        baselineRef.current = ''
         setDateBs(selectedFiscalYearEndBs(company))
         setJournalInvoiceNo('')
         setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }])
         setNarration('')
         setError('')
         setDateInvalid(false)
+        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
@@ -535,7 +581,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
 
   return (
     <>
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
+    <Dialog open={open} onOpenChange={o => { if (!o && confirmJournalDiscard()) onClose() }}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground -mt-2">
@@ -576,7 +622,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
               <LedgerBalanceHint className="col-span-2 sm:col-span-4" account={accounts.find(account => account.id === line.account_id)} party={partyByAccount.get(line.account_id)} />
             </div>
           ))}
-          <Button type="button" variant="outline" size="sm" onClick={() => setJLines([...jLines, { account_id: '', debit: 0, credit: 0 }])}>
+          <Button type="button" variant="outline" size="sm" onClick={() => setJLines(current => { pendingJournalLineFocus.current = current.length; return [...current, { account_id: '', debit: 0, credit: 0 }] })}>
             <Plus className="h-3.5 w-3.5 mr-1" /> Add line
           </Button>
 

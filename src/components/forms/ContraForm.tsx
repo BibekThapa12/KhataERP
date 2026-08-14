@@ -14,6 +14,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 
 type ContraDraft = { sourceAccountId?: string; destinationAccountId?: string; amount?: number; chargeAmount?: number; narration?: string; dateBs?: string; journalInvoiceNo?: string }
 
@@ -37,11 +38,18 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const lock = useRef(new SubmissionLock()).current
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
   const accounts = useMemo(() => company ? contraMoneyAccounts(rawAccounts, accountCategories, company.id) : [], [company, rawAccounts, accountCategories])
   const options = accounts.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))
 
   useEffect(() => {
-    if (!open) return
+    const formIdentity = `Contra:${voucher?.id || 'new'}`
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; return }
+    if (initializedFormRef.current === formIdentity) return
+    initializedFormRef.current = formIdentity
+    baselineRef.current = ''
     const draft = (voucher?.draft_payload || {}) as ContraDraft
     const destinationLine = voucher?.lines?.find(line => line.account_id === voucher.contra_destination_account_id)
     setDateBs(draft.dateBs || voucher?.date_bs || selectedFiscalYearEndBs(company))
@@ -52,7 +60,13 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     setCharge(Number(draft.chargeAmount ?? voucher?.contra_charge_amount ?? 0))
     setNarration(draft.narration ?? voucher?.narration ?? '')
     setError('')
+    window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
   }, [open, voucher, company])
+
+  const formSnapshot = stableFormSnapshot({ dateBs, invoiceNo, sourceId, destinationId, amount, charge, narration })
+  snapshotRef.current = formSnapshot
+  const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
 
   const params = () => ({ source_account_id: sourceId, destination_account_id: destinationId, amount, charge_amount: charge, narration: narration.trim(), date_bs: dateBs, invoice_no: manualNumbering ? invoiceNo.trim() : undefined })
   const validate = () => {
@@ -78,7 +92,7 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   }
   const removeDraft = async () => { if (!voucher || voucher.status !== 'Draft') return; setSaving(true); try { await deleteDraftVoucher(voucher.id); onClose() } catch (caught) { setError(publicErrorMessage(caught, 'deleting Contra draft')) } finally { setSaving(false) } }
 
-  return <Dialog open={open} onOpenChange={next => !next && onClose()}><DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
+  return <Dialog open={open} onOpenChange={next => { if (!next && confirmDiscard()) onClose() }}><DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
     <DialogHeader><DialogTitle>{voucher ? 'Edit' : 'Add'} Contra</DialogTitle></DialogHeader>
     <p className="-mt-2 text-sm text-muted-foreground">Move money seamlessly between your Cash and Bank ledgers.</p>
     <div className="space-y-4 py-2">

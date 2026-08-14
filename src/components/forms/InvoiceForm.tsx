@@ -22,6 +22,7 @@ import { notifyError } from '@/lib/notifications'
 import { formatRateInput, hasAtMostSixDecimalPlaces, rateInputNumber } from '@/lib/rateFormat'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
+import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Voucher } from '@/types'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
@@ -64,6 +65,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const pendingLineFocus = useRef<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
+  const initializedFormRef = useRef<string | null>(null)
+  const baselineRef = useRef('')
+  const snapshotRef = useRef('')
 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyTerms = partyTerminology(partyType)
@@ -90,12 +94,26 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const vatAmount = round2Local(taxable * (effectiveVatRate / 100))
   const total = round2Local(taxable + vatAmount)
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
+  const formSnapshot = stableFormSnapshot({ dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, discountMode, narration })
+  snapshotRef.current = formSnapshot
+  const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
 
   useEffect(() => {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
   }, [dateInvalid, dateValidation.valid])
 
   useEffect(() => {
+    const formIdentity = `${type}:${voucher?.id || 'new'}`
+    if (!open) {
+      initializedFormRef.current = null
+      baselineRef.current = ''
+    } else if (initializedFormRef.current === formIdentity) {
+      return
+    } else {
+      initializedFormRef.current = formIdentity
+      baselineRef.current = ''
+    }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
         dateBs: string; isCash: boolean; partyAccountId: string; creditDays: number; supplierInvoiceNo: string; lines: LineItem[]; vatRate: number; discount: number; discountMode: DiscountMode; narration: string
@@ -122,7 +140,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setLines([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setDiscountMode('flat'); setNarration(''); setError(''); setDateInvalid(false)
     }
-  }, [open, voucher, vatEnabled, items, parties, company])
+    if (open) {
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+    }
+  }, [open, voucher, vatEnabled, items, parties, company, type])
 
   const selectParty = (accountId: string) => {
     setPartyAccountId(accountId)
@@ -262,6 +283,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       if (voucher) {
         onClose()
       } else {
+        baselineRef.current = ''
         setDateBs(selectedFiscalYearEndBs(company))
         setIsCash(false)
         setPartyAccountId('')
@@ -276,6 +298,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setDateInvalid(false)
         itemTriggerRefs.current = []
         pendingLineFocus.current = null
+        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
@@ -337,7 +360,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   return (
     <>
-      <Dialog open={open} onOpenChange={o => !o && onClose()}>
+      <Dialog open={open} onOpenChange={o => { if (!o && confirmDiscard()) onClose() }}>
         <DialogContent className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
           <DialogHeader>
             <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
@@ -409,7 +432,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                       </div>
                       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${!isServiceLine && stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={!isServiceLine && stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : undefined}>{isServiceLine ? 'Service' : stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : '—'}</div></div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Qty</Label>
-                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="Qty" className="invoice-entry-value h-8 px-2" />
+                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="0" className="invoice-entry-value h-8 px-2" />
                         {isSales && !isServiceLine && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
                           <p className="text-xs text-destructive mt-0.5">Only {selectedItem ? formatStockQuantity(stock.qty, selectedItem) : stock.qty} in stock</p>
                         )}
