@@ -119,7 +119,7 @@ const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invo
 const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
 const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
 const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,amount,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
-const VOUCHER_WITH_CHILDREN_FIELDS = `${VOUCHER_FIELDS},lines:voucher_lines(${VOUCHER_LINE_FIELDS}),stock_lines:stock_lines(${STOCK_LINE_FIELDS}),invoice_items:invoice_items(${INVOICE_ITEM_FIELDS})`
+const VOUCHER_WITH_CHILDREN_FIELDS = `${VOUCHER_FIELDS},lines:voucher_lines(${VOUCHER_LINE_FIELDS}),stock_lines:stock_lines(${STOCK_LINE_FIELDS}),invoice_items:invoice_items(${INVOICE_ITEM_FIELDS}),settlements:voucher_settlements!settlement_voucher_id(${VOUCHER_SETTLEMENT_FIELDS})`
 export const supabaseProjectHost = (() => {
   if (!supabaseUrl) return ''
   try {
@@ -345,6 +345,50 @@ export async function fetchDeveloperUserCompanyLicenses(): Promise<DeveloperUser
   const { data, error } = await supabase.rpc('developer_user_company_licenses')
   if (error) throw error
   return Array.isArray(data) ? data as DeveloperUserCompanyLicense[] : []
+}
+
+export interface DeveloperBackupRun {
+  id: string; started_at: string; completed_at?: string | null; initiated_by: string
+  total_companies: number; successful_companies: number; failed_companies: number
+  status: 'running' | 'successful' | 'partial' | 'failed'
+}
+export interface DeveloperCompanyBackupStatus {
+  company_id: string; last_exported_at?: string | null; last_attempted_at?: string | null
+  last_export_status: 'successful' | 'failed'; last_exported_by?: string | null; last_error?: string | null
+}
+
+export async function fetchDeveloperBackupStatus() {
+  const [{ data: runs, error: runError }, { data: companies, error: companyError }] = await Promise.all([
+    supabase.from('developer_backup_runs').select('*').order('started_at', { ascending: false }).limit(20),
+    supabase.from('developer_company_backup_status').select('*'),
+  ])
+  if (runError) throw runError
+  if (companyError) throw companyError
+  return { runs: (runs || []) as DeveloperBackupRun[], companies: (companies || []) as DeveloperCompanyBackupStatus[] }
+}
+
+export async function startDeveloperBackupRun(totalCompanies: number) {
+  const { data, error } = await supabase.rpc('start_developer_backup_run', { p_total_companies: totalCompanies })
+  if (error) throw error
+  return data as DeveloperBackupRun
+}
+
+export async function exportDeveloperCompanySnapshot(companyId: string) {
+  const { data, error } = await supabase.rpc('developer_export_company_backup', { target_company: companyId })
+  if (error) throw error
+  return data as Record<string, unknown>
+}
+
+export async function recordDeveloperCompanyBackupResult(runId: string, companyId: string, successful: boolean, errorMessage?: string) {
+  const { data, error } = await supabase.rpc('record_developer_company_backup_result', { p_run_id: runId, p_company_id: companyId, p_successful: successful, p_error: errorMessage || null })
+  if (error) throw error
+  return data as DeveloperCompanyBackupStatus
+}
+
+export async function completeDeveloperBackupRun(runId: string) {
+  const { data, error } = await supabase.rpc('complete_developer_backup_run', { p_run_id: runId })
+  if (error) throw error
+  return data as DeveloperBackupRun
 }
 
 export async function updateUserCompanyLimit(value: {

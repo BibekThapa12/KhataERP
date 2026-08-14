@@ -13,27 +13,13 @@ import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
-import type { Account, AccountCategory, InventoryValuationMethod, InvoiceItem, Item, ItemCategory, Party, Voucher } from '@/types'
+import type { CompanyModule, InventoryValuationMethod, InvoiceItem, Voucher } from '@/types'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
-
-type PortableCompanyBackup = {
-  format?: 'khataerp-portable-company-v1'
-  exported_at?: string
-  company?: Partial<Record<keyof typeof portableCompanyFields[number], unknown>> & Record<string, unknown>
-  accountCategories?: AccountCategory[]
-  itemCategories?: ItemCategory[]
-  accounts?: Account[]
-  parties?: Party[]
-  items?: Item[]
-  vouchers?: Voucher[]
-  // legacy backup keys
-  account_categories?: AccountCategory[]
-  item_categories?: ItemCategory[]
-}
+import { buildPortableCompanyBackup, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup } from '@/lib/portableBackup'
 
 type RestoreProgress = {
   active: boolean
@@ -225,7 +211,7 @@ function RestoreProgressBox({ progress }: { progress: RestoreProgress }) {
 
 export function SettingsPage() {
   const {
-    company, saveCompany, accounts, rawAccounts, accountCategories, vouchers, parties, items, itemCategories, loadAll, userId, error: loadError,
+    company, saveCompany, accounts, rawAccounts, accountCategories, vouchers, parties, items, itemCategories, companyModules, chequeBanks, cheques, loadAll, userId, error: loadError,
     addCompanyAdmin, addAccountCategory, addAccount, addParty, addItemCategory, addItem, saveDraftVoucher,
   } = useAppStore()
   const storedFiscalYearStartBs = company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS
@@ -372,18 +358,19 @@ export function SettingsPage() {
   }
 
   const handleExport = () => {
-    const data = {
-      format: 'khataerp-portable-company-v1',
-      exported_at: new Date().toISOString(),
-      company: cleanCompanyBackup(company),
+    const data = buildPortableCompanyBackup({
+      company,
       accountCategories,
       itemCategories,
       accounts: rawAccounts.length ? rawAccounts : accounts,
       parties,
       items,
       vouchers,
-    }
-    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+      companyModules,
+      chequeBanks,
+      cheques,
+    })
+    const blob = new Blob([serializePortableBackup(data)], { type: 'application/json' })
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -449,7 +436,7 @@ export function SettingsPage() {
     try {
       const text = await file.text()
       const backup = JSON.parse(text) as PortableCompanyBackup
-      if (!backup || typeof backup !== 'object') throw new Error('Invalid backup file.')
+      validatePortableCompanyBackup(backup)
 
       const targetHasData = vouchers.length > 0
       if (targetHasData) throw new Error('Portable company restore cannot be imported into a company that already has vouchers. Create a new company first, then restore this backup there.')
@@ -464,6 +451,9 @@ export function SettingsPage() {
       const sourceParties = Array.isArray(backup.parties) ? backup.parties : []
       const sourceItems = Array.isArray(backup.items) ? backup.items : []
       const sourceVouchers = Array.isArray(backup.vouchers) ? backup.vouchers : []
+      const sourceCompanyModules = Array.isArray(backup.companyModules) ? backup.companyModules as (CompanyModule & { module_key?: string })[] : []
+      const sourceChequeBanks = Array.isArray(backup.chequeBanks) ? backup.chequeBanks : []
+      const sourceCheques = Array.isArray(backup.cheques) ? backup.cheques : []
       const orderedSourceVouchers = [...sourceVouchers].sort((a, b) => portableVoucherSortValue(a).localeCompare(portableVoucherSortValue(b)))
       const sourceVoucherById = new Map(sourceVouchers.map(voucher => [voucher.id, voucher]))
       const sourceVoucherLineCount = orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.lines?.length || 0), 0)
@@ -479,8 +469,11 @@ export function SettingsPage() {
         { label: 'Voucher lines', value: sourceVoucherLineCount },
         { label: 'Stock lines', value: sourceStockLineCount },
         { label: 'Invoice items', value: sourceInvoiceItemCount },
+        { label: 'Settlements', value: orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.settlements?.length || 0), 0) },
+        { label: 'Cheque banks', value: sourceChequeBanks.length },
+        { label: 'Cheques', value: sourceCheques.length },
       ]
-      totalStages = 15
+      totalStages = 19
       finishRestoreStage('Backup read', 'Preparing fresh IDs for the active company.')
       showRestoreProgress('Updating company settings', 'Applying fiscal-year and company settings before importing vouchers.')
       const companyUpdates = cleanCompanyBackup(backup.company)
@@ -716,6 +709,67 @@ export function SettingsPage() {
         }
       }
       finishRestoreStage('Invoice items imported', `${invoiceItemRows.length} invoice item(s) created.`)
+
+      showRestoreProgress('Importing settlements', 'Restoring Receipt and Payment invoice allocations.')
+      const settlementRows = orderedSourceVouchers.flatMap(voucher => (voucher.settlements || []).map(settlement => ({
+        ...withoutMeta(settlement as unknown as Record<string, unknown>),
+        id: crypto.randomUUID(), company_id: company.id,
+        settlement_voucher_id: idMap.get(settlement.settlement_voucher_id) || idMap.get(voucher.id),
+        invoice_voucher_id: idMap.get(settlement.invoice_voucher_id) || settlement.invoice_voucher_id,
+        party_account_id: idMap.get(settlement.party_account_id) || settlement.party_account_id,
+      })))
+      if (settlementRows.length) { const { error } = await supabase.from('voucher_settlements').insert(settlementRows); if (error) throw error }
+      finishRestoreStage('Settlements imported', `${settlementRows.length} allocation(s) restored.`)
+
+      showRestoreProgress('Restoring modules', 'Applying portable company module configuration.')
+      const { data: targetModules, error: moduleFetchError } = await supabase.from('modules').select('id,key')
+      if (moduleFetchError) throw moduleFetchError
+      const moduleIdByKey = new Map((targetModules || []).map(module => [module.key as string, module.id as string]))
+      let restoredModules = 0
+      for (const sourceModule of sourceCompanyModules) {
+        const moduleId = sourceModule.module_key ? moduleIdByKey.get(sourceModule.module_key) : sourceModule.module_id
+        if (!moduleId) continue
+        const row = withoutMeta(sourceModule as unknown as Record<string, unknown>, ['module', 'module_key', 'internal_notes', 'enabled_by'])
+        delete row.id
+        const { error } = await supabase.from('company_modules').upsert({ ...row, company_id: company.id, module_id: moduleId, enabled_by: null }, { onConflict: 'company_id,module_id' })
+        if (error) throw error
+        restoredModules += 1
+      }
+      finishRestoreStage('Modules restored', `${restoredModules} module configuration(s) applied.`)
+
+      showRestoreProgress('Restoring cheque banks', 'Reusing seeded banks and restoring company bank metadata.')
+      const { data: targetChequeBanks, error: bankFetchError } = await supabase.from('cheque_banks').select('id,bank_name').eq('company_id', company.id)
+      if (bankFetchError && sourceChequeBanks.length) throw bankFetchError
+      const bankIdByName = new Map((targetChequeBanks || []).map(bank => [String(bank.bank_name).trim().toLocaleLowerCase(), String(bank.id)]))
+      for (const sourceBank of sourceChequeBanks) {
+        const key = sourceBank.bank_name.trim().toLocaleLowerCase()
+        let targetId = bankIdByName.get(key)
+        const bankRow = { ...withoutMeta(sourceBank as unknown as Record<string, unknown>, ['created_by', 'updated_by']), company_id: company.id, ledger_account_id: sourceBank.ledger_account_id ? idMap.get(sourceBank.ledger_account_id) || null : null, created_by: null, updated_by: null }
+        if (targetId) {
+          delete bankRow.id
+          const { error } = await supabase.from('cheque_banks').update(bankRow).eq('id', targetId); if (error) throw error
+        } else {
+          targetId = crypto.randomUUID(); bankRow.id = targetId
+          const { error } = await supabase.from('cheque_banks').insert(bankRow); if (error) throw error
+          bankIdByName.set(key, targetId)
+        }
+        idMap.set(sourceBank.id, targetId)
+      }
+      finishRestoreStage('Cheque banks restored', `${sourceChequeBanks.length} bank record(s) mapped.`)
+
+      showRestoreProgress('Restoring cheques', 'Restoring incoming and outgoing cheque records and voucher links.')
+      const chequeRows = sourceCheques.map(sourceCheque => ({
+        ...withoutMeta(sourceCheque as unknown as Record<string, unknown>, ['created_by', 'updated_by']),
+        id: crypto.randomUUID(), company_id: company.id,
+        bank_id: sourceCheque.bank_id ? idMap.get(sourceCheque.bank_id) || null : null,
+        source_account_id: sourceCheque.source_account_id ? idMap.get(sourceCheque.source_account_id) || null : null,
+        party_ledger_id: idMap.get(sourceCheque.party_ledger_id) || sourceCheque.party_ledger_id,
+        linked_voucher_id: sourceCheque.linked_voucher_id ? idMap.get(sourceCheque.linked_voucher_id) || null : null,
+        cleared_to_account_id: sourceCheque.cleared_to_account_id ? idMap.get(sourceCheque.cleared_to_account_id) || null : null,
+        created_by: null, updated_by: null,
+      }))
+      if (chequeRows.length) { const { error } = await supabase.from('cheques').insert(chequeRows); if (error) throw error }
+      finishRestoreStage('Cheques restored', `${chequeRows.length} cheque(s) imported. Audit events are recreated by the cheque subsystem.`)
 
       showRestoreProgress('Restoring voucher status', 'Completing imported vouchers in date and serial order.')
       for (const voucher of orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')) {

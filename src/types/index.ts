@@ -255,6 +255,7 @@ export interface CompanyCreateInput {
 export interface DeveloperUserCompanyLicense {
   user_id: string
   email?: string | null
+  display_name?: string | null
   license: CompanyCreationLicense
   companies: Pick<Company, 'id' | 'name' | 'created_at'>[]
 }

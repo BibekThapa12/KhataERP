@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
   Activity, AlertTriangle, ArrowLeft, Building2, CheckCircle2, ChevronDown, Database,
-  FileText, Grid2X2, ListChecks, Loader2, Mail, NotebookText, PackageCheck,
+  Download, FileText, Grid2X2, HardDrive, ListChecks, Loader2, Mail, NotebookText, PackageCheck,
   RefreshCcw, ShieldCheck, Trash2, UserRound, Users,
 } from 'lucide-react'
 import {
@@ -11,11 +11,18 @@ import {
   fetchDeveloperDashboardData,
   fetchDeveloperSchemaStatus,
   fetchDeveloperUserCompanyLicenses,
+  fetchDeveloperBackupStatus,
+  startDeveloperBackupRun,
+  exportDeveloperCompanySnapshot,
+  recordDeveloperCompanyBackupResult,
+  completeDeveloperBackupRun,
   isDeveloperAdmin,
   updateDeveloperCompany,
   updateUserCompanyLimit,
   upsertCompanyModule,
   type DeveloperSchemaStatusItem,
+  type DeveloperBackupRun,
+  type DeveloperCompanyBackupStatus,
 } from '@/lib/supabase'
 import { fmtDate } from '@/lib/utils'
 import { publicErrorMessage } from '@/lib/security'
@@ -31,6 +38,8 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import type { Account, AppModule, Company, CompanyModule, DeveloperUserCompanyLicense, Item, Party, Voucher } from '@/types'
 import { notifySuccess } from '@/lib/notifications'
+import { buildPortableCompanyBackup, serializePortableBackup, uniqueBackupNames } from '@/lib/portableBackup'
+import { downloadBackupZip, ensureDirectoryPermission, loadBackupDirectoryHandle, saveBackupDirectoryHandle, supportsDirectoryBackup, writeCompanyBackup, type DirectoryHandleLike } from '@/lib/developerBackupStorage'
 
 type DeveloperEvent = {
   id: string
@@ -72,7 +81,7 @@ function countBy<T>(rows: T[], getKey: (row: T) => string) {
 }
 
 function displayNameFor(row: DeveloperUserCompanyLicense) {
-  const source = row.email?.split('@')[0] || row.user_id.slice(0, 8)
+  const source = row.display_name || row.email?.split('@')[0] || row.user_id.slice(0, 8)
   return source
     .replace(/[._-]+/g, ' ')
     .replace(/\b\w/g, match => match.toUpperCase())
@@ -964,6 +973,120 @@ function DeveloperUserManagementPanel({
   )
 }
 
+type BackupResult = { companyId: string; companyName: string; userName: string; successful: boolean; error?: string }
+
+function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
+  const [directory, setDirectory] = useState<DirectoryHandleLike | null>(null)
+  const [runs, setRuns] = useState<DeveloperBackupRun[]>([])
+  const [companyStatuses, setCompanyStatuses] = useState<DeveloperCompanyBackupStatus[]>([])
+  const [exporting, setExporting] = useState(false)
+  const [completed, setCompleted] = useState(0)
+  const [exportTotal, setExportTotal] = useState(0)
+  const [current, setCurrent] = useState('')
+  const [results, setResults] = useState<BackupResult[]>([])
+  const [error, setError] = useState('')
+  const [details, setDetails] = useState(false)
+  const directorySupported = supportsDirectoryBackup()
+  const targets = useMemo(() => {
+    const seen = new Set<string>()
+    return users.flatMap(user => user.companies.map(company => ({ user, company }))).filter(target => !seen.has(target.company.id) && !!seen.add(target.company.id))
+  }, [users])
+
+  const refreshStatus = async () => {
+    try { const status = await fetchDeveloperBackupStatus(); setRuns(status.runs); setCompanyStatuses(status.companies) } catch { /* migration may not be installed yet */ }
+  }
+
+  useEffect(() => {
+    void loadBackupDirectoryHandle().then(setDirectory)
+    void refreshStatus()
+  }, [])
+
+  const selectLocation = async () => {
+    setError('')
+    if (!window.showDirectoryPicker) return setError('Automatic folder backup requires a supported Chromium browser. Export All will download a ZIP instead.')
+    try {
+      const handle = await window.showDirectoryPicker()
+      if (!await ensureDirectoryPermission(handle)) throw new Error('Read/write permission was not granted.')
+      await saveBackupDirectoryHandle(handle)
+      setDirectory(handle)
+    } catch (caught) {
+      if ((caught as DOMException)?.name !== 'AbortError') setError(caught instanceof Error ? caught.message : 'Could not select the backup location.')
+    }
+  }
+
+  const runExport = async (onlyCompanyIds?: Set<string>) => {
+    const selectedTargets = onlyCompanyIds ? targets.filter(target => onlyCompanyIds.has(target.company.id)) : targets
+    if (!selectedTargets.length) return setError('No companies are available to export.')
+    if (directorySupported && !directory) return setError('Select a backup location before exporting company data.')
+    setExporting(true); setCompleted(0); setExportTotal(selectedTargets.length); setCurrent(''); setResults([]); setError(''); setDetails(false)
+    const nextResults: BackupResult[] = []
+    const zipFiles: { path: string; content: string }[] = []
+    let run: DeveloperBackupRun | null = null
+    try {
+      if (directory && !await ensureDirectoryPermission(directory)) throw new Error('Backup folder permission was lost. Use Change Location or grant permission again.')
+      run = await startDeveloperBackupRun(selectedTargets.length)
+      const userNames = uniqueBackupNames(users.map(user => ({ id: user.user_id, name: displayNameFor(user) })), 'User')
+      const companyNames = new Map<string, Map<string, string>>()
+      for (const user of users) companyNames.set(user.user_id, uniqueBackupNames(user.companies.map(company => ({ id: company.id, name: company.name })), 'Company'))
+      for (const target of selectedTargets) {
+        const userName = userNames.get(target.user.user_id) || `User (${target.user.user_id.slice(0, 8)})`
+        const companyName = companyNames.get(target.user.user_id)?.get(target.company.id) || `Company (${target.company.id.slice(0, 8)})`
+        setCurrent(`${userName} → ${target.company.name}`)
+        let result: BackupResult
+        try {
+          const snapshot = await exportDeveloperCompanySnapshot(target.company.id)
+          const backup = buildPortableCompanyBackup(snapshot, { exportedBy: run.initiated_by })
+          const content = serializePortableBackup(backup)
+          if (directory) await writeCompanyBackup(directory, userName, companyName, content)
+          else zipFiles.push({ path: `${userName}/${companyName}/company-backup.json`, content })
+          result = { companyId: target.company.id, companyName: target.company.name, userName, successful: true }
+          if (directory) await recordDeveloperCompanyBackupResult(run.id, target.company.id, true)
+        } catch (caught) {
+          const message = caught instanceof Error ? caught.message : 'Export failed.'
+          result = { companyId: target.company.id, companyName: target.company.name, userName, successful: false, error: message }
+          try { await recordDeveloperCompanyBackupResult(run.id, target.company.id, false, 'Company backup generation or local write failed.') } catch { /* preserve original result */ }
+        }
+        nextResults.push(result); setResults([...nextResults]); setCompleted(nextResults.length)
+      }
+      if (!directory && zipFiles.length) {
+        downloadBackupZip(zipFiles)
+        for (const result of nextResults.filter(entry => entry.successful)) await recordDeveloperCompanyBackupResult(run.id, result.companyId, true)
+      }
+      await completeDeveloperBackupRun(run.id)
+      const failed = nextResults.filter(result => !result.successful).length
+      notifySuccess(failed ? 'Backup completed with warnings' : 'All company backups exported', `${nextResults.length - failed} successful / ${failed} failed`)
+      setDetails(failed > 0)
+      await refreshStatus()
+    } catch (caught) {
+      setError(publicErrorMessage(caught, 'exporting all company data'))
+      if (run) try { await completeDeveloperBackupRun(run.id) } catch { /* already failed */ }
+    } finally { setExporting(false); setCurrent('') }
+  }
+
+  const failedIds = new Set(results.filter(result => !result.successful).map(result => result.companyId))
+  const companyCount = targets.length
+  const lastFullRun = runs.find(run => run.total_companies === companyCount && run.status !== 'running')
+  const lastRun = runs.find(run => run.status !== 'running')
+  const statusByCompany = new Map(companyStatuses.map(status => [status.company_id, status]))
+
+  return <Card>
+    <CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><div><CardTitle className="flex items-center gap-2 text-base"><HardDrive className="h-4 w-4" />Local Backup</CardTitle><p className="mt-1 text-xs text-muted-foreground">Portable company backups for every managed user and company.</p></div><Button variant="outline" size="sm" onClick={selectLocation} disabled={exporting}>{directory ? 'Change Location' : 'Select Backup Location'}</Button></div></CardHeader>
+    <CardContent className="space-y-3">
+      <div className="grid gap-2 text-xs sm:grid-cols-4">
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Backup Location</span><strong className="mt-1 block truncate">{directory?.name || (directorySupported ? 'Not selected' : 'ZIP download fallback')}</strong></div>
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Full Backup</span><strong className="mt-1 block">{lastFullRun?.completed_at ? new Date(lastFullRun.completed_at).toLocaleString() : 'Never'}</strong></div>
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Companies</span><strong className="mt-1 block num">{companyCount}</strong></div>
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Result</span><strong className="mt-1 block">{lastRun ? `${lastRun.successful_companies} successful / ${lastRun.failed_companies} failed` : 'No backup yet'}</strong></div>
+      </div>
+      {!directorySupported && <p className="rounded-md border border-amber-200 bg-amber-50 p-2 text-xs text-amber-800">This browser cannot write directly to B:\ or another folder. Export All downloads one ZIP; automatic replacement requires a Chromium browser with directory permission.</p>}
+      {exporting && <div className="rounded-md border bg-muted/30 p-3 text-xs"><p className="font-semibold">Exporting backups...</p><p className="mt-1">Users: {users.length} · Companies: {exportTotal} · Completed: {completed} / {exportTotal}</p>{current && <p className="mt-1 text-muted-foreground">Current: {current}</p>}</div>}
+      {error && <p className="text-xs text-destructive">{error}</p>}
+      <div className="flex flex-wrap gap-2"><Button onClick={() => void runExport()} disabled={exporting || !companyCount}><Download className="mr-1.5 h-4 w-4" />{exporting ? 'Exporting...' : results.length ? 'Export Again' : 'Export All Company Data'}</Button>{failedIds.size > 0 && <Button variant="outline" onClick={() => void runExport(failedIds)} disabled={exporting}>Retry Failed</Button>}{companyCount > 0 && <Button variant="ghost" onClick={() => setDetails(value => !value)}>{results.length ? 'View Details' : 'Company Status'}</Button>}</div>
+      {details && <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2 text-xs">{results.map(result => <div key={result.companyId} className="flex items-start justify-between gap-3 border-b py-1 last:border-0"><div><strong>{result.companyName}</strong><span className="block text-muted-foreground">{result.userName}{result.error ? ` · ${result.error}` : ''}</span></div><Badge variant={result.successful ? 'default' : 'destructive'}>{result.successful ? 'Successful' : 'Failed'}</Badge></div>)}{!results.length && targets.map(target => { const status = statusByCompany.get(target.company.id); return <div key={target.company.id}>{target.company.name}: {status?.last_export_status || 'Not exported'}</div> })}</div>}
+    </CardContent>
+  </Card>
+}
+
 export function DeveloperDashboard() {
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [users, setUsers] = useState<DeveloperUserCompanyLicense[]>([])
@@ -1100,6 +1223,7 @@ export function DeveloperDashboard() {
           onFilter={setActiveUserFilter}
           onErrors={showErrorUsers}
         />
+        <LocalBackupCard users={users} />
         <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)]">
           <div className={mobileDetail ? 'hidden lg:block' : 'block'}>
             <DeveloperUserList
