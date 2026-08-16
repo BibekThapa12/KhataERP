@@ -5087,10 +5087,12 @@ begin
       if coalesce(voucher_record.vat_rate, 0) < 0 or coalesce(voucher_record.vat_rate, 0) > 100 then
         raise exception 'Return VAT rate is outside the valid range';
       end if;
-      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6)) > 0.000001 then
+      -- Preserve portable backups from the former two-decimal accounting
+      -- engine. A half-paisa tolerance accepts only ordinary currency
+      -- rounding; current six-decimal entries still match exactly.
+      if abs(calculated_vat - round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6)) > 0.005 then
         raise exception 'Return VAT does not match server-calculated VAT';
       end if;
-      calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
       if voucher_record.original_voucher_id is null and calculated_discount <> 0 then
         raise exception 'A manual return cannot introduce an invoice discount';
       end if;
