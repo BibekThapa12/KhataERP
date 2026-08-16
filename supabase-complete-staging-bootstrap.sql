@@ -5168,7 +5168,9 @@ begin
         then round(coalesce(source_voucher.discount, 0) * calculated_subtotal / source_voucher.subtotal, 6)
       else 0
     end;
-    if abs(calculated_discount - expected_discount) > greatest(0.000002, item_count * 0.000001) then
+    -- Legacy returns allocated and rounded discount per line to two decimals.
+    -- Bound compatibility by half a paisa for each returned line.
+    if abs(calculated_discount - expected_discount) > greatest(0.000002, item_count * 0.005) then
       raise exception 'Return discount does not match the source invoice allocation';
     end if;
 
