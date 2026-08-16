@@ -21,6 +21,7 @@ import { DEFAULT_FISCAL_YEAR_START_BS, bsToAd, parseBsDate } from '@/lib/nepaliD
 import { publicErrorMessage } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
+import { companyBillingStatus, companyCanWrite } from '@/lib/billing'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -351,6 +352,9 @@ export function AppShell() {
   const chequeAccess = chequeEntitlement(companyModules.find(entry => entry.module?.key === 'cheque_management'))
   const showChequeNavigation = chequeAccess.canRead && chequePermissions.includes('cheque.view')
   const [developerAdmin, setDeveloperAdmin] = useState(false)
+  const billingStatus = companyBillingStatus(company)
+  const planInactive = billingStatus === 'expired'
+  const readOnly = !developerAdmin && !companyCanWrite(company)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shortcutVoucher, setShortcutVoucher] = useState<VoucherShortcutType | null>(null)
   const [openReportGroup, setOpenReportGroup] = useState<string | null>(() => activeReportGroupId(location.pathname, location.search))
@@ -391,12 +395,12 @@ export function AppShell() {
       if (event.repeat) return
       if (document.querySelector('[role="dialog"][data-state="open"]')) return
       setMobileOpen(false)
-      if (voucherShortcut) setShortcutVoucher(voucherShortcut.type)
+      if (voucherShortcut && !readOnly) setShortcutVoucher(voucherShortcut.type)
       else if (navigationShortcut) { setShortcutVoucher(null); navigate(navigationShortcut.to) }
     }
     window.addEventListener('keydown', openVoucherFromKey)
     return () => window.removeEventListener('keydown', openVoucherFromKey)
-  }, [navigate])
+  }, [navigate, readOnly])
 
   const toggleSection = (label: string) => setOpenSections(current => {
     return current.has(label) ? new Set() : new Set([label])
@@ -407,19 +411,13 @@ export function AppShell() {
     navigate('/login')
   }
 
-  const trialExpired = company?.plan_status === 'trial' && !!company.trial_ends_at
-    && new Date(`${company.trial_ends_at}T23:59:59`).getTime() < Date.now()
-  const planInactive = company?.plan_status === 'expired' || trialExpired
-
-  if ((company?.suspended || planInactive) && !developerAdmin) {
+  if (company?.suspended && !developerAdmin) {
     return (
       <div className="min-h-screen bg-background flex items-center justify-center p-6">
         <div className="w-full max-w-md rounded-lg border border-border bg-card p-6 shadow-sm">
           <h1 className="font-serif text-2xl font-bold text-foreground">{company?.suspended ? 'Account suspended' : 'Plan inactive'}</h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            {company?.suspended
-              ? 'This company is temporarily suspended. Please contact KhataERP support to continue using the app.'
-              : 'This company trial or subscription has ended. Please contact KhataERP support to continue using the app.'}
+            This company is temporarily suspended. Please contact KhataERP support to continue using the app.
           </p>
           <Button onClick={handleSignOut} className="mt-5">
             Sign out
@@ -536,7 +534,7 @@ export function AppShell() {
         <div className="app-shortcuts flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Quick shortcuts">
           <div className="flex items-center gap-1.5 overflow-x-auto">
             <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick shortcuts</span>
-            {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`New ${shortcut.label} Voucher (${shortcut.key})`}>
+            {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" disabled={readOnly} onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45" title={readOnly ? 'Renew the company plan to create vouchers.' : `New ${shortcut.label} Voucher (${shortcut.key})`}>
               <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
               <span>{shortcut.label}</span>
             </button>)}
@@ -548,6 +546,7 @@ export function AppShell() {
           </div>
         </div>
         <div className="app-workspace-scroll min-h-0 flex-1 overflow-y-auto">
+          {planInactive && !developerAdmin && <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"><strong>Read-only:</strong> This company trial or paid plan has expired. You can view, print, and export existing data, but changes are disabled until KhataERP support renews the plan.</div>}
           <Outlet />
         </div>
       </main>

@@ -18,6 +18,7 @@ import {
   completeDeveloperBackupRun,
   listDeveloperBackupAgents,
   createDeveloperBackupAgent,
+  deleteDeveloperBackupAgent,
   revokeDeveloperBackupAgent,
   supabaseProjectHost,
   isDeveloperAdmin,
@@ -45,6 +46,7 @@ import type { Account, AppModule, Company, CompanyModule, DeveloperUserCompanyLi
 import { notifySuccess } from '@/lib/notifications'
 import { buildPortableCompanyBackup, serializePortableBackup, uniqueBackupNames } from '@/lib/portableBackup'
 import { downloadBackupZip, ensureDirectoryPermission, loadBackupDirectoryHandle, saveBackupDirectoryHandle, supportsDirectoryBackup, writeCompanyBackup, type DirectoryHandleLike } from '@/lib/developerBackupStorage'
+import { companyBillingStatus, companyBillingTooltip, companyPlanExpiryDateInput, companyRemainingDays } from '@/lib/billing'
 
 type DeveloperEvent = {
   id: string
@@ -106,7 +108,8 @@ function statusVariant(status?: string) {
 function userStatus(row: DeveloperUserCompanyLicense, companies: Company[]) {
   if (row.license.license_status === 'suspended' || companies.some(company => company.suspended)) return 'Suspended'
   if (row.license.license_status === 'expired') return 'Expired'
-  if (companies.some(company => company.plan_status === 'trial')) return 'Trial'
+  if (companies.some(company => companyBillingStatus(company) === 'expired')) return 'Expired'
+  if (companies.some(company => companyBillingStatus(company) === 'trial')) return 'Trial'
   return 'Active'
 }
 
@@ -509,14 +512,14 @@ function LicenseEditor({ row, onSaved }: { row: DeveloperUserCompanyLicense; onS
 
 function CompanySupportEditor({ company, onSaved }: { company: Company; onSaved: () => void }) {
   const [plan, setPlan] = useState(company.plan_status || 'trial')
-  const [trialEndsAt, setTrialEndsAt] = useState(company.trial_ends_at || '')
+  const [planEndsAt, setPlanEndsAt] = useState(() => companyPlanExpiryDateInput(company))
   const [support, setSupport] = useState(company.support_status || 'normal')
   const [suspended, setSuspended] = useState(company.suspended || false)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     setPlan(company.plan_status || 'trial')
-    setTrialEndsAt(company.trial_ends_at || '')
+    setPlanEndsAt(companyPlanExpiryDateInput(company))
     setSupport(company.support_status || 'normal')
     setSuspended(company.suspended || false)
   }, [company])
@@ -526,7 +529,8 @@ function CompanySupportEditor({ company, onSaved }: { company: Company; onSaved:
     try {
       await updateDeveloperCompany(company.id, {
         plan_status: plan as Company['plan_status'],
-        trial_ends_at: trialEndsAt || undefined,
+        trial_ends_at: plan === 'trial' ? planEndsAt || null : null,
+        plan_expires_at: (plan === 'trial' || plan === 'paid') && planEndsAt ? `${planEndsAt}T23:59:59.999+05:45` : null,
         support_status: support as Company['support_status'],
         suspended,
       })
@@ -540,11 +544,12 @@ function CompanySupportEditor({ company, onSaved }: { company: Company; onSaved:
   }
 
   return (
-    <DashboardCard title="Support & Plan" Icon={ListChecks} action={<Button size="sm" onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Changes'}</Button>}>
+    <DashboardCard title="Support & Plan" Icon={ListChecks} action={<Button size="sm" onClick={save} disabled={saving || (plan === 'trial' && !planEndsAt)}>{saving ? 'Saving...' : 'Save Changes'}</Button>}>
       <div className="space-y-3">
         <div className="space-y-1.5"><Label>Plan Type</Label><SearchableSelect value={plan} onValueChange={setPlan} options={[{ value: 'free', label: 'Free' }, { value: 'trial', label: 'Trial' }, { value: 'paid', label: 'Paid' }, { value: 'expired', label: 'Expired' }]} /></div>
         <div className="space-y-1.5"><Label>Support Level</Label><SearchableSelect value={support} onValueChange={setSupport} options={[{ value: 'normal', label: 'Normal' }, { value: 'needs_help', label: 'Needs help' }, { value: 'blocked', label: 'Blocked' }]} /></div>
-        <div className="space-y-1.5"><Label>Support Expiry</Label><Input type="date" value={trialEndsAt} onChange={event => setTrialEndsAt(event.target.value)} /></div>
+        {(plan === 'trial' || plan === 'paid') && <div className="space-y-1.5"><Label>{plan === 'paid' ? 'Paid Until' : 'Trial Ends'}{plan === 'trial' && ' *'}</Label><Input type="date" value={planEndsAt} onChange={event => setPlanEndsAt(event.target.value)} /><p className="text-xs text-muted-foreground">{plan === 'paid' ? 'Leave blank for lifetime paid access.' : 'Required. Trial access becomes read-only after this deadline.'}</p></div>}
+        <div className="rounded-md border bg-muted/20 p-3 text-sm"><MetricLine label="Effective Status" value={<Badge variant={companyBillingStatus(company) === 'expired' ? 'destructive' : 'outline'} className="capitalize">{companyBillingStatus(company)}</Badge>} /><MetricLine label="Remaining" value={companyRemainingDays(company) === null ? 'No expiry' : `${Math.max(companyRemainingDays(company) || 0, 0)} days`} /><p className="mt-2 text-xs text-muted-foreground">{companyBillingTooltip(company)}</p></div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={suspended} onChange={event => setSuspended(event.target.checked)} />Suspended</label>
       </div>
     </DashboardCard>
@@ -663,7 +668,7 @@ function OverviewTab({ row, data, selectedCompany, onSaved, onTab }: { row: Deve
     <div className="space-y-4">
       <div className="grid gap-4 xl:grid-cols-3">
         <DashboardCard title="License Information" Icon={ShieldCheck} action={<Button size="sm" variant="outline" onClick={() => onTab('license')}>Edit License</Button>}>
-          <MetricLine label="Current Plan" value={<Badge variant={statusVariant(selectedCompany?.plan_status || 'trial')}>{selectedCompany?.plan_status || 'trial'}</Badge>} />
+          <MetricLine label="Current Plan" value={<Badge title={companyBillingTooltip(selectedCompany)} variant={statusVariant(companyBillingStatus(selectedCompany))} className="capitalize">{companyBillingStatus(selectedCompany)}</Badge>} />
           <MetricLine label="Status" value={<Badge variant={statusVariant(license.license_status)}>{license.license_status}</Badge>} />
           <MetricLine label="Maximum Companies" value={license.unlimited_companies ? 'Unlimited' : license.max_companies} />
           <MetricLine label="Companies Used" value={license.current_companies} />
@@ -678,7 +683,7 @@ function OverviewTab({ row, data, selectedCompany, onSaved, onTab }: { row: Deve
                 <p className="truncate text-sm font-semibold">{index + 1}. {company.name}</p>
                 <p className="text-xs text-muted-foreground">{company.phone || company.id.slice(0, 8)}</p>
               </div>
-              <Badge variant={statusVariant(company.plan_status || 'trial')}>{company.plan_status || 'trial'}</Badge>
+              <Badge title={companyBillingTooltip(company)} variant={statusVariant(companyBillingStatus(company))} className="capitalize">{companyBillingStatus(company)}</Badge>
             </div>
           ))}
           {!companies.length && <p className="text-sm text-muted-foreground">No companies loaded for this user.</p>}
@@ -725,7 +730,7 @@ function CompaniesTab({ data, modules, onSaved }: { data?: DeveloperData; module
               <p>{itemByCompany[company.id] || 0} items</p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
-              <Badge variant={statusVariant(company.plan_status || 'trial')}>{company.plan_status || 'trial'}</Badge>
+              <Badge title={companyBillingTooltip(company)} variant={statusVariant(companyBillingStatus(company))} className="capitalize">{companyBillingStatus(company)}</Badge>
               {company.suspended && <Badge variant="destructive">Suspended</Badge>}
             </div>
             <div className="flex flex-wrap gap-2 lg:justify-end">
@@ -1089,6 +1094,11 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
     try { await revokeDeveloperBackupAgent(agent.id); await refreshStatus() }
     catch (caught) { setError(publicErrorMessage(caught, 'revoking Windows backup agent')) }
   }
+  const deleteAgent = async (agent: DeveloperBackupAgent) => {
+    if (!window.confirm(`Permanently delete ${agent.name}? Its token will stop working immediately. This cannot remove the Scheduled Task from the Windows computer.`)) return
+    try { await deleteDeveloperBackupAgent(agent.id); await refreshStatus() }
+    catch (caught) { setError(publicErrorMessage(caught, 'deleting Windows backup agent')) }
+  }
 
   return <Card>
     <CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><div><CardTitle className="flex items-center gap-2 text-base"><HardDrive className="h-4 w-4" />Local Backup</CardTitle><p className="mt-1 text-xs text-muted-foreground">Portable company backups for every managed user and company.</p></div><Button variant="outline" size="sm" onClick={selectLocation} disabled={exporting}>{directory ? 'Change Location' : 'Select Backup Location'}</Button></div></CardHeader>
@@ -1105,7 +1115,8 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
       <div className="rounded-md border p-3 text-xs">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold">Windows Background Agent</p><p className="text-muted-foreground">Runs at logon and every two hours, even when KhataERP is closed.</p></div><Button size="sm" variant="outline" onClick={() => void createAgent()}><KeyRound className="mr-1.5 h-4 w-4" />Create Agent Token</Button></div>
         {newAgentToken && <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-900"><strong>Copy this token now. It is shown only once.</strong><div className="mt-1 flex items-center gap-2"><code className="min-w-0 flex-1 break-all rounded bg-white p-1">{newAgentToken}</code><Button size="icon" variant="outline" aria-label="Copy agent token" onClick={() => void navigator.clipboard.writeText(newAgentToken)}><Copy className="h-4 w-4" /></Button></div><p className="mt-1">Project URL: <code>https://{supabaseProjectHost}</code></p><p className="mt-1">Run <code>windows-backup-agent/Install-KhataERPBackupAgent.ps1</code> on the backup computer.</p></div>}
-        {agents.length > 0 && <div className="mt-2 space-y-1">{agents.map(agent => <div key={agent.id} className="flex items-center justify-between gap-2 border-t pt-1"><span><strong>{agent.name}</strong><span className="ml-2 text-muted-foreground">{agent.revoked_at ? 'Revoked' : agent.last_seen_at ? `Last synced ${new Date(agent.last_seen_at).toLocaleString()}` : 'Never connected'}</span></span>{!agent.revoked_at && <Button size="sm" variant="ghost" onClick={() => void revokeAgent(agent)}>Revoke</Button>}</div>)}</div>}
+        {agents.length > 0 && <div className="mt-2 space-y-1">{agents.map(agent => <div key={agent.id} className="flex items-center justify-between gap-2 border-t pt-1"><span><strong>{agent.name}</strong><span className="ml-2 text-muted-foreground">{agent.revoked_at ? 'Revoked' : agent.last_seen_at ? `Last synced ${new Date(agent.last_seen_at).toLocaleString()}` : 'Never connected'}</span></span><span className="flex items-center gap-1">{!agent.revoked_at && <Button size="sm" variant="ghost" onClick={() => void revokeAgent(agent)}>Revoke</Button>}<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void deleteAgent(agent)}><Trash2 className="mr-1 h-3.5 w-3.5" />Delete</Button></span></div>)}</div>}
+        <p className="mt-2 text-muted-foreground">Delete removes the server token record. To remove the task from that computer too, run <code>windows-backup-agent/Uninstall-KhataERPBackupAgent.ps1</code> there.</p>
       </div>
       <div className="flex flex-wrap gap-2"><Button onClick={() => void runExport()} disabled={exporting || !companyCount}><Download className="mr-1.5 h-4 w-4" />{exporting ? 'Exporting...' : results.length ? 'Export Again' : 'Export All Company Data'}</Button>{failedIds.size > 0 && <Button variant="outline" onClick={() => void runExport(failedIds)} disabled={exporting}>Retry Failed</Button>}{companyCount > 0 && <Button variant="ghost" onClick={() => setDetails(value => !value)}>{results.length ? 'View Details' : 'Company Status'}</Button>}</div>
       {details && <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2 text-xs">{results.map(result => <div key={result.companyId} className="flex items-start justify-between gap-3 border-b py-1 last:border-0"><div><strong>{result.companyName}</strong><span className="block text-muted-foreground">{result.userName}{result.error ? ` · ${result.error}` : ''}</span></div><Badge variant={result.successful ? 'default' : 'destructive'}>{result.successful ? 'Successful' : 'Failed'}</Badge></div>)}{!results.length && targets.map(target => { const status = statusByCompany.get(target.company.id); return <div key={target.company.id}>{target.company.name}: {status?.last_export_status || 'Not exported'}</div> })}</div>}

@@ -4,7 +4,7 @@ import { buildPortableCompanyBackup, safeBackupFolderName, serializePortableBack
 describe('portable company backups', () => {
   it('keeps v1 compatibility, counts nested records, and removes secrets', () => {
     const backup = buildPortableCompanyBackup({
-      company: { id: 'company-1', name: 'Admin Company', address: 'Kathmandu', user_id: 'owner', developer_notes: 'private' } as never,
+      company: { id: 'company-1', name: 'Admin Company', address: 'Kathmandu', user_id: 'owner', plan_status: 'paid', plan_expires_at: '2027-01-01T00:00:00Z', developer_notes: 'private' } as never,
       accounts: [{ id: 'a', company_id: 'company-1', name: 'Cash', access_token: 'never' } as never],
       parties: [], items: [], accountCategories: [], itemCategories: [],
       vouchers: [{ id: 'v', company_id: 'company-1', lines: [{ id: 'l' }], stock_lines: [], invoice_items: [] } as never],
@@ -12,7 +12,7 @@ describe('portable company backups', () => {
     }, { exportedBy: 'developer-1' })
     expect(backup.format).toBe('khataerp-portable-company-v1')
     expect(backup.original_company_id).toBe('company-1')
-    expect(backup.company).toEqual({ name: 'Admin Company', address: 'Kathmandu' })
+    expect(backup.company).toEqual({ name: 'Admin Company', address: 'Kathmandu', plan_status: 'paid', plan_expires_at: '2027-01-01T00:00:00Z' })
     expect(backup.record_counts).toMatchObject({ accounts: 1, vouchers: 1, voucher_lines: 1, cheques: 1 })
     expect(JSON.stringify(backup)).not.toContain('access_token')
     expect(JSON.stringify(backup)).not.toContain('developer_notes')

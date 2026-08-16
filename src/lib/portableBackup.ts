@@ -40,6 +40,7 @@ const companyFields = new Set([
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
   'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format',
   'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start', 'fiscal_year_configured',
+  'plan_status', 'trial_ends_at', 'plan_expires_at',
 ])
 
 const sensitiveKey = /(^|_)(password|secret|token|service_role|api_key|refresh_token|access_token|encryption_key)($|_)/i

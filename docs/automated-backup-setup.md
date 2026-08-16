@@ -52,6 +52,7 @@ The token is encrypted with Windows DPAPI for the installing user. The scheduled
 - The Storage bucket is private. The agent receives only 15-minute signed URLs after presenting its revocable agent token.
 - Agent tokens contain no database or service-role credential and are stored only as SHA-256 hashes in PostgreSQL.
 - Revoke a lost computer's token from Developer Dashboard.
+- Delete removes the agent's server record permanently. To also remove its Windows Scheduled Task and encrypted local configuration, run `windows-backup-agent/Uninstall-KhataERPBackupAgent.ps1` on that computer (as administrator if Task Scheduler requires it).
 - The backup PC must be running, signed in as the installing Windows user, online, and have the selected drive mounted.
 - Failed cloud exports preserve the previous valid object and manifest entry. Failed local writes restore the previous local JSON.
 - The cloud schedule is evaluated in UTC. `0 */2 * * *` runs every two hours at minute zero.

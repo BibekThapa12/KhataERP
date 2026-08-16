@@ -112,7 +112,7 @@ const PUBLIC_ERROR_RULES: PublicErrorRule[] = [
   { pattern: /credit days.*valid range/i, message: 'Credit Days must be a whole number of zero or more.' },
   { pattern: /category hierarchy.*(?:three|four) levels|moving this category would exceed/i, message: 'The category cannot be placed there because the maximum hierarchy depth would be exceeded.' },
   { pattern: /category hierarchy cycle|own parent|moved into itself/i, message: 'A category cannot be placed inside itself or one of its child categories.' },
-  { pattern: /company plan is inactive/i, message: 'This company plan is inactive and currently read-only.' },
+  { pattern: /company plan (?:is inactive|expired).*read-only/i, message: 'This company plan has expired. Existing data is available read-only until the plan is renewed.' },
   { pattern: /access denied|permission|not authorized|row-level security/i, message: 'You do not have permission to perform this action.' },
   { pattern: /failed to fetch|networkerror|network request|load failed/i, message: 'Could not connect to the server. Check your internet connection and try again.' },
   { pattern: /schema cache|could not find the function|does not exist/i, message: 'The application database is not up to date. Ask an administrator to apply the latest database migration.' },

@@ -196,7 +196,8 @@ export interface Company {
   payment_qr_text?: string
   logo_url?: string
   plan_status?: 'free' | 'trial' | 'paid' | 'expired'
-  trial_ends_at?: string
+  trial_ends_at?: string | null
+  plan_expires_at?: string | null
   support_status?: 'normal' | 'needs_help' | 'blocked'
   developer_notes?: string
   suspended?: boolean
@@ -204,6 +205,8 @@ export interface Company {
   fiscal_year_configured?: boolean
   created_at?: string
 }
+
+export type CompanyBillingStatus = 'free' | 'trial' | 'paid' | 'expired' | 'suspended'
 
 export interface CompanyMembership {
   company_id: string

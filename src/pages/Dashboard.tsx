@@ -23,6 +23,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { Voucher } from '@/types'
+import { companyBillingStatus, companyBillingTooltip } from '@/lib/billing'
 
 const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
 const CashFlowChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.CashFlowChart })))
@@ -86,6 +87,8 @@ export function Dashboard() {
   const [chartMode, setChartMode] = useState(() => {
     try { return localStorage.getItem(CHART_MODE_KEY) !== 'false' } catch { return true }
   })
+  const billingStatus = companyBillingStatus(company)
+  const billingTone = billingStatus === 'paid' ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : billingStatus === 'trial' ? 'border-amber-200 bg-amber-50 text-amber-700' : billingStatus === 'expired' || billingStatus === 'suspended' ? 'border-red-200 bg-red-50 text-red-700' : 'border-slate-200 bg-slate-50 text-slate-700'
 
   useEffect(() => { setSelectedFiscalYear(Number(selectedFiscalYearStartBs(company).slice(0, 4))) }, [company, currentFiscalYear])
   useEffect(() => {
@@ -212,6 +215,7 @@ export function Dashboard() {
   return <div>
     <PageHeader title="Dashboard" description="Overview of your business" action={
       <div className="flex w-full items-center gap-2 sm:w-auto">
+        <span tabIndex={0} role="status" title={companyBillingTooltip(company)} aria-label={`Billing status: ${companyBillingTooltip(company)}`} className={`inline-flex h-7 shrink-0 items-center rounded-full border px-2.5 text-xs font-semibold capitalize focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${billingTone}`}>{billingStatus}</span>
         <div className="flex min-w-0 flex-1 items-center gap-1.5 sm:flex-none"><span className="shrink-0 text-xs font-semibold text-muted-foreground">FY</span><SearchableSelect value={range === 'fiscal' ? String(selectedFiscalYear) : ''} onValueChange={value => { const nextYear = Number(value); saveSelectedFiscalYear(company, nextYear); setSelectedFiscalYear(nextYear); setRange('fiscal') }} options={fiscalYearOptions} placeholder="Fiscal year" searchPlaceholder="Search fiscal year..." className="w-full sm:w-28" /></div>
         <button type="button" role="switch" aria-checked={chartMode} aria-label="Toggle chart mode" onClick={() => setChartMode(value => !value)} className="flex shrink-0 items-center justify-between gap-2 whitespace-nowrap rounded-md px-2 py-1.5 text-sm font-medium text-[#1B2A4A] hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:justify-start">
           <span>Chart Mode</span><span aria-hidden className={`inline-flex h-5 w-9 shrink-0 items-center rounded-full p-0.5 transition-colors ${chartMode ? 'bg-blue-600' : 'bg-slate-300'}`}><span className={`block h-4 w-4 shrink-0 rounded-full bg-white shadow-sm transition-transform ${chartMode ? 'translate-x-4' : 'translate-x-0'}`} /></span>

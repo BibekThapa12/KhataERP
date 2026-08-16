@@ -6,6 +6,8 @@ const root = process.cwd()
 const migration = readFileSync(join(root, 'db migration files', 'supabase-automated-backup-agent-migration.sql'), 'utf8')
 const agent = readFileSync(join(root, 'windows-backup-agent', 'KhataERPBackupAgent.ps1'), 'utf8')
 const installer = readFileSync(join(root, 'windows-backup-agent', 'Install-KhataERPBackupAgent.ps1'), 'utf8')
+const uninstaller = readFileSync(join(root, 'windows-backup-agent', 'Uninstall-KhataERPBackupAgent.ps1'), 'utf8')
+const deletionMigration = readFileSync(join(root, 'db migration files', 'supabase-delete-backup-agent-migration.sql'), 'utf8')
 
 describe('automated backup security and scheduling', () => {
   it('schedules the cloud exporter every two hours and limits the system RPC to service_role', () => {
@@ -26,5 +28,12 @@ describe('automated backup security and scheduling', () => {
     expect(agent).toContain('Get-FileHash')
     expect(agent).toContain("$target.previous")
     expect(agent).not.toMatch(/service.?role/i)
+  })
+
+  it('supports developer-only server deletion and safe local removal', () => {
+    expect(deletionMigration).toContain('public.is_developer_admin()')
+    expect(deletionMigration).toContain('delete from public.developer_backup_agents')
+    expect(uninstaller).toContain("Unregister-ScheduledTask -TaskName $taskName -Confirm:$false")
+    expect(uninstaller).toContain('$resolved -ne $expected')
   })
 })
