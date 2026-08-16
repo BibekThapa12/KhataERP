@@ -15,6 +15,8 @@ import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
+import { Printer } from 'lucide-react'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 type ContraDraft = { sourceAccountId?: string; destinationAccountId?: string; amount?: number; chargeAmount?: number; narration?: string; dateBs?: string; journalInvoiceNo?: string }
 
@@ -74,14 +76,16 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     if (manualNumbering && !invoiceNo.trim()) throw new Error('Enter the Journal voucher number.')
     buildContraLines(params(), rawAccounts, accountCategories, company.id, resolveBankChargesAccountId(rawAccounts, company.id))
   }
-  const complete = async () => {
+  const complete = async (shouldPrint = false) => {
     try { validate() } catch (caught) { setError(contraError(caught)); return }
     if (!lock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true); setError('')
-    try { if (voucher) await updateContra(voucher.id, params(), 'Completed'); else await saveContra(params(), 'Completed'); onClose() }
-    catch (caught) { setError(contraError(caught)) }
+    try { if (voucher) await updateContra(voucher.id, params(), 'Completed'); else await saveContra(params(), 'Completed'); completeVoucherPrint(printRequest, 'Journal', voucher); printRequest = undefined; onClose() }
+    catch (caught) { cancelVoucherPrint(printRequest); setError(contraError(caught)) }
     finally { lock.release(); setSaving(false) }
   }
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) } })
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed Contra vouchers cannot be saved as draft.')
     setSaving(true); setError('')
@@ -102,6 +106,6 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
       <div className="space-y-1.5"><Label>Note</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Transfer reference or details" /></div>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
-    <DialogFooter>{voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={onClose}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}<Button disabled={saving} onClick={complete}>{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}</Button></DialogFooter>
+    <DialogFooter>{voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={onClose}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}<Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}</Button><Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button></DialogFooter>
   </DialogContent></Dialog>
 }

@@ -1,5 +1,5 @@
 import { lazy, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Printer, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { categoryPath } from '@/lib/categoryHierarchy'
@@ -19,6 +19,7 @@ import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -99,7 +100,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   }, [lines.length, entryType])
   const params = () => ({ entry_type: entryType, counter_account_id: counterAccountId, lines, narration: narration.trim(), date_bs: dateBs, invoice_no: manualNumbering ? invoiceNo.trim() : undefined })
 
-  const complete = async () => {
+  const complete = async (shouldPrint = false) => {
     if (manualNumbering && !invoiceNo.trim()) return setError('Enter the Journal voucher number.')
     if (!counterAccountId) return setError(entryType === 'Income' ? 'Select where the income was received: Cash, Bank, Customer, or Supplier.' : 'Select where the expense was paid from: Cash, Bank, Customer, or Supplier.')
     const allowedCounterIds = new Set([...counterChoices.cashAndBanks, ...counterChoices.partyAccounts].map(account => account.id))
@@ -107,14 +108,19 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
     try { buildSimpleEntryLines(params(), rawAccounts, accountCategories) }
     catch (validationError) { return setError(simpleEntryError(validationError, entryType)) }
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true); setError('')
     try {
       if (voucher) await updateSimpleEntry(voucher.id, params(), 'Completed')
       else await saveSimpleEntry(params(), 'Completed')
+      completeVoucherPrint(printRequest, 'Journal', voucher)
+      printRequest = undefined
       onClose()
-    } catch (caught) { setError(simpleEntryError(caught, entryType)) }
+    } catch (caught) { cancelVoucherPrint(printRequest); setError(simpleEntryError(caught, entryType)) }
     finally { submissionLock.release(); setSaving(false) }
   }
+
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) } })
 
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed entries cannot be saved as draft.')
@@ -176,7 +182,8 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
           {voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           {(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}
-          <Button disabled={saving} onClick={complete}>{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : `Complete ${entryType}`}</Button>
+          <Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : `Complete ${entryType}`}</Button>
+          <Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

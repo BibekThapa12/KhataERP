@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { AlertTriangle, Archive, Pencil, Plus, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
+import { AlertTriangle, Archive, Pencil, Plus, Printer, RotateCcw, Search, SlidersHorizontal, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { cn, fmtDate, fmtMoney } from '@/lib/utils'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs, vouchersInFiscalYear } from '@/lib/reports'
@@ -26,6 +26,7 @@ import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import type { Item, ItemCategory, StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 
@@ -100,8 +101,9 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     setUnitMode(nextMode)
   }
 
-  const handleSave = async (status: 'Draft' | 'Completed' = 'Completed') => {
+  const handleSave = async (status: 'Draft' | 'Completed' = 'Completed', shouldPrint = false) => {
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setError('')
     setSaving(true)
     try {
@@ -109,12 +111,17 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       const baseRate = mode === 'transfer' ? selectedStock?.avg_cost || 0 : toBaseRate(rateInputNumber(rate), conversionFactor)
       await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: voucher?.status === 'Draft' ? todayBs() : dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined }, status)
       if (voucher?.status === 'Draft') await deleteDraftVoucher(voucher.id)
+      completeVoucherPrint(printRequest, 'Stock Adjustment', voucher)
+      printRequest = undefined
       onClose()
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
     } catch (error: unknown) {
+      cancelVoucherPrint(printRequest)
       setError(publicErrorMessage(error, 'saving stock adjustment'))
     } finally { submissionLock.release(); setSaving(false) }
   }
+
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
 
   const handleSaveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') {
@@ -168,7 +175,8 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
         {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}><Trash2 className="mr-1 h-4 w-4" />Delete Draft</Button>}
         <Button variant="outline" onClick={onClose}>Cancel</Button>
         {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
-        <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+        <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+        <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button>
       </DialogFooter>
     </DialogContent>
   </Dialog>

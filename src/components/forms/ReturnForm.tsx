@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Printer, Trash2 } from 'lucide-react'
 import { useAppStore, type ReturnSaveParams } from '@/store/useAppStore'
 import { buildReturnVoucherData, inventoryIssueCost, round2, type ReturnItemInput } from '@/lib/engine'
 import { makeBsKey } from '@/lib/nepaliDate'
@@ -26,6 +26,7 @@ import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 interface ReturnFormProps {
   type: 'Sales Return' | 'Purchase Return'
@@ -211,7 +212,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
   }, [dateInvalid, dateValidation.valid])
 
-  const save = async (status: Voucher['status'] = 'Completed') => {
+  const save = async (status: Voucher['status'] = 'Completed', shouldPrint = false) => {
     setError('')
     if (status === 'Completed' && !dateValidation.valid) {
       const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
@@ -235,10 +236,13 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     const returnItems: ReturnItemInput[] = numericSelectedItems.map(({ original_qty: _originalQty, returned_qty: _returnedQty, ...item }) => item)
     const params: ReturnSaveParams = { type, original_voucher_id: original?.id, party_account_id: original?.party_account_id || partyAccountId, vat_rate: original ? original.vat_rate : manualVatRate, items: returnItems, settlement_mode: settlementMode, settlement_account_id: settlementMode === 'party' ? (original?.party_account_id || partyAccountId) : settlementAccountId, restock_items: true, stock_condition: stockCondition, return_reason: reason.trim(), date_bs: dateBs }
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
       if (voucher) await updateReturnVoucher(voucher.id, params, status)
       else await saveReturnVoucher(params, status)
+      completeVoucherPrint(printRequest, type, voucher)
+      printRequest = undefined
       if (voucher) {
         onClose()
       } else {
@@ -257,6 +261,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
+      cancelVoucherPrint(printRequest)
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
         setDateInvalid(true)
@@ -268,6 +273,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       }
     } finally { submissionLock.release(); setSaving(false) }
   }
+
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void save('Completed') }, onSaveAndPrint: () => { void save('Completed', true) } })
 
   const deleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -347,7 +354,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={deleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
-          <Button onClick={() => save('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button onClick={() => save('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button variant="outline" onClick={() => save('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

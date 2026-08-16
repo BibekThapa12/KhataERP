@@ -139,17 +139,25 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
+  const initializedSessionRef = useRef<string | null>(null)
   const isUsed = !!account && vouchers.some(voucher => voucher.lines?.some(line => line.account_id === account.id))
   const selectedCategory = activeCategories.find(category => category.id === categoryId)
   const visibility = useMemo(() => ledgerFieldVisibility(accountCategories, categoryId), [accountCategories, categoryId])
   const fixedPartyType = defaultPartyType || party?.type
   const partyMode = !!fixedPartyType
   const fixedPartyCategory = fixedPartyType ? partyCategoryForType(activeCategories, fixedPartyType) : undefined
+  const initialCategoryId = account?.category_id || fixedPartyCategory?.id || (!partyMode ? defaultCategoryId || activeCategories[0]?.id || '' : '')
+  const initializationKey = [account?.id || 'new', party?.id || 'no-party', fixedPartyType || 'no-party-type', allowedAccountType || 'any-type', defaultCategoryId || 'no-default'].join('|')
 
   useEffect(() => {
-    if (!open) return
+    if (!open) {
+      initializedSessionRef.current = null
+      return
+    }
+    if (initializedSessionRef.current === initializationKey) return
+    initializedSessionRef.current = initializationKey
     setName(account?.name || '')
-    setCategoryId(account?.category_id || fixedPartyCategory?.id || (!partyMode ? defaultCategoryId || activeCategories[0]?.id || '' : ''))
+    setCategoryId(initialCategoryId)
     setPartyType(fixedPartyType || 'customer')
     setDefaultCreditDays(String(party?.default_credit_days ?? account?.credit_days ?? 0))
     const selected = account?.type || fixedPartyCategory?.account_type || activeCategories.find(category => category.id === (defaultCategoryId || activeCategories[0]?.id))?.account_type || 'Asset'
@@ -162,7 +170,15 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
     setBankAccountNo(account?.bank_account_no || '')
     setBankBranch(account?.bank_branch || '')
     setError('')
-  }, [open, account, party, defaultCategoryId, fixedPartyType, fixedPartyCategory?.id, fixedPartyCategory?.account_type, partyMode, activeCategories])
+  }, [open, initializationKey, initialCategoryId, account, party, defaultCategoryId, fixedPartyType, fixedPartyCategory?.account_type, partyMode, activeCategories])
+
+  useEffect(() => {
+    if (!open || partyMode || categoryId) return
+    const category = activeCategories.find(candidate => candidate.id === defaultCategoryId) || activeCategories[0]
+    if (!category) return
+    setCategoryId(category.id)
+    if (!account) setBalanceType(normalSide(category.account_type) === 'debit' ? 'Dr' : 'Cr')
+  }, [open, partyMode, categoryId, activeCategories, defaultCategoryId, account])
 
   useEffect(() => {
     if (!partyMode) return

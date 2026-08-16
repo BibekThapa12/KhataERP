@@ -17,6 +17,11 @@ dist-ssr
 .env.*
 !.env.example
 
+# Local package-manager and network authentication
+.npmrc
+.yarnrc
+.netrc
+
 # Private certificates and credential bundles
 *.pem
 *.key
@@ -24,12 +29,54 @@ dist-ssr
 *.pfx
 credentials.json
 secrets.json
+service-account*.json
+*-service-account.json
+id_rsa
+id_ed25519
+
+# Supabase CLI local state and function-only secrets
+supabase/.temp/
+supabase/.branches/
+supabase/functions/.env
+supabase/functions/.env.*
+!supabase/functions/.env.example
+.supabase/
+
+# Local backup-agent runtime state (source scripts remain tracked)
+windows-backup-agent/config.json
+windows-backup-agent/agent.log*
+windows-backup-agent/agent.lock
+
+# Generated company backups, archives, and database dumps
+**/company-backup.json
+**/company-backup.tmp
+**/company-backup.previous
+KhataERP Backup/
+backups/
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.dump
+*.backup
+*.sql.gz
+
+# Local deployment, test, and coverage state
+.vercel/
+.netlify/
+coverage/
+playwright-report/
+test-results/
+*.sqlite
+*.sqlite3
 
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
 .idea
 .DS_Store
+Thumbs.db
+desktop.ini
 *.suo
 *.ntvs*
 *.njsproj

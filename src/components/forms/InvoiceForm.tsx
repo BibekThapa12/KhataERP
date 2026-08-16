@@ -1,5 +1,5 @@
 import { lazy, useState, useEffect, useMemo, useRef } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Printer, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { addDaysToBs } from '@/lib/nepaliDate'
@@ -24,6 +24,7 @@ import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Voucher } from '@/types'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -233,7 +234,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     return () => window.cancelAnimationFrame(frame)
   }, [lines.length])
 
-  const handleSave = async (status: Voucher['status'] = 'Completed') => {
+  const handleSave = async (status: Voucher['status'] = 'Completed', shouldPrint = false) => {
     if (status === 'Completed' && !dateValidation.valid) {
       const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
       setDateInvalid(true)
@@ -270,6 +271,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     }
 
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
       const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, amount_input: _amountInput, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
@@ -280,6 +282,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         if (voucher) await updatePurchaseVoucher(voucher.id, params, status)
         else await savePurchaseVoucher(params, status)
       }
+      completeVoucherPrint(printRequest, type, voucher)
+      printRequest = undefined
       if (voucher) {
         onClose()
       } else {
@@ -301,6 +305,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
+      cancelVoucherPrint(printRequest)
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
         setDateInvalid(true)
@@ -315,6 +320,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setSaving(false)
     }
   }
+
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
 
   const handleSaveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') {
@@ -505,8 +512,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
               {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
             </Button>}
-            <Button onClick={() => handleSave('Completed')} disabled={saving}>
+            <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">
               {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}
+            </Button>
+            <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)">
+              <Printer className="mr-1 h-4 w-4" />Save &amp; Print
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1,5 +1,5 @@
 import { lazy, useState, useEffect, useMemo, useRef } from 'react'
-import { Plus, Trash2 } from 'lucide-react'
+import { Plus, Printer, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
@@ -29,6 +29,7 @@ import { formatMasterName } from '@/lib/nameFormat'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 const CategoryDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.CategoryDialog })))
@@ -257,7 +258,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     return () => window.cancelAnimationFrame(frame)
   }, [allocations.length])
 
-  const handleSave = async (status: Voucher['status'] = 'Completed') => {
+  const handleSave = async (status: Voucher['status'] = 'Completed', shouldPrint = false) => {
     if (status === 'Completed' && !dateValidation.valid) {
       const message = friendlyVoucherDateError(null, dateValidation) || 'Cannot save voucher. Voucher date is invalid.'
       setDateInvalid(true)
@@ -271,6 +272,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
     if (validAllocations.some(allocation => round2(allocation.invoice_allocations.reduce((sum, row) => sum + row.amount, 0)) > allocation.amount)) { setError('Invoice allocations cannot exceed the ledger amount.'); return }
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
       if (isReceipt) {
@@ -280,6 +282,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
         else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
       }
+      completeVoucherPrint(printRequest, type, voucher)
+      printRequest = undefined
       if (voucher) {
         onClose()
       } else {
@@ -293,6 +297,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
+      cancelVoucherPrint(printRequest)
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
         setDateInvalid(true)
@@ -304,6 +309,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       }
     } finally { submissionLock.release(); setSaving(false) }
   }
+
+  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -393,7 +400,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
-          <Button onClick={() => handleSave('Completed')} disabled={saving}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -499,7 +507,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     return () => window.cancelAnimationFrame(frame)
   }, [jLines.length])
 
-  const handleSave = async (status: Voucher['status'] = 'Completed') => {
+  const handleSave = async (status: Voucher['status'] = 'Completed', shouldPrint = false) => {
     if (manualJournalNumbering && !journalInvoiceNo.trim()) { setError('Enter the Journal voucher number.'); return }
     if (journalInvoiceNo.trim().length > 100) { setError('Journal voucher number cannot exceed 100 characters.'); return }
     if (status === 'Completed' && !dateValidation.valid) {
@@ -517,11 +525,14 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     if (validLines.length < 2) { setError('Add at least two lines.'); return }
     if (!balanced) { setError(`Debits and credits differ by ${fmtMoney(Math.abs(diff))}.`); return }
     if (!submissionLock.tryAcquire()) return
+    let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
       const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs, invoice_no: manualJournalNumbering ? journalInvoiceNo.trim() : undefined }
       if (voucher) await updateJournal(voucher.id, params, status)
       else await saveJournal(params, status)
+      completeVoucherPrint(printRequest, 'Journal', voucher)
+      printRequest = undefined
       if (voucher) {
         onClose()
       } else {
@@ -535,6 +546,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
       }
     } catch (e: unknown) {
+      cancelVoucherPrint(printRequest)
       const friendlyDateError = friendlyVoucherDateError(e, dateValidation)
       if (friendlyDateError) {
         setDateInvalid(true)
@@ -546,6 +558,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       }
     } finally { submissionLock.release(); setSaving(false) }
   }
+
+  useVoucherShortcuts({ open, disabled: saving || !balanced, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -646,7 +660,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
-          <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced}>{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}</Button>
+          <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving || !balanced} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

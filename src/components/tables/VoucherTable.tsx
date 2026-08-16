@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import type { InvoiceItem, Item, StockLine, Voucher, VoucherLine } from '@/types'
 import { legacySettlementAccountId } from '@/lib/banks'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
+import { registerVoucherPrinter } from '@/lib/voucherPrinterRegistry'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
@@ -249,9 +250,10 @@ interface VoucherTableProps {
   showActions?: boolean
   alwaysShowFilters?: boolean
   onEdit?: (voucher: Voucher) => void
+  printerOnly?: boolean
 }
 
-export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters = false, onEdit }: VoucherTableProps) {
+export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters = false, onEdit, printerOnly = false }: VoucherTableProps) {
   const cancelV = useAppStore(s => s.cancelV)
   const deleteDraftVoucher = useAppStore(s => s.deleteDraftVoucher)
   const company = useAppStore(s => s.company)
@@ -276,7 +278,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     return text.includes(query.toLowerCase())
   })
 
-  const printVoucher = (voucher: Voucher) => {
+  const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
     const party = voucher.party_account_id
       ? getPartyByAccountId(voucher.party_account_id)
       : null
@@ -448,7 +450,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         </body>
       </html>
     `
-    const win = window.open('', '_blank', 'width=800,height=900')
+    const win = targetWindow || window.open('', '_blank', 'width=800,height=900')
     if (!win) return
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
@@ -456,6 +458,10 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     win.focus()
     win.print()
   }
+
+  registerVoucherPrinter(printVoucher)
+
+  if (printerOnly) return null
 
   if (!alwaysShowFilters && vouchers.length === 0) {
     return (
