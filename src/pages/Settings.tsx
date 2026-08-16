@@ -828,20 +828,6 @@ export function SettingsPage() {
       }
       finishRestoreStage('Cheque banks restored', `${sourceChequeBanks.length} bank record(s) mapped.`)
 
-      showRestoreProgress('Restoring cheques', 'Restoring incoming and outgoing cheque records and voucher links.')
-      const chequeRows = sourceCheques.map(sourceCheque => ({
-        ...withoutMeta(sourceCheque as unknown as Record<string, unknown>, ['created_by', 'updated_by']),
-        id: crypto.randomUUID(), company_id: company.id,
-        bank_id: sourceCheque.bank_id ? idMap.get(sourceCheque.bank_id) || null : null,
-        source_account_id: resolveAccountId(sourceCheque.source_account_id, 'cheque source'),
-        party_ledger_id: resolveAccountId(sourceCheque.party_ledger_id, 'cheque party'),
-        linked_voucher_id: sourceCheque.linked_voucher_id ? idMap.get(sourceCheque.linked_voucher_id) || null : null,
-        cleared_to_account_id: resolveAccountId(sourceCheque.cleared_to_account_id, 'cheque clearing'),
-        created_by: null, updated_by: null,
-      }))
-      if (chequeRows.length) { const { error } = await supabase.from('cheques').insert(chequeRows); if (error) throw error }
-      finishRestoreStage('Cheques restored', `${chequeRows.length} cheque(s) imported. Audit events are recreated by the cheque subsystem.`)
-
       showRestoreProgress('Restoring voucher status', 'Completing imported vouchers in date and serial order.')
       for (const voucher of orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')) {
         const { error } = await supabase
@@ -853,6 +839,41 @@ export function SettingsPage() {
         }
       }
       finishRestoreStage('Voucher statuses restored', 'Completed vouchers were restored in serial order.')
+
+      showRestoreProgress('Restoring cheques', 'Restoring incoming and outgoing cheque records and voucher links.')
+      const chequeRows = sourceCheques.map(sourceCheque => {
+        const linkedSourceVoucher = sourceCheque.linked_voucher_id ? sourceVoucherById.get(sourceCheque.linked_voucher_id) : undefined
+        const linkedVoucherId = sourceCheque.linked_voucher_id ? idMap.get(sourceCheque.linked_voucher_id) || null : null
+        if (sourceCheque.status === 'cleared' && !linkedVoucherId) {
+          throw new Error(`Cleared cheque ${sourceCheque.cheque_number} references a voucher that is missing from the backup.`)
+        }
+        // Older portable backups were created before cheque clearing dates were
+        // persisted. The linked Receipt/Payment date is the authoritative legacy
+        // clearing date because that is when accounting was posted.
+        const clearedDateBs = sourceCheque.status === 'cleared'
+          ? sourceCheque.cleared_date_bs || linkedSourceVoucher?.date_bs || null
+          : null
+        const clearedDateBsKey = clearedDateBs
+          ? sourceCheque.cleared_date_bs_key || makeBsKey(clearedDateBs)
+          : null
+        if (sourceCheque.status === 'cleared' && (!clearedDateBs || !clearedDateBsKey)) {
+          throw new Error(`Cleared cheque ${sourceCheque.cheque_number} has no usable clearing date or linked voucher date.`)
+        }
+        return {
+          ...withoutMeta(sourceCheque as unknown as Record<string, unknown>, ['created_by', 'updated_by']),
+          id: crypto.randomUUID(), company_id: company.id,
+          bank_id: sourceCheque.bank_id ? idMap.get(sourceCheque.bank_id) || null : null,
+          source_account_id: resolveAccountId(sourceCheque.source_account_id, 'cheque source'),
+          party_ledger_id: resolveAccountId(sourceCheque.party_ledger_id, 'cheque party'),
+          linked_voucher_id: linkedVoucherId,
+          cleared_date_bs: clearedDateBs,
+          cleared_date_bs_key: clearedDateBsKey,
+          cleared_to_account_id: resolveAccountId(sourceCheque.cleared_to_account_id, 'cheque clearing'),
+          created_by: null, updated_by: null,
+        }
+      })
+      if (chequeRows.length) { const { error } = await supabase.from('cheques').insert(chequeRows); if (error) throw error }
+      finishRestoreStage('Cheques restored', `${chequeRows.length} cheque(s) imported. Audit events are recreated by the cheque subsystem.`)
 
       showRestoreProgress('Reloading company data', 'Refreshing the active company after import.')
       await loadAll(userId)
