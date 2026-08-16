@@ -87,6 +87,7 @@ begin
     'label', 'Invoice/settings columns',
     'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'sales_prefix')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'print_format')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'show_company_details_on_sales_invoice')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'logo_url')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'enforce_sales_invoice_chronology')
               then 'ok' else 'missing' end,
@@ -173,6 +174,7 @@ create table if not exists companies (
   allow_admin_chronological_bypass boolean not null default false,
   enforce_sales_invoice_chronology boolean not null default false,
   print_format     text not null default 'A5' check (print_format in ('A5','A4')),
+  show_company_details_on_sales_invoice boolean not null default true,
   invoice_terms    text,
   payment_qr_text  text,
   logo_url         text,
@@ -216,6 +218,7 @@ alter table companies add constraint companies_fiscal_numbering_required check (
 alter table companies add column if not exists allow_admin_chronological_bypass boolean not null default false;
 alter table companies add column if not exists enforce_sales_invoice_chronology boolean not null default false;
 alter table companies add column if not exists print_format text not null default 'A5';
+alter table companies add column if not exists show_company_details_on_sales_invoice boolean not null default true;
 alter table companies add column if not exists invoice_terms text;
 alter table companies add column if not exists payment_qr_text text;
 alter table companies add column if not exists logo_url text;

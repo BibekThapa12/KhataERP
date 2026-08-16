@@ -513,10 +513,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
             </Button>}
             <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">
-              {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Complete Voucher'}
+              {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}
             </Button>
             <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)">
-              <Printer className="mr-1 h-4 w-4" />Save &amp; Print
+              <Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd>
             </Button>
           </DialogFooter>
         </DialogContent>

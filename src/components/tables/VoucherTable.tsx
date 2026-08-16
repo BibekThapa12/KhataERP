@@ -354,6 +354,9 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
       </div>
     `
     const printFormat = company?.print_format || 'A5'
+    const printableWidthMm = printFormat === 'A4' ? 188 : 126
+    const printableHeightMm = printFormat === 'A4' ? 275 : 188
+    const showCompanyIdentity = voucher.type !== 'Sales' || company?.show_company_details_on_sales_invoice !== false
     const originalVoucher = voucher.original_voucher_id ? allVouchers.find(entry => entry.id === voucher.original_voucher_id) : null
     const documentTitle = voucher.type === 'Sales Return' && vatEnabled
       ? 'Credit Note'
@@ -369,8 +372,12 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             @page { size: ${esc(printFormat)}; margin: 10mm; }
             * { box-sizing: border-box; }
             body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; }
-            .sheet { width: 100%; min-height: 190mm; padding: 0 1mm; }
+            .sheet { width: ${printableWidthMm}mm; max-width: 100%; min-height: ${printableHeightMm}mm; margin: 0 auto; padding: 0 1mm; transform-origin: top left; }
             .invoice-head { display: grid; grid-template-columns: minmax(0,1fr) 50mm; gap: 8mm; align-items: start; border-top: 1.5px solid #111827; padding: 8mm 2mm 7mm; }
+            .invoice-head.no-company { display: block; padding: 3mm 2mm; }
+            .invoice-head.no-company .meta { display: grid; grid-template-columns: minmax(28mm,.7fr) repeat(2,minmax(38mm,1fr)); gap: 2mm 5mm; width: 100%; margin: 0; align-items: center; }
+            .invoice-head.no-company .meta h2 { grid-row: 1 / 3; margin: 0; text-align: left; }
+            .invoice-head.no-company .meta-row { grid-template-columns: max-content 2mm max-content; width: auto; margin: 0; }
             h1 { margin: 0 0 5px; font-size: 24px; line-height: 1.05; letter-spacing: 0; }
             h2 { margin: 0 0 4px; font-size: 24px; line-height: 1; text-align: left; text-transform: uppercase; }
             p { margin: 3px 0; }
@@ -402,8 +409,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         </head>
         <body>
           <main class="sheet">
-            <section class="invoice-head">
-              <div>
+            <section class="invoice-head${showCompanyIdentity ? '' : ' no-company'}">
+              ${showCompanyIdentity ? `<div>
                 ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" referrerpolicy="no-referrer" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
                 <h1>${esc(company?.name || 'KhataERP')}</h1>
                 <div class="company-lines">
@@ -411,7 +418,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
                   ${company?.phone ? `<p>Phone: ${esc(company.phone)}</p>` : ''}
                   ${company?.pan_vat ? `<p>PAN/VAT: ${esc(company.pan_vat)}</p>` : ''}
                 </div>
-              </div>
+              </div>` : ''}
               <div class="meta">
                 <h2>${esc(documentTitle)}</h2>
                 <p class="meta-row"><strong>No.</strong><span>:</span><span>${esc(savedVoucherNumber(voucher))}</span></p>
@@ -447,6 +454,26 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
               <div>Received By</div>
             </section>
           </main>
+          <script>
+            (() => {
+              const printableWidth = ${printableWidthMm} * 96 / 25.4
+              const printableHeight = ${printableHeightMm} * 96 / 25.4
+              const fitAndPrint = () => requestAnimationFrame(() => requestAnimationFrame(() => {
+                const sheet = document.querySelector('.sheet')
+                if (!sheet) return
+                sheet.style.zoom = '1'
+                const widthScale = printableWidth / Math.max(sheet.scrollWidth, 1)
+                const heightScale = printableHeight / Math.max(sheet.scrollHeight, 1)
+                const requiredScale = Math.min(1, widthScale, heightScale)
+                const safeScale = requiredScale < 1 ? Math.max(0.01, requiredScale * 0.97) : 1
+                sheet.style.zoom = String(Number(safeScale.toFixed(4)))
+                document.body.style.width = (printableWidth * safeScale) + 'px'
+                setTimeout(() => { window.focus(); window.print() }, 80)
+              }))
+              if (document.readyState === 'complete') fitAndPrint()
+              else window.addEventListener('load', fitAndPrint, { once: true })
+            })()
+          </script>
         </body>
       </html>
     `
@@ -455,8 +482,6 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
     win.document.close()
-    win.focus()
-    win.print()
   }
 
   registerVoucherPrinter(printVoucher)

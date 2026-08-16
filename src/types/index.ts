@@ -192,6 +192,7 @@ export interface Company {
   allow_admin_chronological_bypass?: boolean
   enforce_sales_invoice_chronology?: boolean
   print_format?: 'A5' | 'A4'
+  show_company_details_on_sales_invoice?: boolean
   invoice_terms?: string
   payment_qr_text?: string
   logo_url?: string
@@ -251,6 +252,7 @@ export interface CompanyCreateInput {
   purchase_return_prefix?: string
   journal_numbering_mode?: 'auto' | 'manual'
   print_format?: 'A5' | 'A4'
+  show_company_details_on_sales_invoice?: boolean
   invoice_terms?: string
   payment_qr_text?: string
 }

@@ -35,7 +35,7 @@ const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
-  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
+  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'show_company_details_on_sales_invoice', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
   'fiscal_year_configured',
 ] as const
 
@@ -234,6 +234,7 @@ export function SettingsPage() {
   const [allowAdminChronologicalBypass, setAllowAdminChronologicalBypass] = useState(company?.allow_admin_chronological_bypass ?? false)
   const [enforceSalesInvoiceChronology, setEnforceSalesInvoiceChronology] = useState(company?.enforce_sales_invoice_chronology ?? false)
   const [printFormat, setPrintFormat] = useState(company?.print_format ?? 'A5')
+  const [showCompanyDetailsOnSalesInvoice, setShowCompanyDetailsOnSalesInvoice] = useState(company?.show_company_details_on_sales_invoice ?? true)
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
   const [logoUrl, setLogoUrl] = useState(company?.logo_url ?? '')
@@ -297,6 +298,7 @@ export function SettingsPage() {
     setAllowAdminChronologicalBypass(company?.allow_admin_chronological_bypass ?? false)
     setEnforceSalesInvoiceChronology(company?.enforce_sales_invoice_chronology ?? false)
     setPrintFormat(company?.print_format ?? 'A5')
+    setShowCompanyDetailsOnSalesInvoice(company?.show_company_details_on_sales_invoice ?? true)
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
     setLogoUrl(company?.logo_url ?? '')
@@ -344,6 +346,7 @@ export function SettingsPage() {
         allow_admin_chronological_bypass: allowAdminChronologicalBypass,
         enforce_sales_invoice_chronology: enforceSalesInvoiceChronology,
         print_format: printFormat,
+        show_company_details_on_sales_invoice: showCompanyDetailsOnSalesInvoice,
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
         logo_url: logoUrl.trim(),
@@ -1009,6 +1012,13 @@ export function SettingsPage() {
                 <p className="text-xs text-muted-foreground">Manual mode requires the voucher number to be entered in each Journal Entry.</p>
               </div>
             </div>
+            <label htmlFor="show-sales-invoice-company-details" className="flex items-start gap-3 rounded-md border border-border p-3">
+              <input id="show-sales-invoice-company-details" type="checkbox" checked={showCompanyDetailsOnSalesInvoice} onChange={event => setShowCompanyDetailsOnSalesInvoice(event.target.checked)} className="mt-1" />
+              <span>
+                <span className="block text-sm font-medium">Show company details on Sales invoice</span>
+                <span className="block text-xs text-muted-foreground">Include the logo, company name, address, phone, and PAN/VAT on printed Sales invoices.</span>
+              </span>
+            </label>
             <label htmlFor="reset-numbering" className="flex items-start gap-3 rounded-md border border-border p-3">
               <input id="reset-numbering" type="checkbox" checked disabled readOnly className="mt-1" />
               <span>

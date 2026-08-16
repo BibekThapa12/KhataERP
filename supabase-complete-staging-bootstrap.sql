@@ -1,5 +1,5 @@
-﻿-- KhataERP complete staging database bootstrap
--- Mechanically synchronized with every SQL file in db migration files on 2026-08-01.
+-- KhataERP complete staging database bootstrap
+-- Mechanically synchronized with every SQL file in db migration files on 2026-08-16.
 -- Run this entire file once in the Supabase SQL Editor using the postgres role.
 -- Do not run individual migrations after applying this bootstrap.
 
@@ -95,6 +95,7 @@ begin
     'label', 'Invoice/settings columns',
     'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'sales_prefix')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'print_format')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'show_company_details_on_sales_invoice')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'logo_url')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'enforce_sales_invoice_chronology')
               then 'ok' else 'missing' end,
@@ -181,6 +182,7 @@ create table if not exists companies (
   allow_admin_chronological_bypass boolean not null default false,
   enforce_sales_invoice_chronology boolean not null default false,
   print_format     text not null default 'A5' check (print_format in ('A5','A4')),
+  show_company_details_on_sales_invoice boolean not null default true,
   invoice_terms    text,
   payment_qr_text  text,
   logo_url         text,
@@ -224,6 +226,7 @@ alter table companies add constraint companies_fiscal_numbering_required check (
 alter table companies add column if not exists allow_admin_chronological_bypass boolean not null default false;
 alter table companies add column if not exists enforce_sales_invoice_chronology boolean not null default false;
 alter table companies add column if not exists print_format text not null default 'A5';
+alter table companies add column if not exists show_company_details_on_sales_invoice boolean not null default true;
 alter table companies add column if not exists invoice_terms text;
 alter table companies add column if not exists payment_qr_text text;
 alter table companies add column if not exists logo_url text;
@@ -527,8 +530,10 @@ create table if not exists invoice_items (
   amount           numeric(18,6) not null
 );
 alter table invoice_items add column if not exists amount numeric(18,6);
+alter table invoice_items disable trigger user;
 update invoice_items set amount = round(qty * rate, 6) where amount is null;
 alter table invoice_items alter column amount set not null;
+alter table invoice_items enable trigger user;
 
 -- Voucher-to-invoice allocations. Historical receipts/payments without rows
 -- remain valid and are allocated FIFO by the reporting layer.
@@ -1745,127 +1750,6 @@ notify pgrst, 'reload schema';
 
 -- END INCLUDED FILE: supabase-sales-invoice-chronology-setting-migration.sql
 
--- After running this schema, set your environment variables:
---   VITE_SUPABASE_URL      = https://your-project-id.supabase.co
---   VITE_SUPABASE_ANON_KEY = your-anon-public-key
--- Both are in: Supabase dashboard â†’ Settings â†’ API
--- END SYNCED DB FILE: supabase-schema.sql
-
--- BEGIN SYNCED DB FILE: supabase-masters-migration.sql
--- KhataERP Masters migration
--- Run this file once in Supabase SQL Editor for an existing project.
-
-create extension if not exists "uuid-ossp";
-
-create table if not exists account_categories (
-  id uuid primary key default uuid_generate_v4(),
-  company_id uuid not null references companies(id) on delete cascade,
-  name text not null,
-  account_type text not null check (account_type in ('Asset','Liability','Equity','Income','Expense')),
-  parent_category_id uuid references account_categories(id) on delete restrict,
-  is_system boolean not null default false,
-  is_archived boolean not null default false,
-  created_at timestamptz not null default now(),
-  unique(company_id, name, account_type)
-);
-
-create table if not exists item_categories (
-  id uuid primary key default uuid_generate_v4(),
-  company_id uuid not null references companies(id) on delete cascade,
-  name text not null,
-  parent_category_id uuid references item_categories(id) on delete restrict,
-  is_archived boolean not null default false,
-  created_at timestamptz not null default now(),
-  unique(company_id, name)
-);
-
-create table if not exists master_change_logs (
-  id uuid primary key default uuid_generate_v4(),
-  company_id uuid not null references companies(id) on delete cascade,
-  user_id uuid references auth.users(id) on delete set null,
-  record_type text not null,
-  record_id text not null,
-  action text not null,
-  old_values jsonb not null default '{}'::jsonb,
-  new_values jsonb not null default '{}'::jsonb,
-  created_at timestamptz not null default now()
-);
-
-alter table accounts add column if not exists category_id uuid references account_categories(id) on delete restrict;
-alter table accounts add column if not exists is_archived boolean not null default false;
-alter table parties add column if not exists is_archived boolean not null default false;
-alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
-alter table items add column if not exists sku text;
-alter table items add column if not exists barcode text;
-alter table items add column if not exists vat_applicable boolean not null default true;
-alter table items add column if not exists is_archived boolean not null default false;
-
-insert into account_categories (company_id, name, account_type, is_system)
-select company_id, "group", type, bool_or(is_system)
-from accounts
-group by company_id, "group", type
-on conflict (company_id, name, account_type) do update
-set is_system = account_categories.is_system or excluded.is_system;
-
-insert into account_categories (company_id, name, account_type, is_system)
-select id, 'Sundry Debtors', 'Asset', true from companies
-on conflict (company_id, name, account_type) do update set is_system = true;
-
-insert into account_categories (company_id, name, account_type, is_system)
-select id, 'Sundry Creditors', 'Liability', true from companies
-on conflict (company_id, name, account_type) do update set is_system = true;
-
-update accounts a
-set category_id = c.id
-from account_categories c
-where a.category_id is null
-  and c.company_id = a.company_id
-  and c.name = a."group"
-  and c.account_type = a.type;
-
-insert into item_categories (company_id, name)
-select id, 'General' from companies
-on conflict (company_id, name) do nothing;
-
-update items i
-set category_id = c.id
-from item_categories c
-where i.category_id is null
-  and c.company_id = i.company_id
-  and c.name = 'General';
-
-create index if not exists idx_account_categories_company on account_categories(company_id, account_type, name);
-create index if not exists idx_item_categories_company on item_categories(company_id, name);
-create index if not exists idx_master_logs_company on master_change_logs(company_id, created_at desc);
-
-alter table account_categories enable row level security;
-alter table item_categories enable row level security;
-alter table master_change_logs enable row level security;
-
-drop policy if exists "account_categories_own" on account_categories;
-create policy "account_categories_own" on account_categories
-  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
-
-drop policy if exists "account_categories_developer_select" on account_categories;
-create policy "account_categories_developer_select" on account_categories
-  for select using (is_developer_admin());
-
-drop policy if exists "item_categories_own" on item_categories;
-create policy "item_categories_own" on item_categories
-  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
-
-drop policy if exists "item_categories_developer_select" on item_categories;
-create policy "item_categories_developer_select" on item_categories
-  for select using (is_developer_admin());
-
-drop policy if exists "master_change_logs_own" on master_change_logs;
-create policy "master_change_logs_own" on master_change_logs
-  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
-
-drop policy if exists "master_change_logs_developer_select" on master_change_logs;
-create policy "master_change_logs_developer_select" on master_change_logs
-  for select using (is_developer_admin());
-
 -- Developer full portable backup and local export status
 create table if not exists public.developer_backup_runs (
   id uuid primary key default gen_random_uuid(),
@@ -2072,6 +1956,358 @@ revoke all on function public.system_export_company_backup(uuid) from public,ano
 grant execute on function public.system_export_company_backup(uuid) to service_role;
 revoke all on function public.create_developer_backup_agent(text),public.revoke_developer_backup_agent(uuid),public.list_developer_backup_agents() from public,anon;
 grant execute on function public.create_developer_backup_agent(text),public.revoke_developer_backup_agent(uuid),public.list_developer_backup_agents() to authenticated;
+
+-- One trial per user, company paid terms, and authoritative read-only enforcement.
+begin;
+
+alter table public.companies add column if not exists plan_expires_at timestamptz;
+
+-- Preserve the effective access of legacy rows. The old date was inclusive in
+-- Nepal time, so its equivalent timestamp is midnight immediately afterward.
+update public.companies
+set plan_expires_at = case
+  when trial_ends_at is not null then ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
+  else created_at + interval '14 days'
+end
+where plan_status = 'trial' and plan_expires_at is null;
+
+update public.companies
+set plan_expires_at = ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
+where plan_status = 'paid' and plan_expires_at is null and trial_ends_at is not null;
+
+create or replace function public.company_billing_status(target_company uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  company_row public.companies%rowtype;
+  effective_status text;
+  remaining_days integer;
+  elapsed_days integer;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_developer_admin() and not public.is_company_admin(target_company) then
+    raise exception 'Company access denied' using errcode = '42501';
+  end if;
+  select * into company_row from public.companies where id = target_company;
+  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
+
+  effective_status := case
+    when company_row.suspended then 'suspended'
+    when company_row.plan_status = 'expired' then 'expired'
+    when company_row.plan_status in ('trial','paid')
+      and company_row.plan_expires_at is not null
+      and company_row.plan_expires_at <= clock_timestamp() then 'expired'
+    else company_row.plan_status
+  end;
+  if company_row.plan_expires_at is not null then
+    remaining_days := greatest(ceil(extract(epoch from (company_row.plan_expires_at - clock_timestamp())) / 86400.0)::integer, 0);
+    elapsed_days := greatest(ceil(extract(epoch from (clock_timestamp() - company_row.plan_expires_at)) / 86400.0)::integer, 0);
+  end if;
+  return jsonb_build_object(
+    'configured_status', company_row.plan_status,
+    'effective_status', effective_status,
+    'expires_at', company_row.plan_expires_at,
+    'remaining_days', remaining_days,
+    'days_since_expiry', elapsed_days,
+    'can_write', effective_status not in ('expired','suspended')
+  );
+end;
+$$;
+
+create or replace function public.protect_company_control_fields()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null or public.is_developer_admin() then return new; end if;
+  if nullif(btrim(coalesce(new.logo_url, '')), '') is not null
+    and (length(new.logo_url) > 2048 or new.logo_url !~ '^https://') then
+    raise exception 'Company logo must use an HTTPS URL' using errcode = '22023';
+  end if;
+  if new.owner_email is distinct from old.owner_email
+    and new.owner_email is distinct from nullif(auth.jwt()->>'email', '') then
+    raise exception 'Company owner email must match the authenticated user' using errcode = '42501';
+  end if;
+  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
+    or new.plan_status is distinct from old.plan_status
+    or new.trial_ends_at is distinct from old.trial_ends_at
+    or new.plan_expires_at is distinct from old.plan_expires_at
+    or new.support_status is distinct from old.support_status
+    or new.developer_notes is distinct from old.developer_notes
+    or new.suspended is distinct from old.suspended then
+    raise exception 'Developer-controlled company fields cannot be changed' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.enforce_tenant_write_access()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_company uuid;
+  company_row public.companies%rowtype;
+  signup_at timestamptz;
+  initializing_company text;
+begin
+  if auth.uid() is null or public.is_developer_admin() then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_argv[0] = 'company' then
+    target_company := case when tg_op = 'DELETE' then old.id else new.id end;
+    if tg_op = 'INSERT' then
+      if new.user_id is distinct from auth.uid() or new.plan_status is distinct from 'trial'
+        or new.trial_ends_at is not null or new.plan_expires_at is not null
+        or new.support_status is distinct from 'normal' or new.developer_notes is not null
+        or coalesce(new.suspended, false) then
+        raise exception 'New company security fields are invalid' using errcode = '42501';
+      end if;
+      select created_at into signup_at from auth.users where id = auth.uid();
+      new.plan_expires_at := signup_at + interval '14 days';
+      new.trial_ends_at := (new.plan_expires_at at time zone 'Asia/Kathmandu')::date;
+      return new;
+    end if;
+  elsif tg_argv[0] = 'voucher_child' then
+    select voucher.company_id into target_company from public.vouchers voucher
+    where voucher.id = case when tg_op = 'DELETE' then old.voucher_id else new.voucher_id end;
+  else
+    target_company := case when tg_op = 'DELETE' then old.company_id else new.company_id end;
+  end if;
+
+  if target_company is null and tg_op = 'DELETE' then return old; end if;
+  select * into company_row from public.companies where id = target_company;
+  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
+  initializing_company := current_setting('khataerp.initializing_company', true);
+  if initializing_company = target_company::text then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+  if not public.is_company_admin(target_company) then
+    raise exception 'Company write access denied' using errcode = '42501';
+  end if;
+
+  if (company_row.suspended or company_row.plan_status = 'expired'
+      or (company_row.plan_status in ('trial','paid') and company_row.plan_expires_at is not null
+          and company_row.plan_expires_at <= clock_timestamp()))
+    and not (tg_argv[0] = 'company' and tg_op = 'DELETE') then
+    raise exception 'Company plan expired. This company is read-only until renewed.' using errcode = '42501';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+drop trigger if exists company_control_fields_guard on public.companies;
+create trigger company_control_fields_guard before update on public.companies
+for each row execute function public.protect_company_control_fields();
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array[
+    'accounts','account_categories','parties','items','item_categories','master_change_logs',
+    'vouchers','voucher_settlements','app_events','cheque_banks','cheques','cheque_events','company_modules',
+    'company_members','company_user_permissions'
+  ] loop
+    if to_regclass('public.' || table_name) is not null then
+      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
+      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'direct');
+    end if;
+  end loop;
+  foreach table_name in array array['voucher_lines','stock_lines','invoice_items'] loop
+    if to_regclass('public.' || table_name) is not null then
+      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
+      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'voucher_child');
+    end if;
+  end loop;
+end $$;
+
+drop trigger if exists tenant_write_access_guard on public.companies;
+create trigger tenant_write_access_guard before insert or update or delete on public.companies
+for each row execute function public.enforce_tenant_write_access('company');
+
+-- Keep atomic initialization working even when a user first confirms their
+-- email after the shared trial deadline. The resulting company is read-only.
+create or replace function public.create_company_atomic(p_company jsonb)
+returns public.companies
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare caller uuid := auth.uid(); user_email text; saved public.companies%rowtype;
+begin
+  if caller is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  perform public.assert_company_creation_allowed(caller);
+  select email into user_email from auth.users where id = caller;
+  insert into public.companies(user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,fiscal_year_start,fiscal_year_configured)
+  values(caller,user_email,coalesce(nullif(btrim(coalesce(p_company->>'name','')),''),'My Company'),nullif(btrim(coalesce(p_company->>'address','')),''),nullif(btrim(coalesce(p_company->>'pan_vat','')),''),nullif(btrim(coalesce(p_company->>'phone','')),''),coalesce((p_company->>'vat_enabled')::boolean,true),coalesce(nullif(p_company->>'inventory_valuation_method',''),'weighted_average'),coalesce(nullif(btrim(p_company->>'sales_prefix'),''),'INV-'),coalesce(nullif(btrim(p_company->>'purchase_prefix'),''),'PB-'),coalesce(nullif(btrim(p_company->>'receipt_prefix'),''),'RCPT-'),coalesce(nullif(btrim(p_company->>'payment_prefix'),''),'PAY-'),coalesce(nullif(btrim(p_company->>'sales_return_prefix'),''),'SR-'),coalesce(nullif(btrim(p_company->>'purchase_return_prefix'),''),'PR-'),coalesce(nullif(p_company->>'journal_numbering_mode',''),'auto'),true,coalesce(nullif(p_company->>'print_format',''),'A5'),nullif(btrim(coalesce(p_company->>'invoice_terms','')),''),nullif(btrim(coalesce(p_company->>'payment_qr_text','')),''),coalesce(nullif(p_company->>'fiscal_year_start','')::date,'2026-07-17'::date),coalesce((p_company->>'fiscal_year_configured')::boolean,true)) returning * into saved;
+  perform set_config('khataerp.initializing_company', saved.id::text, true);
+  insert into public.company_members(company_id,user_id,role,status,created_by) values(saved.id,caller,'Admin','active',caller)
+  on conflict(company_id,user_id) do update set role='Admin',status='active',updated_at=now();
+  perform public.ensure_default_company_accounts(saved.id);
+  perform public.set_active_company(saved.id);
+  perform set_config('khataerp.initializing_company', '', true);
+  return saved;
+end;
+$$;
+
+revoke all on function public.company_billing_status(uuid) from public, anon;
+grant execute on function public.company_billing_status(uuid) to authenticated;
+revoke all on function public.enforce_tenant_write_access(), public.protect_company_control_fields() from public, anon, authenticated;
+
+commit;
+
+
+begin;
+
+create or replace function public.delete_developer_backup_agent(p_agent_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_developer_admin() then
+    raise exception 'Developer admin access required' using errcode = '42501';
+  end if;
+  delete from public.developer_backup_agents where id = p_agent_id;
+  if not found then raise exception 'Windows backup agent not found' using errcode = 'P0002'; end if;
+end;
+$$;
+
+revoke all on function public.delete_developer_backup_agent(uuid) from public, anon;
+grant execute on function public.delete_developer_backup_agent(uuid) to authenticated;
+
+commit;
+
+-- After running this schema, set your environment variables:
+--   VITE_SUPABASE_URL      = https://your-project-id.supabase.co
+--   VITE_SUPABASE_ANON_KEY = your-anon-public-key
+-- Both are in: Supabase dashboard â†’ Settings â†’ API
+-- END SYNCED DB FILE: supabase-schema.sql
+
+-- BEGIN SYNCED DB FILE: supabase-masters-migration.sql
+-- KhataERP Masters migration
+-- Run this file once in Supabase SQL Editor for an existing project.
+
+create extension if not exists "uuid-ossp";
+
+create table if not exists account_categories (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid not null references companies(id) on delete cascade,
+  name text not null,
+  account_type text not null check (account_type in ('Asset','Liability','Equity','Income','Expense')),
+  parent_category_id uuid references account_categories(id) on delete restrict,
+  is_system boolean not null default false,
+  is_archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique(company_id, name, account_type)
+);
+
+create table if not exists item_categories (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid not null references companies(id) on delete cascade,
+  name text not null,
+  parent_category_id uuid references item_categories(id) on delete restrict,
+  is_archived boolean not null default false,
+  created_at timestamptz not null default now(),
+  unique(company_id, name)
+);
+
+create table if not exists master_change_logs (
+  id uuid primary key default uuid_generate_v4(),
+  company_id uuid not null references companies(id) on delete cascade,
+  user_id uuid references auth.users(id) on delete set null,
+  record_type text not null,
+  record_id text not null,
+  action text not null,
+  old_values jsonb not null default '{}'::jsonb,
+  new_values jsonb not null default '{}'::jsonb,
+  created_at timestamptz not null default now()
+);
+
+alter table accounts add column if not exists category_id uuid references account_categories(id) on delete restrict;
+alter table accounts add column if not exists is_archived boolean not null default false;
+alter table parties add column if not exists is_archived boolean not null default false;
+alter table items add column if not exists category_id uuid references item_categories(id) on delete restrict;
+alter table items add column if not exists sku text;
+alter table items add column if not exists barcode text;
+alter table items add column if not exists vat_applicable boolean not null default true;
+alter table items add column if not exists is_archived boolean not null default false;
+
+insert into account_categories (company_id, name, account_type, is_system)
+select company_id, "group", type, bool_or(is_system)
+from accounts
+group by company_id, "group", type
+on conflict (company_id, name, account_type) do update
+set is_system = account_categories.is_system or excluded.is_system;
+
+insert into account_categories (company_id, name, account_type, is_system)
+select id, 'Sundry Debtors', 'Asset', true from companies
+on conflict (company_id, name, account_type) do update set is_system = true;
+
+insert into account_categories (company_id, name, account_type, is_system)
+select id, 'Sundry Creditors', 'Liability', true from companies
+on conflict (company_id, name, account_type) do update set is_system = true;
+
+update accounts a
+set category_id = c.id
+from account_categories c
+where a.category_id is null
+  and c.company_id = a.company_id
+  and c.name = a."group"
+  and c.account_type = a.type;
+
+insert into item_categories (company_id, name)
+select id, 'General' from companies
+on conflict (company_id, name) do nothing;
+
+update items i
+set category_id = c.id
+from item_categories c
+where i.category_id is null
+  and c.company_id = i.company_id
+  and c.name = 'General';
+
+create index if not exists idx_account_categories_company on account_categories(company_id, account_type, name);
+create index if not exists idx_item_categories_company on item_categories(company_id, name);
+create index if not exists idx_master_logs_company on master_change_logs(company_id, created_at desc);
+
+alter table account_categories enable row level security;
+alter table item_categories enable row level security;
+alter table master_change_logs enable row level security;
+
+drop policy if exists "account_categories_own" on account_categories;
+create policy "account_categories_own" on account_categories
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+drop policy if exists "account_categories_developer_select" on account_categories;
+create policy "account_categories_developer_select" on account_categories
+  for select using (is_developer_admin());
+
+drop policy if exists "item_categories_own" on item_categories;
+create policy "item_categories_own" on item_categories
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+drop policy if exists "item_categories_developer_select" on item_categories;
+create policy "item_categories_developer_select" on item_categories
+  for select using (is_developer_admin());
+
+drop policy if exists "master_change_logs_own" on master_change_logs;
+create policy "master_change_logs_own" on master_change_logs
+  for all using (company_id = my_company_id()) with check (company_id = my_company_id());
+
+drop policy if exists "master_change_logs_developer_select" on master_change_logs;
+create policy "master_change_logs_developer_select" on master_change_logs
+  for select using (is_developer_admin());
 
 notify pgrst, 'reload schema';
 -- END SYNCED DB FILE: supabase-masters-migration.sql
@@ -3254,6 +3490,7 @@ create policy "voucher_settlements_developer_select" on voucher_settlements
   for select using (is_developer_admin());
 
 notify pgrst, 'reload schema';
+
 -- END SYNCED DB FILE: supabase-voucher-settlements-migration.sql
 
 -- BEGIN SYNCED DB FILE: supabase-cheque-management-migration.sql
@@ -3513,10 +3750,11 @@ create or replace function public.numeric_json_scale_valid(payload jsonb, numeri
 returns boolean language sql immutable set search_path = public as $$
   select not exists (
     select 1
-    from jsonb_array_elements(case when jsonb_typeof(payload)='array' then payload else jsonb_build_array(payload) end) object_value
+    from jsonb_array_elements(case when jsonb_typeof(payload) = 'array' then payload else jsonb_build_array(payload) end) object_value
     cross join unnest(numeric_keys) key_name
-    where object_value ? key_name and nullif(object_value->>key_name,'') is not null
-      and (object_value->>key_name)::numeric <> round((object_value->>key_name)::numeric,6)
+    where object_value ? key_name
+      and nullif(object_value->>key_name, '') is not null
+      and (object_value->>key_name)::numeric <> round((object_value->>key_name)::numeric, 6)
   );
 $$;
 
@@ -7222,6 +7460,176 @@ commit;
 notify pgrst, 'reload schema';
 -- END SYNCED DB FILE: supabase-master-duplicate-name-guards-migration.sql
 
+-- BEGIN SYNCED DB FILE: supabase-company-creation-category-seed-fix.sql
+-- Apply after supabase-master-duplicate-name-guards-migration.sql.
+-- Makes system account-group repair idempotent even when the case-insensitive
+-- duplicate-name trigger is installed. PostgreSQL BEFORE INSERT triggers run
+-- before ON CONFLICT resolution, so inserts must exclude existing names.
+begin;
+
+create or replace function public.ensure_system_account_groups(target_company_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, root.name, root.account_type, null, true, false
+  from (values
+    ('Assets', 'Asset'),
+    ('Liabilities', 'Liability'),
+    ('Equity', 'Equity'),
+    ('Incomes', 'Income'),
+    ('Expenses', 'Expense')
+  ) root(name, account_type)
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = root.account_type
+      and lower(btrim(existing.name)) = lower(btrim(root.name))
+  )
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = null, is_system = true, is_archived = false;
+
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, child.name, child.account_type, parent.id, true, false
+  from (values
+    ('Capital Account', 'Equity', 'Equity'),
+    ('Current Assets', 'Asset', 'Assets'),
+    ('Fixed Assets', 'Asset', 'Assets'),
+    ('Investments', 'Asset', 'Assets'),
+    ('Current Liabilities', 'Liability', 'Liabilities'),
+    ('Loans (Liability)', 'Liability', 'Liabilities'),
+    ('Suspense A/c', 'Liability', 'Liabilities'),
+    ('Direct Expenses', 'Expense', 'Expenses'),
+    ('Indirect Expenses', 'Expense', 'Expenses'),
+    ('Purchase Accounts', 'Expense', 'Expenses'),
+    ('Direct Incomes', 'Income', 'Incomes'),
+    ('Indirect Incomes', 'Income', 'Incomes'),
+    ('Sales Accounts', 'Income', 'Incomes')
+  ) child(name, account_type, parent_name)
+  join public.account_categories parent
+    on parent.company_id = target_company_id
+   and parent.name = child.parent_name
+   and parent.account_type = child.account_type
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = child.account_type
+      and lower(btrim(existing.name)) = lower(btrim(child.name))
+  )
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
+
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, child.name, child.account_type, parent.id, true, false
+  from (values
+    ('Reserves & Surplus', 'Equity', 'Capital Account'),
+    ('Bank Accounts', 'Asset', 'Current Assets'),
+    ('Cash-in-Hand', 'Asset', 'Current Assets'),
+    ('Deposits (Asset)', 'Asset', 'Current Assets'),
+    ('Loans & Advances (Asset)', 'Asset', 'Current Assets'),
+    ('Sundry Debtors', 'Asset', 'Current Assets'),
+    ('Duties & Taxes', 'Liability', 'Current Liabilities'),
+    ('Provisions', 'Liability', 'Current Liabilities'),
+    ('Sundry Creditors', 'Liability', 'Current Liabilities'),
+    ('Bank OD A/c', 'Liability', 'Loans (Liability)'),
+    ('Secured Loans', 'Liability', 'Loans (Liability)'),
+    ('Unsecured Loans', 'Liability', 'Loans (Liability)')
+  ) child(name, account_type, parent_name)
+  join public.account_categories parent
+    on parent.company_id = target_company_id
+   and parent.name = child.parent_name
+   and parent.account_type = child.account_type
+  where not exists (
+    select 1 from public.account_categories existing
+    where existing.company_id = target_company_id
+      and existing.account_type = child.account_type
+      and lower(btrim(existing.name)) = lower(btrim(child.name))
+  )
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
+
+  insert into public.account_categories (company_id, name, account_type, parent_category_id, is_system, is_archived)
+  select target_company_id, 'Employees / Staffs', 'Asset', parent.id, true, false
+  from public.account_categories parent
+  where parent.company_id = target_company_id
+    and parent.name = 'Loans & Advances (Asset)'
+    and parent.account_type = 'Asset'
+    and not exists (
+      select 1 from public.account_categories existing
+      where existing.company_id = target_company_id
+        and existing.account_type = 'Asset'
+        and lower(btrim(existing.name)) = lower('Employees / Staffs')
+    )
+  on conflict (company_id, name, account_type) do update
+  set parent_category_id = excluded.parent_category_id, is_system = true, is_archived = false;
+end;
+$$;
+
+create or replace function public.ensure_default_company_accounts(target_company_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if to_regprocedure('public.ensure_system_account_groups(uuid)') is not null then
+    perform public.ensure_system_account_groups(target_company_id);
+  end if;
+  if to_regprocedure('public.ensure_retained_earnings_ledger(uuid)') is not null then
+    perform public.ensure_retained_earnings_ledger(target_company_id);
+  end if;
+
+  insert into public.accounts(id, company_id, name, type, "group", category_id, is_system, is_party, opening_balance)
+  select target_company_id::text || ':' || seed.account_key, target_company_id, seed.account_name, seed.account_type, seed.group_name, category.id, seed.is_system, false, 0
+  from (values
+    ('cash','Cash','Asset','Cash-in-Hand',true),
+    ('bank','Bank Account','Asset','Bank Accounts',true),
+    ('inventory','Stock-in-Hand','Asset','Current Assets',true),
+    ('vat_payable','VAT Payable (Output)','Liability','Duties & Taxes',true),
+    ('vat_receivable','VAT Receivable (Input)','Liability','Duties & Taxes',true),
+    ('sales','Sales Account','Income','Sales Accounts',true),
+    ('purchase','Purchase Account','Expense','Purchase Accounts',true),
+    ('sales_return','Sales Return Account','Income','Sales Accounts',true),
+    ('purchase_return','Purchase Return Account','Expense','Purchase Accounts',true),
+    ('capital','Owner''s Capital','Equity','Capital Account',true),
+    ('retained_earnings','Retained Earnings','Equity','Reserves & Surplus',true),
+    ('discount_allowed','Discount Allowed','Expense','Indirect Expenses',false),
+    ('rent','Rent Expense','Expense','Indirect Expenses',false),
+    ('salary','Salary Expense','Expense','Indirect Expenses',false),
+    ('electricity','Electricity Expense','Expense','Indirect Expenses',false)
+  ) seed(account_key, account_name, account_type, group_name, is_system)
+  left join public.account_categories category
+    on category.company_id = target_company_id
+   and category.name = seed.group_name
+   and category.account_type = seed.account_type
+  where not exists (
+    select 1 from public.accounts existing
+    where existing.company_id = target_company_id
+      and (
+        existing.id = target_company_id::text || ':' || seed.account_key
+        or lower(btrim(existing.name)) = lower(btrim(seed.account_name))
+      )
+  )
+  on conflict (id) do nothing;
+
+  insert into public.item_categories(company_id, name, is_archived)
+  select target_company_id, 'General', false
+  where not exists (
+    select 1 from public.item_categories existing
+    where existing.company_id = target_company_id
+      and lower(btrim(existing.name)) = lower('General')
+  )
+  on conflict (company_id, name) do nothing;
+end;
+$$;
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED DB FILE: supabase-company-creation-category-seed-fix.sql
+
 -- BEGIN SYNCED DB FILE: supabase-voucher-chronology-validation-migration.sql
 -- Enforce voucher date chronology only for Sales invoices when enabled in
 -- company settings. Draft vouchers do not reserve numbers and are ignored.
@@ -7900,6 +8308,660 @@ end;
 $identity_optional_tables$;
 -- END SYNCED DB FILE: supabase-identity-validation-migration.sql
 
+-- BEGIN SYNCED DB FILE: supabase-developer-full-backup-migration.sql
+begin;
+
+create table if not exists public.developer_backup_runs (
+  id uuid primary key default gen_random_uuid(),
+  started_at timestamptz not null default now(),
+  completed_at timestamptz,
+  initiated_by uuid not null references auth.users(id),
+  total_companies integer not null check (total_companies >= 0),
+  successful_companies integer not null default 0 check (successful_companies >= 0),
+  failed_companies integer not null default 0 check (failed_companies >= 0),
+  status text not null default 'running' check (status in ('running','successful','partial','failed'))
+);
+
+create table if not exists public.developer_company_backup_status (
+  company_id uuid primary key references public.companies(id) on delete cascade,
+  last_exported_at timestamptz,
+  last_attempted_at timestamptz not null default now(),
+  last_export_status text not null check (last_export_status in ('successful','failed')),
+  last_exported_by uuid references auth.users(id),
+  last_error text
+);
+
+alter table public.developer_backup_runs enable row level security;
+alter table public.developer_company_backup_status enable row level security;
+
+drop policy if exists developer_backup_runs_select on public.developer_backup_runs;
+create policy developer_backup_runs_select on public.developer_backup_runs for select using ((select public.is_developer_admin()));
+drop policy if exists developer_company_backup_status_select on public.developer_company_backup_status;
+create policy developer_company_backup_status_select on public.developer_company_backup_status for select using ((select public.is_developer_admin()));
+
+create or replace function public.developer_user_company_licenses()
+returns jsonb language sql stable security definer set search_path = public
+as $$
+  select case when public.is_developer_admin() then coalesce(jsonb_agg(row_data order by lower(coalesce(row_data->>'display_name', row_data->>'email', ''))), '[]'::jsonb) else '[]'::jsonb end
+  from (
+    select jsonb_build_object(
+      'user_id', user_record.id,
+      'email', user_record.email,
+      'display_name', coalesce(nullif(btrim(user_record.raw_user_meta_data->>'full_name'), ''), nullif(btrim(user_record.raw_user_meta_data->>'name'), '')),
+      'license', public.company_creation_license(user_record.id),
+      'companies', coalesce((select jsonb_agg(jsonb_build_object('id', company.id, 'name', company.name, 'created_at', company.created_at) order by company.created_at) from public.companies company where company.user_id = user_record.id), '[]'::jsonb)
+    ) row_data
+    from auth.users user_record
+    where exists (select 1 from public.companies company where company.user_id = user_record.id)
+       or exists (select 1 from public.user_company_limits limit_row where limit_row.user_id = user_record.id)
+  ) rows;
+$$;
+
+create or replace function public.developer_export_company_backup(target_company uuid)
+returns jsonb language plpgsql stable security definer set search_path = public
+as $$
+declare result jsonb;
+begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode = '42501'; end if;
+  if not exists (select 1 from public.companies where id = target_company) then raise exception 'Company not found' using errcode = 'P0002'; end if;
+  select jsonb_build_object(
+    'company', to_jsonb(c) - array['developer_notes','owner_email','user_id'],
+    'accountCategories', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at, x.id) from public.account_categories x where x.company_id=target_company),'[]'::jsonb),
+    'itemCategories', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at, x.id) from public.item_categories x where x.company_id=target_company),'[]'::jsonb),
+    'accounts', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at, x.id) from public.accounts x where x.company_id=target_company),'[]'::jsonb),
+    'parties', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at, x.id) from public.parties x where x.company_id=target_company),'[]'::jsonb),
+    'items', coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at, x.id) from public.items x where x.company_id=target_company),'[]'::jsonb),
+    'vouchers', coalesce((select jsonb_agg(
+      (to_jsonb(v)-array['created_by','updated_by','completed_by']) || jsonb_build_object(
+        'lines',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.voucher_lines l where l.voucher_id=v.id),'[]'::jsonb),
+        'stock_lines',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.stock_lines l where l.voucher_id=v.id),'[]'::jsonb),
+        'invoice_items',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.invoice_items l where l.voucher_id=v.id),'[]'::jsonb),
+        'settlements',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.voucher_settlements l where l.settlement_voucher_id=v.id),'[]'::jsonb)
+      ) order by v.date_bs_key,v.seq,v.id) from public.vouchers v where v.company_id=target_company),'[]'::jsonb),
+    'chequeBanks',coalesce((select jsonb_agg(to_jsonb(x)-array['created_by','updated_by'] order by x.created_at,x.id) from public.cheque_banks x where x.company_id=target_company),'[]'::jsonb),
+    'cheques',coalesce((select jsonb_agg(to_jsonb(x)-array['created_by','updated_by'] order by x.created_at,x.id) from public.cheques x where x.company_id=target_company),'[]'::jsonb),
+    'chequeEvents',coalesce((select jsonb_agg(to_jsonb(x)-array['actor_id'] order by x.created_at,x.id) from public.cheque_events x where x.company_id=target_company),'[]'::jsonb),
+    'companyModules',coalesce((select jsonb_agg((to_jsonb(x)-array['enabled_by','internal_notes']) || jsonb_build_object('module_key',m.key) order by x.created_at,x.id) from public.company_modules x join public.modules m on m.id=x.module_id where x.company_id=target_company),'[]'::jsonb),
+    'masterChangeLogs',coalesce((select jsonb_agg(to_jsonb(x)-array['user_id'] order by x.created_at,x.id) from public.master_change_logs x where x.company_id=target_company),'[]'::jsonb),
+    'appEvents',coalesce((select jsonb_agg(to_jsonb(x)-array['user_id'] order by x.created_at,x.id) from public.app_events x where x.company_id=target_company),'[]'::jsonb)
+  ) into result from public.companies c where c.id=target_company;
+  return result;
+end;
+$$;
+
+create or replace function public.start_developer_backup_run(p_total_companies integer)
+returns public.developer_backup_runs language plpgsql security definer set search_path=public
+as $$ declare saved public.developer_backup_runs; begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  insert into public.developer_backup_runs(initiated_by,total_companies) values(auth.uid(),greatest(coalesce(p_total_companies,0),0)) returning * into saved; return saved;
+end $$;
+
+create or replace function public.record_developer_company_backup_result(p_run_id uuid,p_company_id uuid,p_successful boolean,p_error text default null)
+returns public.developer_company_backup_status language plpgsql security definer set search_path=public
+as $$ declare saved public.developer_company_backup_status; begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  if not exists(select 1 from public.developer_backup_runs where id=p_run_id and status='running') then raise exception 'Backup run is not active'; end if;
+  insert into public.developer_company_backup_status(company_id,last_exported_at,last_attempted_at,last_export_status,last_exported_by,last_error)
+  values(p_company_id,case when p_successful then now() end,now(),case when p_successful then 'successful' else 'failed' end,case when p_successful then auth.uid() end,case when p_successful then null else left(coalesce(p_error,'Export failed'),1000) end)
+  on conflict(company_id) do update set last_attempted_at=excluded.last_attempted_at,last_export_status=excluded.last_export_status,last_exported_at=case when p_successful then excluded.last_exported_at else developer_company_backup_status.last_exported_at end,last_exported_by=case when p_successful then excluded.last_exported_by else developer_company_backup_status.last_exported_by end,last_error=excluded.last_error returning * into saved;
+  update public.developer_backup_runs set successful_companies=successful_companies+case when p_successful then 1 else 0 end,failed_companies=failed_companies+case when p_successful then 0 else 1 end where id=p_run_id;
+  return saved;
+end $$;
+
+create or replace function public.complete_developer_backup_run(p_run_id uuid)
+returns public.developer_backup_runs language plpgsql security definer set search_path=public
+as $$ declare saved public.developer_backup_runs; begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  update public.developer_backup_runs set completed_at=now(),status=case when failed_companies=0 then 'successful' when successful_companies=0 then 'failed' else 'partial' end where id=p_run_id and status='running' returning * into saved;
+  if saved.id is null then raise exception 'Backup run is not active'; end if; return saved;
+end $$;
+
+revoke all on table public.developer_backup_runs,public.developer_company_backup_status from public,anon,authenticated;
+grant select on table public.developer_backup_runs,public.developer_company_backup_status to authenticated;
+revoke all on function public.developer_export_company_backup(uuid),public.start_developer_backup_run(integer),public.record_developer_company_backup_result(uuid,uuid,boolean,text),public.complete_developer_backup_run(uuid) from public,anon;
+grant execute on function public.developer_export_company_backup(uuid),public.start_developer_backup_run(integer),public.record_developer_company_backup_result(uuid,uuid,boolean,text),public.complete_developer_backup_run(uuid) to authenticated;
+
+commit;
+-- END SYNCED DB FILE: supabase-developer-full-backup-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-automated-backup-agent-migration.sql
+begin;
+
+create extension if not exists pgcrypto with schema extensions;
+create extension if not exists pg_net with schema extensions;
+create extension if not exists pg_cron with schema pg_catalog;
+
+alter table public.developer_backup_runs alter column initiated_by drop not null;
+alter table public.developer_backup_runs add column if not exists initiator_type text not null default 'manual'
+  check (initiator_type in ('manual','automated','agent_retry'));
+
+create table if not exists public.developer_backup_agents (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (length(btrim(name)) between 1 and 100),
+  token_hash text not null,
+  created_by uuid not null references auth.users(id),
+  created_at timestamptz not null default now(),
+  last_seen_at timestamptz,
+  revoked_at timestamptz
+);
+alter table public.developer_backup_agents enable row level security;
+drop policy if exists developer_backup_agents_select on public.developer_backup_agents;
+create policy developer_backup_agents_select on public.developer_backup_agents for select using ((select public.is_developer_admin()));
+
+create or replace function public.create_developer_backup_agent(p_name text default 'Windows Backup Agent')
+returns jsonb language plpgsql security definer set search_path=public,extensions
+as $$ declare saved public.developer_backup_agents; secret text; begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  secret:=encode(gen_random_bytes(32),'hex');
+  insert into public.developer_backup_agents(name,token_hash,created_by) values(left(btrim(coalesce(nullif(p_name,''),'Windows Backup Agent')),100),encode(digest(secret,'sha256'),'hex'),auth.uid()) returning * into saved;
+  return jsonb_build_object('id',saved.id,'name',saved.name,'token',saved.id::text||'.'||secret,'created_at',saved.created_at);
+end $$;
+
+create or replace function public.revoke_developer_backup_agent(p_agent_id uuid)
+returns void language plpgsql security definer set search_path=public
+as $$ begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  update public.developer_backup_agents set revoked_at=now() where id=p_agent_id;
+end $$;
+
+create or replace function public.list_developer_backup_agents()
+returns table(id uuid,name text,created_at timestamptz,last_seen_at timestamptz,revoked_at timestamptz)
+language plpgsql stable security definer set search_path=public
+as $$ begin
+  if not public.is_developer_admin() then raise exception 'Developer admin access required' using errcode='42501'; end if;
+  return query select a.id,a.name,a.created_at,a.last_seen_at,a.revoked_at from public.developer_backup_agents a order by a.created_at desc;
+end $$;
+
+create or replace function public.system_export_company_backup(target_company uuid)
+returns jsonb language plpgsql stable security definer set search_path=public
+as $$ declare result jsonb; begin
+  if current_user <> 'service_role' and current_setting('request.jwt.claim.role',true) <> 'service_role' then raise exception 'Server backup access required' using errcode='42501'; end if;
+  if not exists(select 1 from public.companies where id=target_company) then raise exception 'Company not found' using errcode='P0002'; end if;
+  select jsonb_build_object(
+    'company',to_jsonb(c)-array['developer_notes','owner_email','user_id'],
+    'accountCategories',coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at,x.id) from public.account_categories x where x.company_id=target_company),'[]'::jsonb),
+    'itemCategories',coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at,x.id) from public.item_categories x where x.company_id=target_company),'[]'::jsonb),
+    'accounts',coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at,x.id) from public.accounts x where x.company_id=target_company),'[]'::jsonb),
+    'parties',coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at,x.id) from public.parties x where x.company_id=target_company),'[]'::jsonb),
+    'items',coalesce((select jsonb_agg(to_jsonb(x) order by x.created_at,x.id) from public.items x where x.company_id=target_company),'[]'::jsonb),
+    'vouchers',coalesce((select jsonb_agg((to_jsonb(v)-array['created_by','updated_by','completed_by'])||jsonb_build_object(
+      'lines',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.voucher_lines l where l.voucher_id=v.id),'[]'::jsonb),
+      'stock_lines',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.stock_lines l where l.voucher_id=v.id),'[]'::jsonb),
+      'invoice_items',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.invoice_items l where l.voucher_id=v.id),'[]'::jsonb),
+      'settlements',coalesce((select jsonb_agg(to_jsonb(l) order by l.id) from public.voucher_settlements l where l.settlement_voucher_id=v.id),'[]'::jsonb)
+    ) order by v.date_bs_key,v.seq,v.id) from public.vouchers v where v.company_id=target_company),'[]'::jsonb),
+    'chequeBanks',coalesce((select jsonb_agg(to_jsonb(x)-array['created_by','updated_by'] order by x.created_at,x.id) from public.cheque_banks x where x.company_id=target_company),'[]'::jsonb),
+    'cheques',coalesce((select jsonb_agg(to_jsonb(x)-array['created_by','updated_by'] order by x.created_at,x.id) from public.cheques x where x.company_id=target_company),'[]'::jsonb),
+    'chequeEvents',coalesce((select jsonb_agg(to_jsonb(x)-array['actor_id'] order by x.created_at,x.id) from public.cheque_events x where x.company_id=target_company),'[]'::jsonb),
+    'companyModules',coalesce((select jsonb_agg((to_jsonb(x)-array['enabled_by','internal_notes'])||jsonb_build_object('module_key',m.key) order by x.created_at,x.id) from public.company_modules x join public.modules m on m.id=x.module_id where x.company_id=target_company),'[]'::jsonb),
+    'masterChangeLogs',coalesce((select jsonb_agg(to_jsonb(x)-array['user_id'] order by x.created_at,x.id) from public.master_change_logs x where x.company_id=target_company),'[]'::jsonb),
+    'appEvents',coalesce((select jsonb_agg(to_jsonb(x)-array['user_id'] order by x.created_at,x.id) from public.app_events x where x.company_id=target_company),'[]'::jsonb)
+  ) into result from public.companies c where c.id=target_company;
+  return result;
+end $$;
+
+insert into storage.buckets(id,name,public,file_size_limit,allowed_mime_types)
+values('developer-company-backups','developer-company-backups',false,52428800,array['application/json'])
+on conflict(id) do update set public=false,file_size_limit=excluded.file_size_limit,allowed_mime_types=excluded.allowed_mime_types;
+
+do $$ begin
+  if exists(select 1 from cron.job where jobname='khataerp-automated-company-backup') then perform cron.unschedule('khataerp-automated-company-backup'); end if;
+  perform cron.schedule('khataerp-automated-company-backup','0 */2 * * *',$job$
+    select net.http_post(
+      url:=(select decrypted_secret from vault.decrypted_secrets where name='project_url')||'/functions/v1/developer-backup',
+      headers:=jsonb_build_object('Content-Type','application/json','x-automation-secret',(select decrypted_secret from vault.decrypted_secrets where name='backup_automation_secret')),
+      body:='{"action":"run"}'::jsonb,
+      timeout_milliseconds:=600000
+    );
+  $job$);
+end $$;
+
+revoke all on table public.developer_backup_agents from public,anon,authenticated;
+revoke all on function public.system_export_company_backup(uuid) from public,anon,authenticated;
+grant execute on function public.system_export_company_backup(uuid) to service_role;
+revoke all on function public.create_developer_backup_agent(text),public.revoke_developer_backup_agent(uuid),public.list_developer_backup_agents() from public,anon;
+grant execute on function public.create_developer_backup_agent(text),public.revoke_developer_backup_agent(uuid),public.list_developer_backup_agents() to authenticated;
+
+commit;
+-- END SYNCED DB FILE: supabase-automated-backup-agent-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-company-billing-trial-migration.sql
+-- One trial per user, company paid terms, and authoritative read-only enforcement.
+begin;
+
+alter table public.companies add column if not exists plan_expires_at timestamptz;
+
+-- Preserve the effective access of legacy rows. The old date was inclusive in
+-- Nepal time, so its equivalent timestamp is midnight immediately afterward.
+update public.companies
+set plan_expires_at = case
+  when trial_ends_at is not null then ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
+  else created_at + interval '14 days'
+end
+where plan_status = 'trial' and plan_expires_at is null;
+
+update public.companies
+set plan_expires_at = ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
+where plan_status = 'paid' and plan_expires_at is null and trial_ends_at is not null;
+
+create or replace function public.company_billing_status(target_company uuid)
+returns jsonb
+language plpgsql
+stable
+security definer
+set search_path = public
+as $$
+declare
+  company_row public.companies%rowtype;
+  effective_status text;
+  remaining_days integer;
+  elapsed_days integer;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_developer_admin() and not public.is_company_admin(target_company) then
+    raise exception 'Company access denied' using errcode = '42501';
+  end if;
+  select * into company_row from public.companies where id = target_company;
+  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
+
+  effective_status := case
+    when company_row.suspended then 'suspended'
+    when company_row.plan_status = 'expired' then 'expired'
+    when company_row.plan_status in ('trial','paid')
+      and company_row.plan_expires_at is not null
+      and company_row.plan_expires_at <= clock_timestamp() then 'expired'
+    else company_row.plan_status
+  end;
+  if company_row.plan_expires_at is not null then
+    remaining_days := greatest(ceil(extract(epoch from (company_row.plan_expires_at - clock_timestamp())) / 86400.0)::integer, 0);
+    elapsed_days := greatest(ceil(extract(epoch from (clock_timestamp() - company_row.plan_expires_at)) / 86400.0)::integer, 0);
+  end if;
+  return jsonb_build_object(
+    'configured_status', company_row.plan_status,
+    'effective_status', effective_status,
+    'expires_at', company_row.plan_expires_at,
+    'remaining_days', remaining_days,
+    'days_since_expiry', elapsed_days,
+    'can_write', effective_status not in ('expired','suspended')
+  );
+end;
+$$;
+
+create or replace function public.protect_company_control_fields()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if auth.uid() is null or public.is_developer_admin() then return new; end if;
+  if nullif(btrim(coalesce(new.logo_url, '')), '') is not null
+    and (length(new.logo_url) > 2048 or new.logo_url !~ '^https://') then
+    raise exception 'Company logo must use an HTTPS URL' using errcode = '22023';
+  end if;
+  if new.owner_email is distinct from old.owner_email
+    and new.owner_email is distinct from nullif(auth.jwt()->>'email', '') then
+    raise exception 'Company owner email must match the authenticated user' using errcode = '42501';
+  end if;
+  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
+    or new.plan_status is distinct from old.plan_status
+    or new.trial_ends_at is distinct from old.trial_ends_at
+    or new.plan_expires_at is distinct from old.plan_expires_at
+    or new.support_status is distinct from old.support_status
+    or new.developer_notes is distinct from old.developer_notes
+    or new.suspended is distinct from old.suspended then
+    raise exception 'Developer-controlled company fields cannot be changed' using errcode = '42501';
+  end if;
+  return new;
+end;
+$$;
+
+create or replace function public.enforce_tenant_write_access()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target_company uuid;
+  company_row public.companies%rowtype;
+  signup_at timestamptz;
+  initializing_company text;
+begin
+  if auth.uid() is null or public.is_developer_admin() then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+
+  if tg_argv[0] = 'company' then
+    target_company := case when tg_op = 'DELETE' then old.id else new.id end;
+    if tg_op = 'INSERT' then
+      if new.user_id is distinct from auth.uid() or new.plan_status is distinct from 'trial'
+        or new.trial_ends_at is not null or new.plan_expires_at is not null
+        or new.support_status is distinct from 'normal' or new.developer_notes is not null
+        or coalesce(new.suspended, false) then
+        raise exception 'New company security fields are invalid' using errcode = '42501';
+      end if;
+      select created_at into signup_at from auth.users where id = auth.uid();
+      new.plan_expires_at := signup_at + interval '14 days';
+      new.trial_ends_at := (new.plan_expires_at at time zone 'Asia/Kathmandu')::date;
+      return new;
+    end if;
+  elsif tg_argv[0] = 'voucher_child' then
+    select voucher.company_id into target_company from public.vouchers voucher
+    where voucher.id = case when tg_op = 'DELETE' then old.voucher_id else new.voucher_id end;
+  else
+    target_company := case when tg_op = 'DELETE' then old.company_id else new.company_id end;
+  end if;
+
+  if target_company is null and tg_op = 'DELETE' then return old; end if;
+  select * into company_row from public.companies where id = target_company;
+  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
+  initializing_company := current_setting('khataerp.initializing_company', true);
+  if initializing_company = target_company::text then
+    return case when tg_op = 'DELETE' then old else new end;
+  end if;
+  if not public.is_company_admin(target_company) then
+    raise exception 'Company write access denied' using errcode = '42501';
+  end if;
+
+  if (company_row.suspended or company_row.plan_status = 'expired'
+      or (company_row.plan_status in ('trial','paid') and company_row.plan_expires_at is not null
+          and company_row.plan_expires_at <= clock_timestamp()))
+    and not (tg_argv[0] = 'company' and tg_op = 'DELETE') then
+    raise exception 'Company plan expired. This company is read-only until renewed.' using errcode = '42501';
+  end if;
+  return case when tg_op = 'DELETE' then old else new end;
+end;
+$$;
+
+drop trigger if exists company_control_fields_guard on public.companies;
+create trigger company_control_fields_guard before update on public.companies
+for each row execute function public.protect_company_control_fields();
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array[
+    'accounts','account_categories','parties','items','item_categories','master_change_logs',
+    'vouchers','voucher_settlements','app_events','cheque_banks','cheques','cheque_events','company_modules',
+    'company_members','company_user_permissions'
+  ] loop
+    if to_regclass('public.' || table_name) is not null then
+      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
+      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'direct');
+    end if;
+  end loop;
+  foreach table_name in array array['voucher_lines','stock_lines','invoice_items'] loop
+    if to_regclass('public.' || table_name) is not null then
+      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
+      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'voucher_child');
+    end if;
+  end loop;
+end $$;
+
+drop trigger if exists tenant_write_access_guard on public.companies;
+create trigger tenant_write_access_guard before insert or update or delete on public.companies
+for each row execute function public.enforce_tenant_write_access('company');
+
+-- Keep atomic initialization working even when a user first confirms their
+-- email after the shared trial deadline. The resulting company is read-only.
+create or replace function public.create_company_atomic(p_company jsonb)
+returns public.companies
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare caller uuid := auth.uid(); user_email text; saved public.companies%rowtype;
+begin
+  if caller is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  perform public.assert_company_creation_allowed(caller);
+  select email into user_email from auth.users where id = caller;
+  insert into public.companies(user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,fiscal_year_start,fiscal_year_configured)
+  values(caller,user_email,coalesce(nullif(btrim(coalesce(p_company->>'name','')),''),'My Company'),nullif(btrim(coalesce(p_company->>'address','')),''),nullif(btrim(coalesce(p_company->>'pan_vat','')),''),nullif(btrim(coalesce(p_company->>'phone','')),''),coalesce((p_company->>'vat_enabled')::boolean,true),coalesce(nullif(p_company->>'inventory_valuation_method',''),'weighted_average'),coalesce(nullif(btrim(p_company->>'sales_prefix'),''),'INV-'),coalesce(nullif(btrim(p_company->>'purchase_prefix'),''),'PB-'),coalesce(nullif(btrim(p_company->>'receipt_prefix'),''),'RCPT-'),coalesce(nullif(btrim(p_company->>'payment_prefix'),''),'PAY-'),coalesce(nullif(btrim(p_company->>'sales_return_prefix'),''),'SR-'),coalesce(nullif(btrim(p_company->>'purchase_return_prefix'),''),'PR-'),coalesce(nullif(p_company->>'journal_numbering_mode',''),'auto'),true,coalesce(nullif(p_company->>'print_format',''),'A5'),nullif(btrim(coalesce(p_company->>'invoice_terms','')),''),nullif(btrim(coalesce(p_company->>'payment_qr_text','')),''),coalesce(nullif(p_company->>'fiscal_year_start','')::date,'2026-07-17'::date),coalesce((p_company->>'fiscal_year_configured')::boolean,true)) returning * into saved;
+  perform set_config('khataerp.initializing_company', saved.id::text, true);
+  insert into public.company_members(company_id,user_id,role,status,created_by) values(saved.id,caller,'Admin','active',caller)
+  on conflict(company_id,user_id) do update set role='Admin',status='active',updated_at=now();
+  perform public.ensure_default_company_accounts(saved.id);
+  perform public.set_active_company(saved.id);
+  perform set_config('khataerp.initializing_company', '', true);
+  return saved;
+end;
+$$;
+
+revoke all on function public.company_billing_status(uuid) from public, anon;
+grant execute on function public.company_billing_status(uuid) to authenticated;
+revoke all on function public.enforce_tenant_write_access(), public.protect_company_control_fields() from public, anon, authenticated;
+
+commit;
+-- END SYNCED DB FILE: supabase-company-billing-trial-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-delete-backup-agent-migration.sql
+begin;
+
+create or replace function public.delete_developer_backup_agent(p_agent_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  if not public.is_developer_admin() then
+    raise exception 'Developer admin access required' using errcode = '42501';
+  end if;
+  delete from public.developer_backup_agents where id = p_agent_id;
+  if not found then raise exception 'Windows backup agent not found' using errcode = 'P0002'; end if;
+end;
+$$;
+
+revoke all on function public.delete_developer_backup_agent(uuid) from public, anon;
+grant execute on function public.delete_developer_backup_agent(uuid) to authenticated;
+
+commit;
+-- END SYNCED DB FILE: supabase-delete-backup-agent-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-six-decimal-accounting-precision-migration.sql
+-- Preserve six-decimal accounting and inventory precision end-to-end.
+-- Apply after all existing KhataERP migrations. Safe to run repeatedly.
+begin;
+
+drop table if exists pg_temp.six_decimal_trigger_restore;
+create temporary table six_decimal_trigger_restore (
+  trigger_name text primary key,
+  definition text not null
+);
+
+insert into six_decimal_trigger_restore(trigger_name, definition)
+select trigger.tgname, pg_get_triggerdef(trigger.oid, true)
+from pg_trigger trigger
+where trigger.tgrelid = 'public.vouchers'::regclass
+  and not trigger.tgisinternal
+  and trigger.tgname in (
+    'vouchers_sync_contra_metadata',
+    'vouchers_validate_contra',
+    'vouchers_validate_simple_entry'
+  );
+
+drop trigger if exists vouchers_sync_contra_metadata on public.vouchers;
+drop trigger if exists vouchers_validate_contra on public.vouchers;
+drop trigger if exists vouchers_validate_simple_entry on public.vouchers;
+
+do $precision$
+declare
+  target record;
+begin
+  for target in
+    select * from (values
+      ('accounts','opening_balance'),
+      ('items','alternate_conversion'), ('items','sell_rate'),
+      ('items','opening_qty'), ('items','opening_rate'), ('items','reorder_level'),
+      ('vouchers','contra_charge_amount'), ('vouchers','subtotal'),
+      ('vouchers','discount'), ('vouchers','vat_amount'), ('vouchers','total'),
+      ('voucher_lines','debit'), ('voucher_lines','credit'),
+      ('stock_lines','qty'), ('stock_lines','rate'),
+      ('invoice_items','qty'), ('invoice_items','rate'),
+      ('invoice_items','discount_amount'), ('invoice_items','taxable_amount'),
+      ('invoice_items','vat_amount'), ('invoice_items','cost_rate'),
+      ('invoice_items','conversion_factor'), ('invoice_items','base_qty'),
+      ('voucher_settlements','amount'),
+      ('cheques','amount'),
+      ('cheque_subscription_plans','default_price'),
+      ('company_cheque_subscriptions','price')
+    ) as columns_to_widen(table_name, column_name)
+  loop
+    if exists (
+      select 1 from information_schema.columns column_info
+      where column_info.table_schema = 'public'
+        and column_info.table_name = target.table_name
+        and column_info.column_name = target.column_name
+    ) then
+      execute format(
+        'alter table public.%I alter column %I type numeric(18,6) using %I::numeric(18,6)',
+        target.table_name, target.column_name, target.column_name
+      );
+    end if;
+  end loop;
+end;
+$precision$;
+
+do $restore_precision_triggers$
+declare saved_trigger record;
+begin
+  for saved_trigger in select definition from six_decimal_trigger_restore order by trigger_name loop
+    execute saved_trigger.definition;
+  end loop;
+end;
+$restore_precision_triggers$;
+drop table pg_temp.six_decimal_trigger_restore;
+
+alter table public.invoice_items add column if not exists amount numeric(18,6);
+alter table public.invoice_items disable trigger user;
+update public.invoice_items
+set amount = round(qty * rate, 6)
+where amount is null;
+alter table public.invoice_items alter column amount set not null;
+alter table public.invoice_items enable trigger user;
+alter table public.invoice_items drop constraint if exists invoice_items_amount_nonnegative;
+
+create or replace function public.numeric_json_scale_valid(payload jsonb, numeric_keys text[])
+returns boolean language sql immutable set search_path = public as $$
+  select not exists (
+    select 1
+    from jsonb_array_elements(case when jsonb_typeof(payload) = 'array' then payload else jsonb_build_array(payload) end) object_value
+    cross join unnest(numeric_keys) key_name
+    where object_value ? key_name and nullif(object_value->>key_name, '') is not null
+      and (object_value->>key_name)::numeric <> round((object_value->>key_name)::numeric, 6)
+  );
+$$;
+
+-- Update the existing integrity function without discarding its security,
+-- company ownership, return, stock, and cheque invariants.
+do $rewrite_integrity$
+declare
+  function_sql text;
+begin
+  if to_regprocedure('public.validate_voucher_financial_integrity()') is null then
+    raise exception 'validate_voucher_financial_integrity() must exist before applying precision migration';
+  end if;
+
+  select pg_get_functiondef('public.validate_voucher_financial_integrity()'::regprocedure)
+    into function_sql;
+  function_sql := replace(function_sql,
+    'coalesce(sum(round(item.qty * item.rate, 2)), 0)',
+    'coalesce(sum(item.amount), 0)');
+  function_sql := replace(function_sql,
+    'coalesce(sum(coalesce(item.taxable_amount, round(item.qty * item.rate, 2))), 0)',
+    'coalesce(sum(coalesce(item.taxable_amount, item.amount)), 0)');
+  function_sql := replace(function_sql, ', 2)', ', 6)');
+  function_sql := replace(function_sql, '> 0.01', '> 0.000001');
+  function_sql := replace(function_sql, '> greatest(0.02, item_count * 0.01)', '> greatest(0.000002, item_count * 0.000001)');
+  function_sql := replace(function_sql, '> 0.0001', '> 0.000001');
+  function_sql := replace(function_sql, '+ 0.0001', '+ 0.000001');
+  execute function_sql;
+end;
+$rewrite_integrity$;
+
+do $rewrite_related_validators$
+declare
+  function_name text;
+  function_sql text;
+begin
+  foreach function_name in array array[
+    'validate_simple_entry_voucher',
+    'validate_contra_voucher',
+    'validate_cleared_cheque_receipt'
+  ] loop
+    if to_regprocedure('public.' || function_name || '()') is not null then
+      select pg_get_functiondef(to_regprocedure('public.' || function_name || '()')) into function_sql;
+      function_sql := replace(function_sql, ', 2)', ', 6)');
+      function_sql := replace(function_sql, ',2)', ',6)');
+      function_sql := replace(function_sql, '> 0.01', '> 0.000001');
+      execute function_sql;
+    end if;
+  end loop;
+end;
+$rewrite_related_validators$;
+
+-- Teach the atomic writer and its normalized response about the authoritative
+-- invoice amount while retaining the deployed function signature.
+do $rewrite_atomic$
+declare
+  function_sql text;
+begin
+  if to_regprocedure('public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)') is null then
+    raise exception 'save_voucher_atomic() must exist before applying precision migration';
+  end if;
+
+  select pg_get_functiondef('public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure)
+    into function_sql;
+  function_sql := replace(function_sql, 'numeric(14,2)', 'numeric(18,6)');
+  function_sql := replace(function_sql,
+    'voucher_id, item_id, qty, rate, source_invoice_item_id, item_name, unit,',
+    'voucher_id, item_id, qty, rate, amount, source_invoice_item_id, item_name, unit,');
+  function_sql := replace(function_sql,
+    'select saved.id, item.item_id, item.qty, item.rate, item.source_invoice_item_id,',
+    'select saved.id, item.item_id, item.qty, item.rate, coalesce(item.amount, round(item.qty * item.rate, 6)), item.source_invoice_item_id,');
+  function_sql := replace(function_sql,
+    'item_id uuid, qty numeric, rate numeric, source_invoice_item_id uuid,',
+    'item_id uuid, qty numeric, rate numeric, amount numeric, source_invoice_item_id uuid,');
+  function_sql := replace(function_sql,
+    $$  select coalesce(sum(coalesce(line.debit, 0)), 0),$$,
+    $$  if not public.numeric_json_scale_valid(p_voucher, array['subtotal','discount','vat_amount','total','contra_charge_amount'])
+    or not public.numeric_json_scale_valid(coalesce(p_lines,'[]'::jsonb), array['debit','credit'])
+    or not public.numeric_json_scale_valid(coalesce(p_stock_lines,'[]'::jsonb), array['qty','rate'])
+    or not public.numeric_json_scale_valid(coalesce(p_invoice_items,'[]'::jsonb), array['qty','rate','amount','discount_amount','taxable_amount','vat_amount','cost_rate','conversion_factor','base_qty'])
+    or not public.numeric_json_scale_valid(coalesce(p_settlements,'[]'::jsonb), array['amount']) then
+    raise exception 'Accounting values support at most six decimal places';
+  end if;
+
+  select coalesce(sum(coalesce(line.debit, 0)), 0),$$);
+  execute function_sql;
+
+  select pg_get_functiondef('public.voucher_atomic_response(uuid)'::regprocedure)
+    into function_sql;
+  function_sql := replace(function_sql,
+    $$'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate,$$,
+    $$'id', item.id, 'item_id', item.item_id, 'qty', item.qty, 'rate', item.rate, 'amount', item.amount,$$);
+  execute function_sql;
+end;
+$rewrite_atomic$;
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED DB FILE: supabase-six-decimal-accounting-precision-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-sales-invoice-company-details-print-setting-migration.sql
+-- Optional company identity block on printed Sales invoices. Safe to rerun.
+begin;
+
+alter table public.companies
+  add column if not exists show_company_details_on_sales_invoice boolean not null default true;
+
+comment on column public.companies.show_company_details_on_sales_invoice is
+  'When false, printed Sales invoices omit the company logo and identity details.';
+
+commit;
+-- END SYNCED DB FILE: supabase-sales-invoice-company-details-print-setting-migration.sql
+
 -- BEGIN SYNCED DB FILE: supabase-security-audit.sql
 -- Read-only pre-deployment RLS audit. Run in the Supabase SQL Editor after all
 -- migrations. Expected result: zero rows from both queries.
@@ -8226,285 +9288,6 @@ order by lock_record.granted, activity.xact_start;
 -- =============================================================================
 -- FINAL BOOTSTRAP VERIFICATION
 -- =============================================================================
--- Six-decimal accounting precision (must remain immediately before release verification).
-drop table if exists pg_temp.six_decimal_trigger_restore;
-create temporary table six_decimal_trigger_restore(trigger_name text primary key, definition text not null);
-insert into six_decimal_trigger_restore(trigger_name,definition)
-select t.tgname,pg_get_triggerdef(t.oid,true) from pg_trigger t
-where t.tgrelid='public.vouchers'::regclass and not t.tgisinternal
-  and t.tgname in ('vouchers_sync_contra_metadata','vouchers_validate_contra','vouchers_validate_simple_entry');
-drop trigger if exists vouchers_sync_contra_metadata on public.vouchers;
-drop trigger if exists vouchers_validate_contra on public.vouchers;
-drop trigger if exists vouchers_validate_simple_entry on public.vouchers;
-
-do $six_decimal_precision$
-declare target record;
-begin
-  for target in select * from (values
-    ('accounts','opening_balance'),
-    ('items','alternate_conversion'), ('items','sell_rate'), ('items','opening_qty'), ('items','opening_rate'), ('items','reorder_level'),
-    ('vouchers','contra_charge_amount'), ('vouchers','subtotal'), ('vouchers','discount'), ('vouchers','vat_amount'), ('vouchers','total'),
-    ('voucher_lines','debit'), ('voucher_lines','credit'),
-    ('stock_lines','qty'), ('stock_lines','rate'),
-    ('invoice_items','qty'), ('invoice_items','rate'), ('invoice_items','discount_amount'), ('invoice_items','taxable_amount'),
-    ('invoice_items','vat_amount'), ('invoice_items','cost_rate'), ('invoice_items','conversion_factor'), ('invoice_items','base_qty'),
-    ('voucher_settlements','amount'), ('cheques','amount'),
-    ('cheque_subscription_plans','default_price'), ('company_cheque_subscriptions','price')
-  ) as columns_to_widen(table_name, column_name)
-  loop
-    if exists (select 1 from information_schema.columns c where c.table_schema='public' and c.table_name=target.table_name and c.column_name=target.column_name) then
-      execute format('alter table public.%I alter column %I type numeric(18,6) using %I::numeric(18,6)', target.table_name, target.column_name, target.column_name);
-    end if;
-  end loop;
-end;
-$six_decimal_precision$;
-
-do $restore_six_decimal_triggers$
-declare saved_trigger record;
-begin
-  for saved_trigger in select definition from six_decimal_trigger_restore order by trigger_name loop execute saved_trigger.definition; end loop;
-end;
-$restore_six_decimal_triggers$;
-drop table pg_temp.six_decimal_trigger_restore;
-
-alter table public.invoice_items add column if not exists amount numeric(18,6);
-alter table public.invoice_items disable trigger user;
-update public.invoice_items set amount=round(qty*rate,6) where amount is null;
-alter table public.invoice_items alter column amount set not null;
-alter table public.invoice_items enable trigger user;
-alter table public.invoice_items drop constraint if exists invoice_items_amount_nonnegative;
-
--- One trial per user, company paid terms, and authoritative read-only enforcement.
-begin;
-
-alter table public.companies add column if not exists plan_expires_at timestamptz;
-
--- Preserve the effective access of legacy rows. The old date was inclusive in
--- Nepal time, so its equivalent timestamp is midnight immediately afterward.
-update public.companies
-set plan_expires_at = case
-  when trial_ends_at is not null then ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
-  else created_at + interval '14 days'
-end
-where plan_status = 'trial' and plan_expires_at is null;
-
-update public.companies
-set plan_expires_at = ((trial_ends_at + 1)::timestamp at time zone 'Asia/Kathmandu')
-where plan_status = 'paid' and plan_expires_at is null and trial_ends_at is not null;
-
-create or replace function public.company_billing_status(target_company uuid)
-returns jsonb
-language plpgsql
-stable
-security definer
-set search_path = public
-as $$
-declare
-  company_row public.companies%rowtype;
-  effective_status text;
-  remaining_days integer;
-  elapsed_days integer;
-begin
-  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
-  if not public.is_developer_admin() and not public.is_company_admin(target_company) then
-    raise exception 'Company access denied' using errcode = '42501';
-  end if;
-  select * into company_row from public.companies where id = target_company;
-  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
-
-  effective_status := case
-    when company_row.suspended then 'suspended'
-    when company_row.plan_status = 'expired' then 'expired'
-    when company_row.plan_status in ('trial','paid')
-      and company_row.plan_expires_at is not null
-      and company_row.plan_expires_at <= clock_timestamp() then 'expired'
-    else company_row.plan_status
-  end;
-  if company_row.plan_expires_at is not null then
-    remaining_days := greatest(ceil(extract(epoch from (company_row.plan_expires_at - clock_timestamp())) / 86400.0)::integer, 0);
-    elapsed_days := greatest(ceil(extract(epoch from (clock_timestamp() - company_row.plan_expires_at)) / 86400.0)::integer, 0);
-  end if;
-  return jsonb_build_object(
-    'configured_status', company_row.plan_status,
-    'effective_status', effective_status,
-    'expires_at', company_row.plan_expires_at,
-    'remaining_days', remaining_days,
-    'days_since_expiry', elapsed_days,
-    'can_write', effective_status not in ('expired','suspended')
-  );
-end;
-$$;
-
-create or replace function public.protect_company_control_fields()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if auth.uid() is null or public.is_developer_admin() then return new; end if;
-  if nullif(btrim(coalesce(new.logo_url, '')), '') is not null
-    and (length(new.logo_url) > 2048 or new.logo_url !~ '^https://') then
-    raise exception 'Company logo must use an HTTPS URL' using errcode = '22023';
-  end if;
-  if new.owner_email is distinct from old.owner_email
-    and new.owner_email is distinct from nullif(auth.jwt()->>'email', '') then
-    raise exception 'Company owner email must match the authenticated user' using errcode = '42501';
-  end if;
-  if new.id is distinct from old.id or new.user_id is distinct from old.user_id
-    or new.plan_status is distinct from old.plan_status
-    or new.trial_ends_at is distinct from old.trial_ends_at
-    or new.plan_expires_at is distinct from old.plan_expires_at
-    or new.support_status is distinct from old.support_status
-    or new.developer_notes is distinct from old.developer_notes
-    or new.suspended is distinct from old.suspended then
-    raise exception 'Developer-controlled company fields cannot be changed' using errcode = '42501';
-  end if;
-  return new;
-end;
-$$;
-
-create or replace function public.enforce_tenant_write_access()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  target_company uuid;
-  company_row public.companies%rowtype;
-  signup_at timestamptz;
-  initializing_company text;
-begin
-  if auth.uid() is null or public.is_developer_admin() then
-    return case when tg_op = 'DELETE' then old else new end;
-  end if;
-
-  if tg_argv[0] = 'company' then
-    target_company := case when tg_op = 'DELETE' then old.id else new.id end;
-    if tg_op = 'INSERT' then
-      if new.user_id is distinct from auth.uid() or new.plan_status is distinct from 'trial'
-        or new.trial_ends_at is not null or new.plan_expires_at is not null
-        or new.support_status is distinct from 'normal' or new.developer_notes is not null
-        or coalesce(new.suspended, false) then
-        raise exception 'New company security fields are invalid' using errcode = '42501';
-      end if;
-      select created_at into signup_at from auth.users where id = auth.uid();
-      new.plan_expires_at := signup_at + interval '14 days';
-      new.trial_ends_at := (new.plan_expires_at at time zone 'Asia/Kathmandu')::date;
-      return new;
-    end if;
-  elsif tg_argv[0] = 'voucher_child' then
-    select voucher.company_id into target_company from public.vouchers voucher
-    where voucher.id = case when tg_op = 'DELETE' then old.voucher_id else new.voucher_id end;
-  else
-    target_company := case when tg_op = 'DELETE' then old.company_id else new.company_id end;
-  end if;
-
-  if target_company is null and tg_op = 'DELETE' then return old; end if;
-  select * into company_row from public.companies where id = target_company;
-  if not found then raise exception 'Company not found' using errcode = 'P0002'; end if;
-  initializing_company := current_setting('khataerp.initializing_company', true);
-  if initializing_company = target_company::text then
-    return case when tg_op = 'DELETE' then old else new end;
-  end if;
-  if not public.is_company_admin(target_company) then
-    raise exception 'Company write access denied' using errcode = '42501';
-  end if;
-
-  if (company_row.suspended or company_row.plan_status = 'expired'
-      or (company_row.plan_status in ('trial','paid') and company_row.plan_expires_at is not null
-          and company_row.plan_expires_at <= clock_timestamp()))
-    and not (tg_argv[0] = 'company' and tg_op = 'DELETE') then
-    raise exception 'Company plan expired. This company is read-only until renewed.' using errcode = '42501';
-  end if;
-  return case when tg_op = 'DELETE' then old else new end;
-end;
-$$;
-
-drop trigger if exists company_control_fields_guard on public.companies;
-create trigger company_control_fields_guard before update on public.companies
-for each row execute function public.protect_company_control_fields();
-
-do $$
-declare table_name text;
-begin
-  foreach table_name in array array[
-    'accounts','account_categories','parties','items','item_categories','master_change_logs',
-    'vouchers','voucher_settlements','app_events','cheque_banks','cheques','cheque_events','company_modules',
-    'company_members','company_user_permissions'
-  ] loop
-    if to_regclass('public.' || table_name) is not null then
-      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
-      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'direct');
-    end if;
-  end loop;
-  foreach table_name in array array['voucher_lines','stock_lines','invoice_items'] loop
-    if to_regclass('public.' || table_name) is not null then
-      execute format('drop trigger if exists tenant_write_access_guard on public.%I', table_name);
-      execute format('create trigger tenant_write_access_guard before insert or update or delete on public.%I for each row execute function public.enforce_tenant_write_access(%L)', table_name, 'voucher_child');
-    end if;
-  end loop;
-end $$;
-
-drop trigger if exists tenant_write_access_guard on public.companies;
-create trigger tenant_write_access_guard before insert or update or delete on public.companies
-for each row execute function public.enforce_tenant_write_access('company');
-
--- Keep atomic initialization working even when a user first confirms their
--- email after the shared trial deadline. The resulting company is read-only.
-create or replace function public.create_company_atomic(p_company jsonb)
-returns public.companies
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare caller uuid := auth.uid(); user_email text; saved public.companies%rowtype;
-begin
-  if caller is null then raise exception 'Authentication required' using errcode = '42501'; end if;
-  perform public.assert_company_creation_allowed(caller);
-  select email into user_email from auth.users where id = caller;
-  insert into public.companies(user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,print_format,invoice_terms,payment_qr_text,fiscal_year_start,fiscal_year_configured)
-  values(caller,user_email,coalesce(nullif(btrim(coalesce(p_company->>'name','')),''),'My Company'),nullif(btrim(coalesce(p_company->>'address','')),''),nullif(btrim(coalesce(p_company->>'pan_vat','')),''),nullif(btrim(coalesce(p_company->>'phone','')),''),coalesce((p_company->>'vat_enabled')::boolean,true),coalesce(nullif(p_company->>'inventory_valuation_method',''),'weighted_average'),coalesce(nullif(btrim(p_company->>'sales_prefix'),''),'INV-'),coalesce(nullif(btrim(p_company->>'purchase_prefix'),''),'PB-'),coalesce(nullif(btrim(p_company->>'receipt_prefix'),''),'RCPT-'),coalesce(nullif(btrim(p_company->>'payment_prefix'),''),'PAY-'),coalesce(nullif(btrim(p_company->>'sales_return_prefix'),''),'SR-'),coalesce(nullif(btrim(p_company->>'purchase_return_prefix'),''),'PR-'),coalesce(nullif(p_company->>'journal_numbering_mode',''),'auto'),true,coalesce(nullif(p_company->>'print_format',''),'A5'),nullif(btrim(coalesce(p_company->>'invoice_terms','')),''),nullif(btrim(coalesce(p_company->>'payment_qr_text','')),''),coalesce(nullif(p_company->>'fiscal_year_start','')::date,'2026-07-17'::date),coalesce((p_company->>'fiscal_year_configured')::boolean,true)) returning * into saved;
-  perform set_config('khataerp.initializing_company', saved.id::text, true);
-  insert into public.company_members(company_id,user_id,role,status,created_by) values(saved.id,caller,'Admin','active',caller)
-  on conflict(company_id,user_id) do update set role='Admin',status='active',updated_at=now();
-  perform public.ensure_default_company_accounts(saved.id);
-  perform public.set_active_company(saved.id);
-  perform set_config('khataerp.initializing_company', '', true);
-  return saved;
-end;
-$$;
-
-revoke all on function public.company_billing_status(uuid) from public, anon;
-grant execute on function public.company_billing_status(uuid) to authenticated;
-revoke all on function public.enforce_tenant_write_access(), public.protect_company_control_fields() from public, anon, authenticated;
-
-commit;
-
-
-begin;
-
-create or replace function public.delete_developer_backup_agent(p_agent_id uuid)
-returns void
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  if not public.is_developer_admin() then
-    raise exception 'Developer admin access required' using errcode = '42501';
-  end if;
-  delete from public.developer_backup_agents where id = p_agent_id;
-  if not found then raise exception 'Windows backup agent not found' using errcode = 'P0002'; end if;
-end;
-$$;
-
-revoke all on function public.delete_developer_backup_agent(uuid) from public, anon;
-grant execute on function public.delete_developer_backup_agent(uuid) to authenticated;
-
-commit;
-
 do $bootstrap_verification$
 declare
   required_table text;
