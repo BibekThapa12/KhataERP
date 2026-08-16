@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { buildPortableCompanyBackup, safeBackupFolderName, serializePortableBackup, uniqueBackupNames, validatePortableCompanyBackup } from './portableBackup'
+import { buildPortableCompanyBackup, portableAccountIdMap, portableSystemAccountKey, safeBackupFolderName, serializePortableBackup, uniqueBackupNames, validatePortableCompanyBackup } from './portableBackup'
 
 describe('portable company backups', () => {
   it('keeps v1 compatibility, counts nested records, and removes secrets', () => {
@@ -30,5 +30,21 @@ describe('portable company backups', () => {
     expect(names.get('12345678-a')).toBe('Admin (12345678)')
     expect(names.get('87654321-b')).toBe('admin (87654321)')
     expect(names.get('other')).toBe('Sales')
+  })
+
+  it('remaps company-scoped system ledgers and tolerates legacy type differences', () => {
+    const mapping = portableAccountIdMap([
+      { id: 'source-company:cash', name: 'Cash', type: 'Asset' },
+      { id: 'source-company:vat_receivable', name: 'VAT Receivable (Input)', type: 'Asset' },
+      { id: 'custom-source', name: 'Commission Income', type: 'Income' },
+    ], [
+      { id: 'target-company:cash', name: 'Cash', type: 'Asset' },
+      { id: 'target-company:vat_receivable', name: 'VAT Receivable (Input)', type: 'Liability' },
+      { id: 'custom-target', name: 'Commission Income', type: 'Income' },
+    ] as never)
+    expect(portableSystemAccountKey('source-company:cash')).toBe('cash')
+    expect(mapping.get('source-company:cash')).toBe('target-company:cash')
+    expect(mapping.get('source-company:vat_receivable')).toBe('target-company:vat_receivable')
+    expect(mapping.get('custom-source')).toBe('custom-target')
   })
 })

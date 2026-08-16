@@ -34,6 +34,45 @@ export interface PortableBackupSnapshot extends Partial<PortableCompanyBackup> {
   company?: PortableCompanyBackup['company']
 }
 
+const portableSystemAccountKeys = new Set([
+  'cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase',
+  'sales_return', 'purchase_return', 'capital', 'retained_earnings',
+  'discount_allowed', 'rent', 'salary', 'electricity', 'bank_charges',
+])
+
+export function portableSystemAccountKey(accountId: unknown): string | null {
+  const value = String(accountId || '').trim()
+  const candidate = value.includes(':') ? value.slice(value.lastIndexOf(':') + 1) : value
+  return portableSystemAccountKeys.has(candidate) ? candidate : null
+}
+
+/** Maps source ledgers without depending on the source company's ID. */
+export function portableAccountIdMap(sourceAccounts: Pick<Account, 'id' | 'name' | 'type'>[], targetAccounts: Pick<Account, 'id' | 'name' | 'type'>[]) {
+  const result = new Map<string, string>()
+  const targetBySystemKey = new Map(targetAccounts.flatMap(account => {
+    const key = portableSystemAccountKey(account.id)
+    return key ? [[key, account.id] as const] : []
+  }))
+  const normalizedName = (value: unknown) => String(value || '').trim().toLocaleLowerCase()
+
+  for (const source of sourceAccounts) {
+    const systemKey = portableSystemAccountKey(source.id)
+    const systemTarget = systemKey ? targetBySystemKey.get(systemKey) : undefined
+    if (systemTarget) {
+      result.set(source.id, systemTarget)
+      continue
+    }
+    const exact = targetAccounts.find(target => target.type === source.type && normalizedName(target.name) === normalizedName(source.name))
+    if (exact) {
+      result.set(source.id, exact.id)
+      continue
+    }
+    const sameName = targetAccounts.filter(target => normalizedName(target.name) === normalizedName(source.name))
+    if (sameName.length === 1) result.set(source.id, sameName[0].id)
+  }
+  return result
+}
+
 const companyFields = new Set([
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',

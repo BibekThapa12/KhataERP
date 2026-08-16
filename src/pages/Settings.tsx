@@ -18,7 +18,7 @@ import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } f
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
-import { buildPortableCompanyBackup, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup } from '@/lib/portableBackup'
+import { buildPortableCompanyBackup, portableAccountIdMap, portableSystemAccountKey, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup } from '@/lib/portableBackup'
 
 type RestoreProgress = {
   active: boolean
@@ -440,11 +440,29 @@ export function SettingsPage() {
       const backup = JSON.parse(text) as PortableCompanyBackup
       validatePortableCompanyBackup(backup)
 
-      const targetHasData = vouchers.length > 0
-      if (targetHasData) throw new Error('Portable company restore cannot be imported into a company that already has vouchers. Create a new company first, then restore this backup there.')
+      const { data: existingVoucherRows, error: existingVoucherError } = await supabase
+        .from('vouchers')
+        .select('id,status,lines:voucher_lines(id),stock_lines(id),invoice_items(id)')
+        .eq('company_id', company.id)
+      if (existingVoucherError) throw existingVoucherError
+      const existingVouchers = existingVoucherRows || []
+      const incompleteRestoreHeaders = existingVouchers.length > 0 && existingVouchers.every(existing =>
+        existing.status === 'Draft' &&
+        (!Array.isArray(existing.lines) || existing.lines.length === 0) &&
+        (!Array.isArray(existing.stock_lines) || existing.stock_lines.length === 0) &&
+        (!Array.isArray(existing.invoice_items) || existing.invoice_items.length === 0)
+      )
+      if (existingVouchers.length && !incompleteRestoreHeaders) {
+        throw new Error('Portable company restore cannot be imported into a company that already has vouchers. Create a new company first, then restore this backup there.')
+      }
       if (!window.confirm('Restore this portable backup into the active company? Existing company settings may be updated. Continue?')) {
         setRestoreProgress(null)
         return
+      }
+      if (incompleteRestoreHeaders) {
+        showRestoreProgress('Cleaning incomplete restore', 'Removing orphaned Draft headers left by the previous failed import.')
+        const { error: cleanupError } = await supabase.from('vouchers').delete().in('id', existingVouchers.map(existing => existing.id))
+        if (cleanupError) throw cleanupError
       }
 
       const sourceAccountCategories = Array.isArray(backup.accountCategories) ? backup.accountCategories : Array.isArray(backup.account_categories) ? backup.account_categories : []
@@ -489,6 +507,45 @@ export function SettingsPage() {
       const itemIdByKey = new Map(items.map(item => [portableNameKey(item.name), item.id]))
       const partyIdByKey = new Map(parties.map(party => [portableScopedKey(party.type, party.name), party.id]))
 
+      const accountIdMap = portableAccountIdMap(sourceAccounts, targetAccounts)
+      for (const [sourceId, targetId] of accountIdMap) idMap.set(sourceId, targetId)
+      const targetSystemAccountIdByKey = new Map(targetAccounts.flatMap(account => {
+        const key = portableSystemAccountKey(account.id)
+        return key ? [[key, account.id] as const] : []
+      }))
+      const sourceAccountById = new Map(sourceAccounts.map(account => [account.id, account]))
+      const sourcePartyById = new Map(sourceParties.map(party => [party.id, party]))
+      const resolveAccountId = (sourceId: string | null | undefined, field: string): string | null => {
+        if (!sourceId) return null
+        const mapped = accountIdMap.get(sourceId)
+        if (mapped) return mapped
+        // Some legacy/agentic snapshots stored a party row ID in accounting
+        // references. Resolve it through that party's actual ledger.
+        const sourceParty = sourcePartyById.get(sourceId)
+        if (sourceParty?.account_id && sourceParty.account_id !== sourceId) {
+          const partyLedgerId = resolveAccountId(sourceParty.account_id, field)
+          if (partyLedgerId) accountIdMap.set(sourceId, partyLedgerId)
+          return partyLedgerId
+        }
+        const systemKey = portableSystemAccountKey(sourceId)
+        const systemTarget = systemKey ? targetSystemAccountIdByKey.get(systemKey) : undefined
+        if (systemTarget) {
+          accountIdMap.set(sourceId, systemTarget)
+          idMap.set(sourceId, systemTarget)
+          return systemTarget
+        }
+        const sourceAccount = sourceAccountById.get(sourceId)
+        if (sourceAccount) {
+          const nameMatches = targetAccounts.filter(target => samePortableName(target.name, sourceAccount.name))
+          if (nameMatches.length === 1) {
+            accountIdMap.set(sourceId, nameMatches[0].id)
+            idMap.set(sourceId, nameMatches[0].id)
+            return nameMatches[0].id
+          }
+        }
+        throw new Error(`The backup references a ${field} ledger that is missing from its Accounts data. Export a new complete backup and try again.`)
+      }
+
       showRestoreProgress('Mapping existing system records', 'Reusing matching default ledgers and groups where possible.')
       for (const category of sourceAccountCategories) {
         const targetId = accountCategoryIdByKey.get(portableScopedKey(category.account_type, category.name))
@@ -500,7 +557,10 @@ export function SettingsPage() {
       }
       for (const account of sourceAccounts) {
         const targetId = accountIdByKey.get(portableScopedKey(account.type, account.name))
-        if (targetId) idMap.set(account.id, targetId)
+        if (targetId) {
+          accountIdMap.set(account.id, targetId)
+          idMap.set(account.id, targetId)
+        }
       }
       for (const item of sourceItems) {
         const targetId = itemIdByKey.get(portableNameKey(item.name))
@@ -565,10 +625,12 @@ export function SettingsPage() {
         const accountKey = portableScopedKey(account.type, account.name)
         const existingAccountId = accountIdByKey.get(accountKey)
         if (existingAccountId) {
+          accountIdMap.set(account.id, existingAccountId)
           idMap.set(account.id, existingAccountId)
           return []
         }
         const nextId = crypto.randomUUID()
+        accountIdMap.set(account.id, nextId)
         idMap.set(account.id, nextId)
         accountIdByKey.set(accountKey, nextId)
         return [{ ...withoutMeta(account as unknown as Record<string, unknown>, ['balance']), id: nextId, company_id: company.id, category_id: account.category_id ? idMap.get(account.category_id) || null : null }]
@@ -609,7 +671,7 @@ export function SettingsPage() {
         const nextId = crypto.randomUUID()
         idMap.set(party.id, nextId)
         partyIdByKey.set(partyKey, nextId)
-        return [{ ...withoutMeta(party as unknown as Record<string, unknown>, ['account']), id: nextId, company_id: company.id, account_id: idMap.get(party.account_id) || party.account_id }]
+        return [{ ...withoutMeta(party as unknown as Record<string, unknown>, ['account']), id: nextId, company_id: company.id, account_id: resolveAccountId(party.account_id, 'party') }]
       })
       if (partyRows.length) {
         const { error } = await supabase.from('parties').insert(partyRows)
@@ -626,9 +688,9 @@ export function SettingsPage() {
           id: nextId,
           company_id: company.id,
           original_voucher_id: null,
-          settlement_account_id: voucher.settlement_account_id ? idMap.get(voucher.settlement_account_id) || null : null,
-          contra_destination_account_id: voucher.contra_destination_account_id ? idMap.get(voucher.contra_destination_account_id) || null : null,
-          party_account_id: voucher.party_account_id ? idMap.get(voucher.party_account_id) || null : null,
+          settlement_account_id: resolveAccountId(voucher.settlement_account_id, 'settlement'),
+          contra_destination_account_id: resolveAccountId(voucher.contra_destination_account_id, 'Contra destination'),
+          party_account_id: resolveAccountId(voucher.party_account_id, 'party'),
           created_by: null,
           updated_by: null,
           completed_by: null,
@@ -654,8 +716,14 @@ export function SettingsPage() {
       finishRestoreStage('Voucher links restored', `${voucherUpdates.length} voucher link(s) updated.`)
 
       showRestoreProgress('Importing ledger lines', 'Attaching debit and credit rows to vouchers.')
-      const voucherLineRows = orderedSourceVouchers.flatMap(voucher => (voucher.lines || []).map(line => ({ ...withoutMeta(line as unknown as Record<string, unknown>), id: crypto.randomUUID(), voucher_id: idMap.get(voucher.id), account_id: idMap.get(line.account_id) || line.account_id })))
+      const voucherLineRows = orderedSourceVouchers.flatMap(voucher => (voucher.lines || []).map(line => ({ ...withoutMeta(line as unknown as Record<string, unknown>), id: crypto.randomUUID(), voucher_id: idMap.get(voucher.id), account_id: resolveAccountId(line.account_id, 'voucher line') })))
       if (voucherLineRows.length) {
+        const referencedAccountIds = [...new Set(voucherLineRows.map(row => row.account_id).filter((id): id is string => typeof id === 'string'))]
+        const { data: ownedAccounts, error: ownershipError } = await supabase.from('accounts').select('id').eq('company_id', company.id).in('id', referencedAccountIds)
+        if (ownershipError) throw ownershipError
+        const ownedAccountIds = new Set((ownedAccounts || []).map(account => account.id))
+        const invalidLine = voucherLineRows.find(row => !row.account_id || !ownedAccountIds.has(row.account_id))
+        if (invalidLine) throw new Error('A voucher line in this backup references a party or ledger that cannot be matched to the destination company. Export a fresh complete backup and try again.')
         const { error } = await supabase.from('voucher_lines').insert(voucherLineRows)
         if (error) throw error
       }
@@ -718,7 +786,7 @@ export function SettingsPage() {
         id: crypto.randomUUID(), company_id: company.id,
         settlement_voucher_id: idMap.get(settlement.settlement_voucher_id) || idMap.get(voucher.id),
         invoice_voucher_id: idMap.get(settlement.invoice_voucher_id) || settlement.invoice_voucher_id,
-        party_account_id: idMap.get(settlement.party_account_id) || settlement.party_account_id,
+        party_account_id: resolveAccountId(settlement.party_account_id, 'settlement party'),
       })))
       if (settlementRows.length) { const { error } = await supabase.from('voucher_settlements').insert(settlementRows); if (error) throw error }
       finishRestoreStage('Settlements imported', `${settlementRows.length} allocation(s) restored.`)
@@ -764,10 +832,10 @@ export function SettingsPage() {
         ...withoutMeta(sourceCheque as unknown as Record<string, unknown>, ['created_by', 'updated_by']),
         id: crypto.randomUUID(), company_id: company.id,
         bank_id: sourceCheque.bank_id ? idMap.get(sourceCheque.bank_id) || null : null,
-        source_account_id: sourceCheque.source_account_id ? idMap.get(sourceCheque.source_account_id) || null : null,
-        party_ledger_id: idMap.get(sourceCheque.party_ledger_id) || sourceCheque.party_ledger_id,
+        source_account_id: resolveAccountId(sourceCheque.source_account_id, 'cheque source'),
+        party_ledger_id: resolveAccountId(sourceCheque.party_ledger_id, 'cheque party'),
         linked_voucher_id: sourceCheque.linked_voucher_id ? idMap.get(sourceCheque.linked_voucher_id) || null : null,
-        cleared_to_account_id: sourceCheque.cleared_to_account_id ? idMap.get(sourceCheque.cleared_to_account_id) || null : null,
+        cleared_to_account_id: resolveAccountId(sourceCheque.cleared_to_account_id, 'cheque clearing'),
         created_by: null, updated_by: null,
       }))
       if (chequeRows.length) { const { error } = await supabase.from('cheques').insert(chequeRows); if (error) throw error }
