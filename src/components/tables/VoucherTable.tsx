@@ -454,36 +454,6 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
               <div>Received By</div>
             </section>
           </main>
-          <script>
-            (() => {
-              const printableWidth = ${printableWidthMm} * 96 / 25.4
-              const printableHeight = ${printableHeightMm} * 96 / 25.4
-              let printStarted = false
-              const fitAndPrint = () => {
-                if (printStarted) return
-                printStarted = true
-                requestAnimationFrame(() => requestAnimationFrame(() => {
-                  try {
-                    const sheet = document.querySelector('.sheet')
-                    if (sheet) {
-                      sheet.style.zoom = '1'
-                      const widthScale = printableWidth / Math.max(sheet.scrollWidth, 1)
-                      const heightScale = printableHeight / Math.max(sheet.scrollHeight, 1)
-                      const requiredScale = Math.min(1, widthScale, heightScale)
-                      const safeScale = requiredScale < 1 ? Math.max(0.01, requiredScale * 0.97) : 1
-                      sheet.style.zoom = String(Number(safeScale.toFixed(4)))
-                      document.body.style.width = (printableWidth * safeScale) + 'px'
-                    }
-                  } finally {
-                    setTimeout(() => { window.focus(); window.print() }, 80)
-                  }
-                }))
-              }
-              if (document.readyState === 'complete') fitAndPrint()
-              else window.addEventListener('load', fitAndPrint, { once: true })
-              setTimeout(fitAndPrint, 800)
-            })()
-          </script>
         </body>
       </html>
     `
@@ -492,6 +462,31 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
     win.document.close()
+    const printableWidth = printableWidthMm * 96 / 25.4
+    const printableHeight = printableHeightMm * 96 / 25.4
+    let printStarted = false
+    const fitAndPrint = () => {
+      if (printStarted || win.closed) return
+      printStarted = true
+      try {
+        const sheet = win.document.querySelector<HTMLElement>('.sheet')
+        if (sheet) {
+          sheet.style.zoom = '1'
+          const widthScale = printableWidth / Math.max(sheet.scrollWidth, 1)
+          const heightScale = printableHeight / Math.max(sheet.scrollHeight, 1)
+          const requiredScale = Math.min(1, widthScale, heightScale)
+          const safeScale = requiredScale < 1 ? Math.max(0.01, requiredScale * 0.97) : 1
+          sheet.style.zoom = String(Number(safeScale.toFixed(4)))
+          win.document.body.style.width = `${printableWidth * safeScale}px`
+        }
+      } finally {
+        win.focus()
+        win.print()
+      }
+    }
+    if (win.document.readyState === 'complete') window.setTimeout(fitAndPrint, 50)
+    else win.addEventListener('load', fitAndPrint, { once: true })
+    window.setTimeout(fitAndPrint, 800)
   }
 
   registerVoucherPrinter(printVoucher)
