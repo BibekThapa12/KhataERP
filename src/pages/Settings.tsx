@@ -621,7 +621,7 @@ export function SettingsPage() {
       finishRestoreStage('Item groups imported', `${itemCategoryRows.length} new item group(s) created.`)
 
       showRestoreProgress('Importing ledgers', 'Creating non-system accounts with remapped groups.')
-      const accountRows = sourceAccounts.filter(account => !account.is_system && !idMap.has(account.id)).flatMap(account => {
+      const accountRows = sourceAccounts.filter(account => !accountIdMap.has(account.id)).flatMap(account => {
         const accountKey = portableScopedKey(account.type, account.name)
         const existingAccountId = accountIdByKey.get(accountKey)
         if (existingAccountId) {
@@ -629,7 +629,8 @@ export function SettingsPage() {
           idMap.set(account.id, existingAccountId)
           return []
         }
-        const nextId = crypto.randomUUID()
+        const systemKey = portableSystemAccountKey(account.id)
+        const nextId = systemKey ? `${company.id}:${systemKey}` : crypto.randomUUID()
         accountIdMap.set(account.id, nextId)
         idMap.set(account.id, nextId)
         accountIdByKey.set(accountKey, nextId)
