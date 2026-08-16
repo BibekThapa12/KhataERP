@@ -171,14 +171,6 @@ export const signUp = (email: string, password: string, company: CompanySignupDe
   })
 export const signOut = () => supabase.auth.signOut()
 
-export async function deleteOwnAccount() {
-  const { error } = await supabase.rpc('delete_my_account')
-  if (error) throw error
-  // The server-side deletion invalidates the identity; clear local client
-  // session data immediately without waiting for another auth refresh.
-  try { await supabase.auth.signOut({ scope: 'local' }) } catch { /* account is already deleted */ }
-}
-
 export async function isDeveloperAdmin(): Promise<boolean> {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return false

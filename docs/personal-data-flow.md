@@ -60,23 +60,17 @@ The source does **not** collect date of birth, card/payment credentials, biometr
 
 ## Deletion and retention
 
-Settings now includes **Delete my account**, protected by an exact `DELETE` confirmation. `public.delete_my_account()`:
-
-1. requires an authenticated caller;
-2. clears nullable audit-attribution references that could block identity deletion;
-3. deletes only `auth.uid()` from `auth.users`;
-4. relies on declared cascades to delete the caller-owned company and company-scoped companies, accounts, parties, items, categories, vouchers/children, app/master logs, module entitlements, permissions, banks, cheques and cheque events;
-5. runs atomically, so any constraint failure rolls the deletion back.
+Self-service account and company deletion is intentionally unavailable. Only a developer administrator can delete a company through the protected developer workflow, reducing the risk of accidental loss of accounting records.
 
 The application cannot erase files the user previously downloaded, printouts, data sent through an OS share target, or backups/provider logs controlled outside Supabase. Provider backup retention and legal/accounting retention requirements must be configured operationally before production use.
 
 ## Files changed by this audit
 
 - `src/lib/security.ts`: credential/PII redaction and field-name-only audit summaries.
-- `src/lib/supabase.ts`: user-controlled persistent/tab-scoped auth storage, explicit response projections, minimized audits, metadata cleanup, account-deletion client call.
+- `src/lib/supabase.ts`: user-controlled persistent/tab-scoped auth storage, explicit response projections, minimized audits, and metadata cleanup.
 - `src/lib/writePerformance.ts`: company ID removed from console timing output.
 - `src/pages/Login.tsx`: secret-safe auth error display.
-- `src/pages/Settings.tsx`: non-identifying diagnostics and confirmed account deletion UI.
+- `src/pages/Settings.tsx`: non-identifying diagnostics and company administration controls.
 - `src/pages/Parties.tsx`, `src/components/tables/VoucherTable.tsx`: record IDs removed from operational event metadata.
 - `src/lib/reports.ts`: non-identifying fiscal-year localStorage key and cleanup of legacy UUID keys.
-- `supabase-personal-data-protection-migration.sql`: historical log minimization and atomic self-deletion RPC.
+- `supabase-personal-data-protection-migration.sql`: historical log minimization.

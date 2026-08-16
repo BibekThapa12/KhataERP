@@ -60,7 +60,7 @@ npm run build      # output in dist/ — deploy to Vercel, Netlify, Cloudflare P
 - Keep local and deployment credentials in `.env.local` or the hosting provider's encrypted environment settings. Environment files are ignored by Git; `.env.example` contains placeholders only.
 - All application tables defined by the supplied SQL files have Row Level Security enabled and tenant-scoped policies. After applying migrations, verify the deployed database with `supabase-security-audit.sql` before exposing the anon key publicly.
 - If a real secret was ever committed, pasted into an issue/build log, or included in a deployed client bundle, removing it from the latest commit is insufficient. Rotate/revoke it immediately and then purge it from Git history where required.
-- The personal-data flow and retention audit is in [docs/personal-data-flow.md](docs/personal-data-flow.md). Apply `supabase-personal-data-protection-migration.sql` to minimize historical audit payloads and enable Settings -> Delete my account.
+- The personal-data flow and retention audit is in [docs/personal-data-flow.md](docs/personal-data-flow.md). Apply `supabase-personal-data-protection-migration.sql` to minimize historical audit payloads. Company deletion is restricted to developer administrators.
 - The production pass/fail review and mandatory Supabase/Vercel launch checks are in [docs/production-security-audit.md](docs/production-security-audit.md).
 - The authentication, authorization, accounting-tampering, paid-module, input, XSS, and upload review is in [docs/critical-path-security-audit.md](docs/critical-path-security-audit.md).
 

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Download, FileSpreadsheet, Trash2, Upload } from 'lucide-react'
+import { Building2, Database, Download, FileSpreadsheet, ReceiptText, Upload, Users } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
-import { deleteOwnAccount, logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
+import { logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
 import { downloadImportTemplate, executeImport, importModuleOptions, previewImportWorkbook, templateFor, type ImportModule, type ImportPreview } from '@/lib/importData'
 import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, makeBsKey, parseBsDate } from '@/lib/nepaliDate'
 import { todayISO } from '@/lib/utils'
@@ -14,7 +14,6 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { CompanyModule, InventoryValuationMethod, InvoiceItem, Voucher } from '@/types'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
@@ -30,6 +29,8 @@ type RestoreProgress = {
   detail: string
   counts: { label: string; value: number }[]
 }
+
+type SettingsSection = 'company' | 'vouchers' | 'data' | 'admins'
 
 const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
@@ -243,9 +244,6 @@ export function SettingsPage() {
   const [saveError, setSaveError] = useState('')
   const [restoreMessage, setRestoreMessage] = useState('')
   const [restoreProgress, setRestoreProgress] = useState<RestoreProgress | null>(null)
-  const [deleteConfirmation, setDeleteConfirmation] = useState('')
-  const [deletingAccount, setDeletingAccount] = useState(false)
-  const [deleteError, setDeleteError] = useState('')
   const [memberEmail, setMemberEmail] = useState('')
   const [memberSaving, setMemberSaving] = useState(false)
   const [memberError, setMemberError] = useState('')
@@ -255,6 +253,7 @@ export function SettingsPage() {
   const [importing, setImporting] = useState(false)
   const [importMessage, setImportMessage] = useState('')
   const [importError, setImportError] = useState('')
+  const [settingsSection, setSettingsSection] = useState<SettingsSection>('company')
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
   const fiscalYearLocked = vouchers.length > 0
   const currentFiscalYear = Number(currentFiscalYearStartBs(company).slice(0, 4))
@@ -798,20 +797,6 @@ export function SettingsPage() {
     }
   }
 
-  const handleDeleteAccount = async (event: React.MouseEvent<HTMLButtonElement>) => {
-    event.preventDefault()
-    if (deleteConfirmation !== 'DELETE' || deletingAccount) return
-    setDeletingAccount(true)
-    setDeleteError('')
-    try {
-      await deleteOwnAccount()
-      window.location.replace('/login')
-    } catch (error: unknown) {
-      setDeleteError(publicErrorMessage(error, 'deleting account'))
-      setDeletingAccount(false)
-    }
-  }
-
   const handleAddCompanyAdmin = async () => {
     setMemberError('')
     const email = memberEmail.trim()
@@ -893,9 +878,20 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Settings" description="Company details and data management" />
       <PageContent className="max-w-none">
-        <div className="grid items-start gap-5 xl:grid-cols-[minmax(0,1.05fr)_minmax(360px,0.95fr)]">
-          <div className="space-y-5">
-        <Card>
+        <div className="mb-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4" role="navigation" aria-label="Settings sections">
+          {([
+            ['company', 'Company Details', Building2],
+            ['vouchers', 'Voucher Config', ReceiptText],
+            ['data', 'Data', Database],
+            ['admins', 'Company Admin', Users],
+          ] as const).map(([value, label, Icon]) => (
+            <Button key={value} type="button" variant={settingsSection === value ? 'default' : 'outline'} className="justify-start" onClick={() => setSettingsSection(value)} aria-current={settingsSection === value ? 'page' : undefined}>
+              <Icon className="mr-2 h-4 w-4" />{label}
+            </Button>
+          ))}
+        </div>
+        <div className="mx-auto max-w-5xl space-y-5">
+        <Card className={settingsSection === 'admins' ? '' : 'hidden'}>
           <CardHeader><CardTitle className="text-base">Account Diagnostic</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-xs text-muted-foreground">
             <p>Supabase project: <span className="font-mono text-foreground">{supabaseProjectHost || 'Not configured'}</span></p>
@@ -905,9 +901,10 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader><CardTitle className="text-base">Company Details</CardTitle></CardHeader>
+        <Card className={settingsSection === 'company' || settingsSection === 'vouchers' ? '' : 'hidden'}>
+          <CardHeader><CardTitle className="text-base">{settingsSection === 'company' ? 'Company Details' : 'Voucher Configuration'}</CardTitle></CardHeader>
           <CardContent className="space-y-4">
+            <div className={settingsSection === 'company' ? 'space-y-4' : 'hidden'}>
             <div className="space-y-1.5">
               <Label>Company Name</Label>
               <Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="My Trading Co." />
@@ -968,6 +965,8 @@ export function SettingsPage() {
               <SearchableSelect value={valuationMethod} onValueChange={value => setValuationMethod(value as InventoryValuationMethod)} options={[{ value: 'weighted_average', label: 'Perpetual Weighted Average' }, { value: 'fifo', label: 'FIFO (First In, First Out)' }, { value: 'lifo', label: 'LIFO (Last In, First Out)' }]} />
               <p className="text-xs text-muted-foreground">Controls stock value, issue cost, P&amp;L, and Balance Sheet calculations.</p>
             </div>
+            </div>
+            <div className={settingsSection === 'vouchers' ? 'space-y-4' : 'hidden'}>
             <div className="grid gap-3 sm:grid-cols-2">
               <div className="space-y-1.5">
                 <Label>Sales Prefix</Label>
@@ -1044,6 +1043,7 @@ export function SettingsPage() {
               <Label>Payment QR / Note</Label>
               <Textarea value={paymentQrText} onChange={e => setPaymentQrText(e.target.value)} rows={2} placeholder="eSewa/Khalti/bank QR note or payment instructions" />
             </div>
+            </div>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save Changes'}
             </Button>
@@ -1051,7 +1051,7 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={settingsSection === 'admins' ? '' : 'hidden'}>
           <CardHeader><CardTitle className="text-base">Company Admins</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">Add an existing KhataERP user to this company as an Admin.</p>
@@ -1065,11 +1065,8 @@ export function SettingsPage() {
             {memberError && <p className="text-sm text-destructive">{memberError}</p>}
           </CardContent>
         </Card>
-          </div>
 
-          <div className="space-y-5">
-
-        <Card>
+        <Card className={settingsSection === 'data' ? '' : 'hidden'}>
           <CardHeader><CardTitle className="text-base">Data</CardTitle></CardHeader>
           <CardContent className="space-y-3">
             <p className="text-sm text-muted-foreground">
@@ -1096,7 +1093,7 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card>
+        <Card className={settingsSection === 'data' ? '' : 'hidden'}>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
               <FileSpreadsheet className="h-4 w-4" />
@@ -1178,34 +1175,6 @@ export function SettingsPage() {
           </CardContent>
         </Card>
 
-        <Card className="border-destructive/40">
-          <CardHeader><CardTitle className="text-base text-destructive">Delete Account</CardTitle></CardHeader>
-          <CardContent className="space-y-3">
-            <p className="text-xs text-muted-foreground">
-              Permanently deletes your login, company profile, parties, accounts, items, vouchers, cheque records, and audit data. Export a backup first if required.
-            </p>
-            <AlertDialog onOpenChange={open => { if (!open) { setDeleteConfirmation(''); setDeleteError('') } }}>
-              <AlertDialogTrigger asChild>
-                <Button variant="destructive"><Trash2 className="mr-2 h-4 w-4" />Delete my account</Button>
-              </AlertDialogTrigger>
-              <AlertDialogContent>
-                <AlertDialogHeader>
-                  <AlertDialogTitle>Permanently delete this account?</AlertDialogTitle>
-                  <AlertDialogDescription>This cannot be undone. Type DELETE to confirm.</AlertDialogDescription>
-                </AlertDialogHeader>
-                <Input value={deleteConfirmation} onChange={event => setDeleteConfirmation(event.target.value)} placeholder="DELETE" autoComplete="off" />
-                {deleteError && <p className="text-xs text-destructive">{deleteError}</p>}
-                <AlertDialogFooter>
-                  <AlertDialogCancel disabled={deletingAccount}>Cancel</AlertDialogCancel>
-                  <AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" disabled={deleteConfirmation !== 'DELETE' || deletingAccount} onClick={handleDeleteAccount}>
-                    {deletingAccount ? 'Deleting…' : 'Delete permanently'}
-                  </AlertDialogAction>
-                </AlertDialogFooter>
-              </AlertDialogContent>
-            </AlertDialog>
-          </CardContent>
-        </Card>
-          </div>
         </div>
       </PageContent>
     </div>

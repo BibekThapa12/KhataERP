@@ -4643,43 +4643,6 @@ set metadata = jsonb_strip_nulls(jsonb_build_object(
 ))
 where event_type = 'frontend_error';
 
--- The function executes as its owner because authenticated users cannot and
--- must not receive direct DELETE rights on auth.users. Deleting auth.users
--- cascades to the owned company and all company-scoped accounting/module data.
-create or replace function public.delete_my_account()
-returns void
-language plpgsql
-security definer
-set search_path = public, pg_catalog
-as $$
-declare
-  caller_user_id uuid := auth.uid();
-begin
-  if caller_user_id is null then
-    raise exception 'Authentication required' using errcode = '42501';
-  end if;
-
-  -- Actor references are audit attribution, not ownership. Null them before
-  -- deleting the identity so old actions in other companies do not block the
-  -- user's deletion request.
-  update public.company_modules set enabled_by = null where enabled_by = caller_user_id;
-  update public.company_user_permissions set granted_by = null where granted_by = caller_user_id;
-  update public.cheque_banks set created_by = null where created_by = caller_user_id;
-  update public.cheque_banks set updated_by = null where updated_by = caller_user_id;
-  update public.cheques set created_by = null where created_by = caller_user_id;
-  update public.cheques set updated_by = null where updated_by = caller_user_id;
-  update public.cheque_events set actor_id = null where actor_id = caller_user_id;
-
-  delete from auth.users where id = caller_user_id;
-  if not found then
-    raise exception 'Authenticated user no longer exists';
-  end if;
-end;
-$$;
-
-revoke all on function public.delete_my_account() from public, anon;
-grant execute on function public.delete_my_account() to authenticated;
-
 commit;
 notify pgrst, 'reload schema';
 -- END SYNCED DB FILE: supabase-personal-data-protection-migration.sql
@@ -8961,6 +8924,17 @@ comment on column public.companies.show_company_details_on_sales_invoice is
 
 commit;
 -- END SYNCED DB FILE: supabase-sales-invoice-company-details-print-setting-migration.sql
+
+-- BEGIN SYNCED DB FILE: supabase-remove-self-service-account-deletion-migration.sql
+-- Remove self-service account/company deletion. Company deletion remains available
+-- only through the existing developer-admin RPC.
+begin;
+
+drop function if exists public.delete_my_account();
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED DB FILE: supabase-remove-self-service-account-deletion-migration.sql
 
 -- BEGIN SYNCED DB FILE: supabase-security-audit.sql
 -- Read-only pre-deployment RLS audit. Run in the Supabase SQL Editor after all
