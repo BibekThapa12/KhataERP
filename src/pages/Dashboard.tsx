@@ -1,7 +1,7 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Building2, FileClock, Landmark, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
+  Building2, FileClock, Landmark, Package, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
@@ -28,20 +28,22 @@ import { companyBillingStatus, companyBillingTooltip } from '@/lib/billing'
 const SalesPurchaseChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.SalesPurchaseChart })))
 const CashFlowChart = lazy(() => import('@/components/dashboard/DashboardCharts').then(module => ({ default: module.CashFlowChart })))
 const CHART_MODE_KEY = 'khata-dashboard-chart-mode'
-function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details, onClick }: {
+function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details, detailsTitle = 'Balance breakdown', onClick }: {
   label: string
   value: number
   Icon: typeof Wallet
   tone?: 'navy' | 'green' | 'red' | 'orange' | 'blue' | 'violet'
   sub?: string
   details?: { id: string; label: string; value: number; archived?: boolean }[]
+  detailsTitle?: string
   onClick?: () => void
 }) {
+  const detailsId = useId()
   const tones = {
     navy: 'border-slate-200 bg-slate-50 text-[#1B2A4A]', green: 'border-emerald-100 bg-emerald-50 text-emerald-700', red: 'border-red-100 bg-red-50 text-red-600',
     orange: 'border-orange-100 bg-orange-50 text-orange-700', blue: 'border-blue-100 bg-blue-50 text-blue-700', violet: 'border-violet-100 bg-violet-50 text-violet-700',
   }
-  const card = <Card onClick={onClick} onKeyDown={event=>{if(onClick&&(event.key==='Enter'||event.key===' ')){event.preventDefault();onClick()}}} className={`h-full border-border/80 shadow-none transition-[border-color,box-shadow] duration-200 hover:border-primary/20 hover:shadow-sm ${onClick?'cursor-pointer':''}`} tabIndex={details?.length||onClick ? 0 : undefined} aria-describedby={details?.length ? 'bank-balance-breakdown' : undefined}>
+  const card = <Card onClick={onClick} onKeyDown={event=>{if(onClick&&(event.key==='Enter'||event.key===' ')){event.preventDefault();onClick()}}} className={`h-full border-border/80 shadow-none transition-[border-color,box-shadow] duration-200 hover:border-primary/20 hover:shadow-sm ${onClick?'cursor-pointer':''}`} tabIndex={details?.length||onClick ? 0 : undefined} aria-describedby={details?.length ? detailsId : undefined}>
       <CardContent className="flex items-center gap-3.5 p-4 sm:p-5">
         <div className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border ${tones[tone]}`}><Icon className="h-[18px] w-[18px]" /></div>
         <div className="min-w-0 flex-1">
@@ -54,9 +56,9 @@ function DashboardMetric({ label, value, Icon, tone = 'navy', sub, details, onCl
   if (!details?.length) return card
   return <div className="group relative min-w-0">
     {card}
-    <div className="absolute left-0 top-full z-30 hidden w-full min-w-[16rem] pt-2 group-hover:block group-focus-within:block sm:left-auto sm:right-0 sm:w-72" role="tooltip" id="bank-balance-breakdown">
+    <div className="absolute left-0 top-full z-30 hidden w-full min-w-[16rem] pt-2 group-hover:block group-focus-within:block sm:left-auto sm:right-0 sm:w-72" role="tooltip" id={detailsId}>
       <div className="rounded-md border bg-popover p-3 text-popover-foreground shadow-lg">
-        <div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase text-muted-foreground">Bank closing balances</p><span className="text-[10px] text-muted-foreground">As of selected date</span></div>
+        <div className="mb-2 flex items-center justify-between gap-3"><p className="text-xs font-semibold uppercase text-muted-foreground">{detailsTitle}</p><span className="text-[10px] text-muted-foreground">As of selected date</span></div>
         <div className="max-h-56 space-y-1 overflow-y-auto">{details.map(detail => <div key={detail.id} className="flex items-center justify-between gap-3 rounded px-1 py-1.5 text-sm hover:bg-muted/40"><span className="min-w-0 truncate font-medium">{detail.label}{detail.archived && <span className="ml-1 text-[10px] font-normal text-muted-foreground">Archived</span>}</span><span className={`shrink-0 num font-semibold ${detail.value < 0 ? 'text-red-600' : ''}`}>{fmtMoney(detail.value)}</span></div>)}</div>
         <div className="mt-2 flex items-center justify-between border-t pt-2 text-sm font-semibold"><span>Total</span><span className="num">{fmtMoney(value)}</span></div>
       </div>
@@ -134,6 +136,8 @@ export function Dashboard() {
   const stockBefore = useMemo(() => recomputeStock(items, beforeFrom, valuationMethod), [items, beforeFrom, valuationMethod])
   const stockAsOf = useMemo(() => recomputeStock(items, throughTo, valuationMethod), [items, throughTo, valuationMethod])
   const saleableStockAsOf = useMemo(() => computeStockConditionSummary(items, throughTo, 'saleable', valuationMethod), [items, throughTo, valuationMethod])
+  const damagedStockAsOf = useMemo(() => computeStockConditionSummary(items, throughTo, 'damaged', valuationMethod), [items, throughTo, valuationMethod])
+  const expiredStockAsOf = useMemo(() => computeStockConditionSummary(items, throughTo, 'expired', valuationMethod), [items, throughTo, valuationMethod])
   const openingStockValue = round2(stockBefore.reduce((sum, row) => sum + row.value, 0))
   const closingStockValue = round2(stockAsOf.reduce((sum, row) => sum + row.value, 0))
   const pnl = useMemo(() => computeProfitAndLoss(periodAccounts, round2(closingStockValue - openingStockValue)), [periodAccounts, closingStockValue, openingStockValue])
@@ -142,7 +146,16 @@ export function Dashboard() {
   const cash = accountBalance(asOfMap.get(systemId('cash')))
   const banks = bankAccounts(asOfAccounts, accountCategories, true)
   const totalBanks = round2(banks.reduce((sum, account) => sum + signedBankBalance(account), 0))
-  const bankDetails = banks.map(account => ({ id: account.id, label: account.name, value: signedBankBalance(account), archived: !!account.is_archived })).sort((a, b) => a.label.localeCompare(b.label))
+  const cashAndBankTotal = round2(cash + totalBanks)
+  const cashAndBankDetails = [
+    { id: systemId('cash'), label: 'Cash in Hand', value: cash },
+    ...banks.map(account => ({ id: account.id, label: account.name, value: signedBankBalance(account), archived: !!account.is_archived })).sort((a, b) => a.label.localeCompare(b.label)),
+  ]
+  const stockDetails = [
+    { id: 'saleable', label: 'Saleable Stock', value: round2(saleableStockAsOf.reduce((sum, row) => sum + row.closing_value, 0)) },
+    { id: 'damaged', label: 'Damaged Stock', value: round2(damagedStockAsOf.reduce((sum, row) => sum + row.closing_value, 0)) },
+    { id: 'expired', label: 'Expired Stock', value: round2(expiredStockAsOf.reduce((sum, row) => sum + row.closing_value, 0)) },
+  ]
   const debtors = round2(parties.filter(party => party.type === 'customer').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
   const creditors = round2(parties.filter(party => party.type === 'supplier').reduce((sum, party) => sum + accountBalance(asOfMap.get(party.account_id)), 0))
 
@@ -254,8 +267,8 @@ export function Dashboard() {
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
           <DashboardMetric label="Total Debtors" value={debtors} Icon={Users} tone="green" />
           <DashboardMetric label="Total Creditors" value={creditors} Icon={Building2} tone="red" />
-          <DashboardMetric label="Cash in Hand" value={cash} Icon={Wallet} tone="green" />
-          <DashboardMetric label="Total in Banks" value={totalBanks} Icon={Landmark} tone="blue" sub={`${banks.length} bank account${banks.length === 1 ? '' : 's'}`} details={bankDetails} />
+          <DashboardMetric label="Stock in Hand" value={closingStockValue} Icon={Package} tone="green" sub="All stock types" details={stockDetails} detailsTitle="Stock value breakdown" />
+          <DashboardMetric label="Cash & Bank" value={cashAndBankTotal} Icon={Landmark} tone="blue" sub={`Cash plus ${banks.length} bank account${banks.length === 1 ? '' : 's'}`} details={cashAndBankDetails} detailsTitle="Cash and bank balances" />
         </div>
       </section>
 

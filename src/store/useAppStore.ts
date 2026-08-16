@@ -14,13 +14,13 @@ import {
 import {
   applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
-  buildReturnVoucherData, resolveSystemAccountId, round2, stockConditionQuantity, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
+  buildReturnVoucherData, invoiceSubtotal, resolveSystemAccountId, round2, stockConditionQuantity, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
 } from '@/lib/engine'
 import { addDaysToBs, bsToAd, makeBsKey, todayBs } from '@/lib/nepaliDate'
 import { categoryDepth, categoryDescendantIds, subtreeHeight } from '@/lib/categoryHierarchy'
 import { partyTerminology, partyTypeForCategory } from '@/lib/partyTerminology'
 import { bankAccounts } from '@/lib/banks'
-import { toBaseQty, toBaseRate } from '@/lib/units'
+import { toBaseQty, toBaseRate, unitFactor } from '@/lib/units'
 import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
 import { previewNextDraftNumber, voucherNumberingPeriod, voucherNumberingScope } from '@/lib/voucherNumbers'
 import { validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
@@ -172,6 +172,7 @@ interface AppState {
   updateSimpleEntry: (id: string, params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
   updateContra: (id: string, params: ContraSaveParams, status?: Voucher['status']) => Promise<void>
   updateReturnVoucher: (id: string, params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
+  completeDraftVoucher: (voucher: Voucher) => Promise<Voucher>
   deleteDraftVoucher: (id: string) => Promise<void>
   cancelV: (id: string) => Promise<void>
 }
@@ -188,6 +189,33 @@ export interface ReturnSaveParams {
   stock_condition: StockCondition
   return_reason: string
   date_bs: string
+}
+
+export interface BulkDraftCompletionResult {
+  draftId: string
+  label: string
+  type: Voucher['type']
+  status: 'completed' | 'failed'
+  completedNumber?: string
+  error?: string
+}
+
+type DraftPayload = Record<string, unknown>
+
+function requiredDraftPayload(voucher: Voucher): DraftPayload {
+  if (voucher.status !== 'Draft') throw new Error('Only draft vouchers can be completed')
+  if (!voucher.draft_payload || typeof voucher.draft_payload !== 'object') throw new Error('This draft has no saved form data. Open it and complete the missing details.')
+  return voucher.draft_payload
+}
+
+function draftText(payload: DraftPayload, key: string, fallback = '') {
+  const value = payload[key]
+  return typeof value === 'string' ? value : fallback
+}
+
+function draftNumber(payload: DraftPayload, key: string, fallback = 0) {
+  const value = Number(payload[key] ?? fallback)
+  return Number.isFinite(value) ? value : fallback
 }
 
 function voucherDateFields(date_bs: string, company: Company) {
@@ -1579,6 +1607,112 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ vouchers, ...recomputeVoucherEffects(get(), vouchers, company, existing, updated) })
     notifySuccess(status === 'Draft' ? `${params.type} draft updated` : `${params.type} completed`, updated.invoice_no)
     })
+  },
+
+  completeDraftVoucher: async voucher => {
+    const current = get().vouchers.find(entry => entry.id === voucher.id)
+    if (!current || current.status !== 'Draft') throw new Error('This draft no longer exists or has already been completed.')
+    const payload = requiredDraftPayload(current)
+    const beforeIds = new Set(get().vouchers.map(entry => entry.id))
+    const dateBs = draftText(payload, 'dateBs', current.date_bs)
+
+    if (current.type === 'Sales' || current.type === 'Purchase') {
+      const rawLines = Array.isArray(payload.lines) ? payload.lines as Array<Record<string, unknown>> : []
+      const items = rawLines.map(line => ({
+        ...line,
+        item_id: String(line.item_id || ''),
+        qty: Number(line.qty || 0),
+        rate: Number(line.rate || 0),
+        amount: line.amount == null ? undefined : Number(line.amount),
+        conversion_factor: Number(line.conversion_factor || 1),
+      })) as InvoiceEntryInput[]
+      const subtotal = invoiceSubtotal(items)
+      const enteredDiscount = draftNumber(payload, 'discount', 0)
+      const discount = round2(Math.min(subtotal, Math.max(0, payload.discountMode === 'percent' ? subtotal * enteredDiscount / 100 : enteredDiscount)))
+      const params: InvoiceSaveParams = {
+        party_account_id: draftText(payload, 'partyAccountId') || null,
+        is_cash: !!payload.isCash,
+        items,
+        vat_rate: draftNumber(payload, 'vatRate', 0),
+        credit_days: payload.isCash ? 0 : draftNumber(payload, 'creditDays', 0),
+        supplier_invoice_no: draftText(payload, 'supplierInvoiceNo'),
+        discount,
+        narration: draftText(payload, 'narration', current.narration || ''),
+        date_bs: dateBs,
+      }
+      if (current.type === 'Sales') await get().updateSalesVoucher(current.id, params, 'Completed')
+      else await get().updatePurchaseVoucher(current.id, params, 'Completed')
+    } else if (current.type === 'Receipt' || current.type === 'Payment') {
+      const rawAllocations = Array.isArray(payload.allocations) ? payload.allocations as Array<Record<string, unknown>> : []
+      const allocations: TransactionAllocation[] = rawAllocations.map(allocation => ({
+        account_id: String(allocation.account_id || ''),
+        amount: Number(allocation.amount || 0),
+        invoice_allocations: Array.isArray(allocation.invoice_allocations)
+          ? (allocation.invoice_allocations as Array<Record<string, unknown>>).map(row => ({ invoice_voucher_id: String(row.invoice_voucher_id || ''), amount: Number(row.amount || 0) }))
+          : [],
+      }))
+      const moneyAccountId = draftText(payload, 'moneyAccountId', current.settlement_account_id || '')
+      const narration = draftText(payload, 'narration', current.narration || '')
+      if (current.type === 'Receipt') await get().updateReceipt(current.id, { allocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, 'Completed')
+      else await get().updatePayment(current.id, { allocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, 'Completed')
+    } else if (current.type === 'Journal') {
+      if (payload.journalEntryType === 'Contra' || current.contra_entry) {
+        await get().updateContra(current.id, {
+          source_account_id: draftText(payload, 'sourceAccountId', current.settlement_account_id || ''),
+          destination_account_id: draftText(payload, 'destinationAccountId', current.contra_destination_account_id || ''),
+          amount: draftNumber(payload, 'amount'),
+          charge_amount: draftNumber(payload, 'chargeAmount', current.contra_charge_amount || 0),
+          narration: draftText(payload, 'narration', current.narration || ''), date_bs: dateBs,
+          invoice_no: draftText(payload, 'journalInvoiceNo') || undefined,
+        }, 'Completed')
+      } else if (payload.simpleEntryType === 'Income' || payload.simpleEntryType === 'Expense' || current.simple_entry_type) {
+        const entryType = (payload.simpleEntryType || current.simple_entry_type) as 'Income' | 'Expense'
+        const lines = (Array.isArray(payload.lines) ? payload.lines : []).map(line => {
+          const row = line as Record<string, unknown>
+          return { category_id: String(row.category_id || ''), account_id: String(row.account_id || ''), amount: Number(row.amount || 0) }
+        })
+        await get().updateSimpleEntry(current.id, {
+          entry_type: entryType, counter_account_id: draftText(payload, 'counterAccountId', current.settlement_account_id || ''), lines,
+          narration: draftText(payload, 'narration', current.narration || ''), date_bs: dateBs,
+          invoice_no: draftText(payload, 'journalInvoiceNo') || undefined,
+        }, 'Completed')
+      } else {
+        const rawLines = Array.isArray(payload.jLines) ? payload.jLines as Array<Record<string, unknown>> : []
+        const lines = rawLines.map(line => ({ account_id: String(line.account_id || ''), debit: Number(line.debit || 0), credit: Number(line.credit || 0) }))
+        await get().updateJournal(current.id, { lines, narration: draftText(payload, 'narration', current.narration || ''), date_bs: dateBs, invoice_no: draftText(payload, 'journalInvoiceNo') || undefined }, 'Completed')
+      }
+    } else if (current.type === 'Sales Return' || current.type === 'Purchase Return') {
+      const lines = (Array.isArray(payload.lines) ? payload.lines : []).map(line => {
+        const row = line as Record<string, unknown>
+        return { ...row, item_id: String(row.item_id || ''), qty: Number(row.qty || 0), rate: Number(row.rate || 0), conversion_factor: Number(row.conversion_factor || 1) }
+      }) as ReturnItemInput[]
+      const settlementMode = draftText(payload, 'settlementMode', 'party') as ReturnSaveParams['settlement_mode']
+      const originalId = draftText(payload, 'originalId')
+      const original = originalId ? get().vouchers.find(entry => entry.id === originalId) : undefined
+      await get().updateReturnVoucher(current.id, {
+        type: current.type, original_voucher_id: originalId || undefined,
+        party_account_id: draftText(payload, 'partyAccountId') || null, vat_rate: original?.vat_rate ?? draftNumber(payload, 'manualVatRate', 0), items: lines,
+        settlement_mode: settlementMode, settlement_account_id: draftText(payload, 'settlementAccountId') || undefined,
+        restock_items: true, stock_condition: draftText(payload, 'stockCondition', 'saleable') as StockCondition,
+        return_reason: draftText(payload, 'reason'), date_bs: dateBs,
+      }, 'Completed')
+    } else if (current.type === 'Stock Adjustment') {
+      const itemId = draftText(payload, 'itemId')
+      const item = get().items.find(entry => entry.id === itemId)
+      const mode = draftText(payload, 'mode', 'adjustment')
+      const factor = unitFactor(item, draftText(payload, 'unitMode', 'main') === 'alternate' ? 'alternate' : 'main')
+      const enteredQuantity = draftNumber(payload, 'qtyDelta')
+      const quantity = toBaseQty(mode === 'transfer' ? Math.abs(enteredQuantity) : enteredQuantity, factor)
+      const rate = mode === 'transfer' ? get().stock.find(entry => entry.id === itemId)?.avg_cost || 0 : toBaseRate(draftNumber(payload, 'rate'), factor)
+      await get().saveStockAdjustment({ item_id: itemId, qty_delta: quantity, rate, narration: draftText(payload, 'narration', current.narration || ''), date_bs: todayBs(), stock_condition: draftText(payload, 'stockCondition', 'saleable') as StockCondition, transfer_to: mode === 'transfer' ? draftText(payload, 'transferTo', 'damaged') as 'damaged' | 'expired' : undefined }, 'Completed')
+      await get().deleteDraftVoucher(current.id)
+    } else {
+      throw new Error(`Bulk completion is not supported for ${current.type} drafts.`)
+    }
+
+    const completed = get().vouchers.find(entry => !beforeIds.has(entry.id) && entry.status === 'Completed')
+    if (!completed) throw new Error('The voucher was saved, but its completed record could not be identified. Refresh the page before retrying.')
+    return completed
   },
 
   deleteDraftVoucher: async (id) => {

@@ -6,9 +6,8 @@ import { selectedFiscalYearStartBs, vouchersInFiscalYear } from '@/lib/reports'
 import type { Voucher } from '@/types'
 import { ContraForm } from '@/components/forms/ContraForm'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
-import { VoucherTable } from '@/components/tables/VoucherTable'
+import { BulkDraftVoucherTable } from '@/pages/Transactions'
 import { Button } from '@/components/ui/button'
-import { Card } from '@/components/ui/card'
 
 export function ContraPage() {
   const allVouchers = useAppStore(state => state.vouchers)
@@ -18,7 +17,7 @@ export function ContraPage() {
   const vouchers = useMemo(() => vouchersInFiscalYear(allVouchers, selectedFiscalYearStartBs(company)).filter(voucher => voucher.type === 'Journal' && voucherIsContra(voucher)).sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq), [allVouchers, company])
   return <div>
     <PageHeader title="Contra Vouchers" description="Transfer money between Cash and Bank ledgers" action={<Button onClick={() => setOpen(true)}><Plus className="mr-1.5 h-4 w-4" />Add Contra</Button>} />
-    <PageContent><Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></Card></PageContent>
+    <PageContent><BulkDraftVoucherTable vouchers={vouchers} onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></PageContent>
     <ContraForm open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
   </div>
 }

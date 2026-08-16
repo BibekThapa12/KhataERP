@@ -10,6 +10,7 @@ export interface AppNotification {
 
 export const APP_NOTIFICATION_EVENT = 'khataerp:notification'
 const TOAST_DURATION_MS = 2000
+let successNotificationSuppressionDepth = 0
 
 function publishNotification(notification: Omit<AppNotification, 'id'>) {
   if (typeof window === 'undefined') return
@@ -19,7 +20,14 @@ function publishNotification(notification: Omit<AppNotification, 'id'>) {
 }
 
 export function notifySuccess(title: string, description?: string) {
+  if (successNotificationSuppressionDepth > 0) return
   publishNotification({ kind: 'success', title, description, duration: TOAST_DURATION_MS })
+}
+
+export async function withoutSuccessNotifications<T>(task: () => Promise<T>): Promise<T> {
+  successNotificationSuppressionDepth += 1
+  try { return await task() }
+  finally { successNotificationSuppressionDepth = Math.max(0, successNotificationSuppressionDepth - 1) }
 }
 
 export function notifyError(title: string, description?: string) {

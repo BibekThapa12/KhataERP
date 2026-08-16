@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -22,6 +22,7 @@ import { publicErrorMessage } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 import { companyBillingStatus, companyCanWrite } from '@/lib/billing'
+import { PopupCalculator } from '@/components/tools/PopupCalculator'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean }
@@ -357,11 +358,22 @@ export function AppShell() {
   const readOnly = !developerAdmin && !companyCanWrite(company)
   const [mobileOpen, setMobileOpen] = useState(false)
   const [shortcutVoucher, setShortcutVoucher] = useState<VoucherShortcutType | null>(null)
+  const [calculatorOpen, setCalculatorOpen] = useState(false)
   const [openReportGroup, setOpenReportGroup] = useState<string | null>(() => activeReportGroupId(location.pathname, location.search))
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
     const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
     return new Set(active && active.label !== 'Overview' ? [active.label] : [])
   })
+
+  useEffect(() => {
+    const openCalculator = (event: KeyboardEvent) => {
+      if (event.key !== 'F2' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      event.preventDefault()
+      if (!event.repeat) setCalculatorOpen(true)
+    }
+    window.addEventListener('keydown', openCalculator, true)
+    return () => window.removeEventListener('keydown', openCalculator, true)
+  }, [])
 
   useEffect(() => {
     isDeveloperAdmin().then(setDeveloperAdmin)
@@ -534,6 +546,7 @@ export function AppShell() {
         <div className="app-shortcuts flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Quick shortcuts">
           <div className="flex items-center gap-1.5 overflow-x-auto">
             <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Quick shortcuts</span>
+            <button type="button" onClick={() => setCalculatorOpen(true)} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Open Calculator (F2)"><kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">F2</kbd><Calculator className="h-3.5 w-3.5" /><span>Calculator</span></button>
             {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" disabled={readOnly} onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45" title={readOnly ? 'Renew the company plan to create vouchers.' : `New ${shortcut.label} Voucher (${shortcut.key})`}>
               <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
               <span>{shortcut.label}</span>
@@ -553,6 +566,7 @@ export function AppShell() {
       {(shortcutVoucher === 'Sales' || shortcutVoucher === 'Purchase') && <InvoiceForm type={shortcutVoucher} open voucher={null} onClose={() => setShortcutVoucher(null)} />}
       {(shortcutVoucher === 'Receipt' || shortcutVoucher === 'Payment') && <ReceiptPaymentForm type={shortcutVoucher} open voucher={null} onClose={() => setShortcutVoucher(null)} />}
       {shortcutVoucher === 'Journal' && <JournalForm open voucher={null} onClose={() => setShortcutVoucher(null)} />}
+      <PopupCalculator open={calculatorOpen} onOpenChange={setCalculatorOpen} />
     </div>
   )
 }

@@ -251,9 +251,13 @@ interface VoucherTableProps {
   alwaysShowFilters?: boolean
   onEdit?: (voucher: Voucher) => void
   printerOnly?: boolean
+  selectedIds?: Set<string>
+  onSelectionChange?: (ids: Set<string>) => void
+  selectionDisabled?: boolean
+  onStatusFilterChange?: (status: 'all' | 'Draft' | 'Completed') => void
 }
 
-export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters = false, onEdit, printerOnly = false }: VoucherTableProps) {
+export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters = false, onEdit, printerOnly = false, selectedIds, onSelectionChange, selectionDisabled = false, onStatusFilterChange }: VoucherTableProps) {
   const cancelV = useAppStore(s => s.cancelV)
   const deleteDraftVoucher = useAppStore(s => s.deleteDraftVoucher)
   const company = useAppStore(s => s.company)
@@ -277,6 +281,24 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     const text = [savedVoucherNumber(voucher), voucher.invoice_no, voucher.draft_no, voucher.seq, voucher.type, voucher.date_bs, voucher.narration, party, settlementId ? getAccount(settlementId)?.name : '', voucher.total, status, ...accountNames].join(' ').toLowerCase()
     return text.includes(query.toLowerCase())
   })
+  const selectable = !!selectedIds && !!onSelectionChange
+  const visibleIds = filteredVouchers.filter(voucher => voucher.status === 'Draft').map(voucher => voucher.id)
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds?.has(id))
+  const someVisibleSelected = visibleIds.some(id => selectedIds?.has(id))
+  const toggleVisible = () => {
+    if (!selectedIds || !onSelectionChange || selectionDisabled) return
+    const next = new Set(selectedIds)
+    if (allVisibleSelected) visibleIds.forEach(id => next.delete(id))
+    else visibleIds.forEach(id => next.add(id))
+    onSelectionChange(next)
+  }
+  const toggleRow = (id: string) => {
+    if (!selectedIds || !onSelectionChange || selectionDisabled) return
+    const next = new Set(selectedIds)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    onSelectionChange(next)
+  }
 
   const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
     const party = voucher.party_account_id
@@ -509,7 +531,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         {showFilterBar && <div className="flex flex-wrap items-center gap-2 border-b p-3">
           <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search voucher, party, date, user, amount..." className="h-9 w-full sm:w-80" />
           {(['all', 'Draft', 'Completed'] as const).map(status => (
-            <Button key={status} type="button" size="sm" variant={statusFilter === status ? 'default' : 'outline'} onClick={() => setStatusFilter(status)}>
+            <Button key={status} type="button" size="sm" variant={statusFilter === status ? 'default' : 'outline'} onClick={() => { setStatusFilter(status); onStatusFilterChange?.(status) }}>
               {status === 'all' ? 'All' : status}
             </Button>
           ))}
@@ -517,6 +539,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <table className="w-full text-sm border-collapse">
           <thead>
             <tr className="bg-muted/50">
+              {selectable && <th className="w-10 px-3 py-2.5 text-center"><input type="checkbox" className="h-4 w-4 accent-primary" checked={allVisibleSelected} ref={node => { if (node) node.indeterminate = someVisibleSelected && !allVisibleSelected }} onChange={toggleVisible} disabled={selectionDisabled || !visibleIds.length} aria-label="Select all filtered drafts" /></th>}
               <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">Date</th>
               <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">{journalTable ? 'Invoice No.' : 'Type'}</th>
               <th className="text-left text-xs font-semibold uppercase tracking-wider text-muted-foreground px-4 py-2.5">{journalTable ? 'Party / Account' : 'Ref / Party'}</th>
@@ -538,6 +561,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
               const journalAccountLabel = journalAccounts.join(', ') || '—'
               return (
                 <tr key={v.id} className={`border-t border-border hover:bg-muted/30 transition-colors ${v.cancelled ? 'opacity-50' : ''}`}>
+                  {selectable && <td className="w-10 px-3 py-3 text-center">{v.status === 'Draft' && <input type="checkbox" className="h-4 w-4 accent-primary" checked={selectedIds.has(v.id)} onChange={() => toggleRow(v.id)} disabled={selectionDisabled} aria-label={`Select ${v.type} ${savedVoucherNumber(v)}`} />}</td>}
                   <td className="px-4 py-3 whitespace-nowrap text-muted-foreground">{fmtDate(v.date_bs)}</td>
                   {journalTable ? <td className="px-4 py-3 whitespace-nowrap font-mono text-xs">{savedVoucherNumber(v)}</td> : <td className="px-4 py-3"><Badge variant={voucherBadgeVariant(v.type, v.cancelled)}>{v.type}</Badge></td>}
                   <td className="px-4 py-3">
