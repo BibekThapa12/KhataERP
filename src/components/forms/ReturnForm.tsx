@@ -315,7 +315,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
   return (
-    <Dialog open={open} onOpenChange={value => { if (!value && confirmDiscard()) onClose() }}>
+    <Dialog open={open} onOpenChange={value => { if (!value) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
       <DialogContent onClickCapture={event => { const target = event.target; if (target instanceof Element && target.closest('button')?.textContent?.includes('Add item')) pendingManualLineFocus.current = true }} className="voucher-dialog max-w-4xl max-h-[92vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
@@ -352,7 +352,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         </div>
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={deleteDraft} disabled={saving}>Delete Draft</Button>}
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
           <Button onClick={() => save('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => save('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>

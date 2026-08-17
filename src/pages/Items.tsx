@@ -160,7 +160,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const canSaveDraft = !voucher || voucher.status === 'Draft'
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
-  return <Dialog open={open} onOpenChange={value => { if (!value && confirmDiscard()) onClose() }}>
+  return <Dialog open={open} onOpenChange={value => { if (!value) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
     <DialogContent className="voucher-dialog max-w-2xl">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
@@ -173,7 +173,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       </div>
       <DialogFooter className="flex-row flex-wrap justify-end gap-2 space-x-0">
         {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}><Trash2 className="mr-1 h-4 w-4" />Delete Draft</Button>}
-        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
         {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
         <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
         <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>

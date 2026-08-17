@@ -9,6 +9,7 @@ import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
 import { AppToaster } from '@/components/AppToaster'
 import { VoucherTable } from '@/components/tables/VoucherTable'
+import { UnsavedChangesDialogHost } from '@/components/UnsavedChangesDialog'
 
 const LoginPage = lazy(() => import('@/pages/Login').then(m => ({ default: m.LoginPage })))
 const ResetPasswordPage = lazy(() => import('@/pages/ResetPassword').then(m => ({ default: m.ResetPasswordPage })))
@@ -221,6 +222,7 @@ export default function App() {
   return (
     <AppErrorBoundary>
       <AppToaster />
+      <UnsavedChangesDialogHost />
       <VoucherTable vouchers={[]} printerOnly />
       <Analytics />
       <SpeedInsights />

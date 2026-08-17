@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldInitializeForm, stableFormSnapshot, UNSAVED_CHANGES_MESSAGE } from './unsavedChanges'
+import { requestUnsavedChangesConfirmation, resolveUnsavedChangesConfirmation, shouldInitializeForm, stableFormSnapshot, subscribeUnsavedChangesConfirmation, UNSAVED_CHANGES_MESSAGE } from './unsavedChanges'
 
 describe('voucher form edit protection', () => {
   it('initializes only for the first load or a different voucher', () => {
@@ -19,5 +19,16 @@ describe('voucher form edit protection', () => {
 
   it('uses the required warning text', () => {
     expect(UNSAVED_CHANGES_MESSAGE).toBe('You have unsaved changes. Are you sure you want to leave?')
+  })
+
+  it('resolves the app confirmation only after the user chooses', async () => {
+    const states: boolean[] = []
+    const unsubscribe = subscribeUnsavedChangesConfirmation(open => states.push(open))
+    const confirmation = requestUnsavedChangesConfirmation()
+    expect(states.at(-1)).toBe(true)
+    resolveUnsavedChangesConfirmation(true)
+    await expect(confirmation).resolves.toBe(true)
+    expect(states.at(-1)).toBe(false)
+    unsubscribe()
   })
 })

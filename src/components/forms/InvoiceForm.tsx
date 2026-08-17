@@ -367,7 +367,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   return (
     <>
-      <Dialog open={open} onOpenChange={o => { if (!o && confirmDiscard()) onClose() }}>
+      <Dialog open={open} onOpenChange={o => { if (!o) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
         <DialogContent className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
           <DialogHeader>
             <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
@@ -508,7 +508,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
           <DialogFooter>
             {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
-            <Button variant="outline" tabIndex={-1} onClick={onClose}>Cancel</Button>
+            <Button variant="outline" tabIndex={-1} onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
             {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
               {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
             </Button>}

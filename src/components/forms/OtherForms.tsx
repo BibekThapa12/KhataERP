@@ -348,7 +348,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
 
   return (
     <>
-    <Dialog open={open} onOpenChange={o => { if (!o && confirmReceiptPaymentDiscard()) onClose() }}>
+    <Dialog open={open} onOpenChange={o => { if (!o) void confirmReceiptPaymentDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
@@ -398,7 +398,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         </div>
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={() => void confirmReceiptPaymentDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
           <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
@@ -595,7 +595,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
 
   return (
     <>
-    <Dialog open={open} onOpenChange={o => { if (!o && confirmJournalDiscard()) onClose() }}>
+    <Dialog open={open} onOpenChange={o => { if (!o) void confirmJournalDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
       <DialogContent className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground -mt-2">
@@ -658,7 +658,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </div>
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={() => void confirmJournalDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
           {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
           <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving || !balanced} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>

@@ -146,7 +146,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   }
 
   return <>
-    <Dialog open={open} onOpenChange={next => { if (!next && confirmDiscard()) onClose() }}>
+    <Dialog open={open} onOpenChange={next => { if (!next) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
       <DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Edit' : 'Add'} {entryType}</DialogTitle></DialogHeader>
         <p className="-mt-2 text-sm text-muted-foreground">No debit or credit knowledge needed. Choose where the money moved and what it was for.</p>
@@ -180,7 +180,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
         </div>
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}
-          <Button variant="outline" onClick={onClose}>Cancel</Button>
+          <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
           {(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}
           <Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : `Complete ${entryType}`}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
