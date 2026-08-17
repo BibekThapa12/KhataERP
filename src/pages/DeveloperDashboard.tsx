@@ -12,6 +12,7 @@ import {
   fetchDeveloperSchemaStatus,
   fetchDeveloperUserCompanyLicenses,
   fetchDeveloperBackupStatus,
+  fetchDeveloperPerformanceSummary,
   startDeveloperBackupRun,
   exportDeveloperCompanySnapshot,
   recordDeveloperCompanyBackupResult,
@@ -29,6 +30,7 @@ import {
   type DeveloperBackupRun,
   type DeveloperCompanyBackupStatus,
   type DeveloperBackupAgent,
+  type DeveloperPerformanceSummary,
 } from '@/lib/supabase'
 import { fmtDate } from '@/lib/utils'
 import { publicErrorMessage } from '@/lib/security'
@@ -68,7 +70,7 @@ interface DeveloperData {
 }
 
 type SupabaseStatus = Awaited<ReturnType<typeof checkSupabaseConnectionStatus>>
-type DeveloperTab = 'overview' | 'license' | 'companies' | 'modules' | 'users' | 'billing' | 'logs' | 'notes' | 'system'
+type DeveloperTab = 'overview' | 'license' | 'companies' | 'modules' | 'users' | 'billing' | 'logs' | 'notes' | 'performance' | 'system'
 type DeveloperUserFilter = 'all' | 'expiring' | 'errors' | 'suspended' | 'limit'
 
 const today = new Date()
@@ -785,6 +787,26 @@ function LogsTab({ data, companies }: { data?: DeveloperData; companies: Company
   )
 }
 
+function PerformanceTab() {
+  const [summary, setSummary] = useState<DeveloperPerformanceSummary | null>(null)
+  const [days, setDays] = useState(7)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const load = async (windowDays = days) => {
+    setLoading(true); setError('')
+    try { setSummary(await fetchDeveloperPerformanceSummary(windowDays)) }
+    catch (cause) { setError(publicErrorMessage(cause, 'loading performance metrics')) }
+    finally { setLoading(false) }
+  }
+  useEffect(() => { void load(days) }, [days])
+  return <DashboardCard title="CRUD Performance" Icon={Activity} action={<div className="flex gap-2"><SearchableSelect value={String(days)} onValueChange={value => setDays(Number(value))} options={[{ value: '1', label: '24 hours' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days' }]} className="w-32" /><Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}><RefreshCcw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</Button></div>}>
+    {error && <p className="text-sm text-destructive">{error}</p>}
+    <div className="grid gap-3 sm:grid-cols-3"><MetricLine label="Samples" value={summary?.total_samples || 0} /><MetricLine label="Target p50" value="< 500 ms" /><MetricLine label="Target p95" value="< 1,500 ms" /></div>
+    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="p-2">Operation</th><th className="p-2 text-right">Samples</th><th className="p-2 text-right">p50</th><th className="p-2 text-right">p95</th><th className="p-2 text-right">p99</th><th className="p-2 text-right">Errors</th><th className="p-2 text-right">Max</th></tr></thead><tbody>{(summary?.operations || []).map(row => <tr key={row.operation} className="border-t"><td className="p-2 font-medium">{row.operation.replaceAll('_', ' ')}</td><td className="p-2 text-right num">{row.samples}</td><td className="p-2 text-right num">{row.p50_ms} ms</td><td className={`p-2 text-right num ${row.p95_ms > 1500 ? 'text-destructive' : 'text-emerald-700'}`}>{row.p95_ms} ms</td><td className="p-2 text-right num">{row.p99_ms} ms</td><td className="p-2 text-right num">{row.error_rate}%</td><td className="p-2 text-right num">{row.max_ms} ms</td></tr>)}</tbody></table>{!loading && !summary?.operations.length && <p className="p-6 text-center text-sm text-muted-foreground">Performance samples will appear after users perform CRUD operations.</p>}</div>
+    {!!summary?.slowest_stages?.length && <div><p className="mb-2 text-sm font-semibold">Slowest stages</p><div className="grid gap-2 md:grid-cols-2">{summary.slowest_stages.slice(0, 8).map(row => <div key={`${row.category}:${row.stage}`} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"><span><strong>{row.stage.replaceAll('_', ' ')}</strong><small className="ml-2 text-muted-foreground">{row.category}</small></span><span className="num">p95 {row.p95_ms} ms</span></div>)}</div></div>}
+  </DashboardCard>
+}
+
 function SystemTab({
   data,
   loading,
@@ -965,6 +987,7 @@ function DeveloperUserManagementPanel({
             <TabsTrigger value="billing">Billing</TabsTrigger>
             <TabsTrigger value="logs">Logs</TabsTrigger>
             <TabsTrigger value="notes">Notes</TabsTrigger>
+            <TabsTrigger value="performance">Performance</TabsTrigger>
             <TabsTrigger value="system">System</TabsTrigger>
           </TabsList>
         </div>
@@ -976,6 +999,7 @@ function DeveloperUserManagementPanel({
         <TabsContent value="billing"><DashboardCard title="Billing" Icon={FileText}><MetricLine label="License Status" value={row.license.license_status} /><MetricLine label="Company Limit" value={row.license.unlimited_companies ? 'Unlimited' : row.license.max_companies} /><p className="text-sm text-muted-foreground">No separate billing backend is currently installed.</p></DashboardCard></TabsContent>
         <TabsContent value="logs"><LogsTab data={data} companies={companies} /></TabsContent>
         <TabsContent value="notes"><DeveloperNotesCard company={selectedCompany} onSaved={onRefresh} /></TabsContent>
+        <TabsContent value="performance"><PerformanceTab /></TabsContent>
         <TabsContent value="system"><SystemTab data={systemData} loading={systemLoading} schemaStatus={schemaStatus} supabaseStatus={supabaseStatus} lastSync={lastSync} clearingErrors={clearingErrors} onClearErrors={onClearErrors} /></TabsContent>
       </Tabs>
       <CompanyDangerActions company={selectedCompany} data={data} onSaved={onRefresh} />

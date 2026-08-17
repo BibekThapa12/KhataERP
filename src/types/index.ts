@@ -204,6 +204,7 @@ export interface Company {
   suspended?: boolean
   fiscal_year_start: string
   fiscal_year_configured?: boolean
+  bootstrap_version?: number
   created_at?: string
 }
 

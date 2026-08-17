@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
-  insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, insertItem,
+  insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, createPartyWithLedgerAtomic, insertItem,
   insertVoucher, insertDraftVoucher, cancelVoucher, deleteVoucher, updateCompany,
   updateVoucher, updateDraftVoucher, getOrCreateCompany,
   fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertAccountCategories, insertItemCategory,
@@ -38,6 +38,7 @@ import { buildContraLines, resolveBankChargesAccountId, type ContraSaveParams } 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
+const COMPANY_DATA_REPAIR_VERSION = 1
 const nextVoucherNumberText = (value: string) => value.replace(/(\d+)$/, match => String(Number(match) + 1).padStart(match.length, '0'))
 
 // Auth initialization, token events, and realtime notifications can arrive
@@ -74,7 +75,7 @@ function rememberedActiveCompany(userId: string) {
 }
 
 async function measuredWrite<T>(context: WriteTraceContext, task: (trace: WritePerformanceTrace) => Promise<T>): Promise<T> {
-  const trace = beginWriteTrace(context)
+  const trace = beginWriteTrace({ ...context, companySize: useAppStore.getState().vouchers.length })
   try {
     const result = await task(trace)
     trace.finish(true)
@@ -571,6 +572,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       ])
       const parties = [...new Map(fetchedParties.map(party => [party.account_id, party])).values()]
 
+      if ((company.bootstrap_version ?? 0) < COMPANY_DATA_REPAIR_VERSION) {
       const defaults = defaultChartOfAccounts(company.id) as Account[]
       const existingDefaultKeys = new Set(
         rawAccounts
@@ -595,14 +597,14 @@ export const useAppStore = create<AppState>((set, get) => ({
           const existing = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
           return !existing || existing.parent_category_id !== parentId || !existing.is_system || existing.is_archived
         })
-        const saved = await insertAccountCategories(changed.map(spec => ({
+        const saved = changed.length ? await insertAccountCategories(changed.map(spec => ({
           company_id: company.id,
           name: spec.name,
           account_type: spec.account_type,
           parent_category_id: spec.parent_key ? groupByKey.get(spec.parent_key)?.id || null : null,
           is_system: true,
           is_archived: false,
-        })))
+        }))) : []
         for (const category of saved) {
           const existingIndex = accountCategories.findIndex(entry => entry.id === category.id)
           if (existingIndex >= 0) accountCategories[existingIndex] = category
@@ -663,7 +665,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const missingLegacyGroups = [...new Map(rawAccounts
         .filter(account => !account.category_id && account.group && !accountCategories.some(category => category.name === account.group && category.account_type === account.type))
         .map(account => [`${account.type}:${account.group}`, { company_id: company.id, name: account.group, account_type: account.type, parent_category_id: null, is_system: false, is_archived: false }])).values()]
-      const createdLegacyGroups = await insertAccountCategories(missingLegacyGroups)
+      const createdLegacyGroups = missingLegacyGroups.length ? await insertAccountCategories(missingLegacyGroups) : []
       accountCategories.push(...createdLegacyGroups.filter(category => !accountCategories.some(existing => existing.id === category.id)))
 
       for (const account of rawAccounts) {
@@ -690,8 +692,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         const repairs = { category_id: category.id, group: terminology.category, type: terminology.accountType, is_party: true }
         applyAccountRepairs(account, repairs)
       }
-      await upsertAccounts(rawAccounts.filter(account => dirtyAccountIds.has(account.id)))
-      parties.push(...await insertParties(missingPartyRows))
+      const repairedAccounts = rawAccounts.filter(account => dirtyAccountIds.has(account.id))
+      if (repairedAccounts.length) await upsertAccounts(repairedAccounts)
+      if (missingPartyRows.length) parties.push(...await insertParties(missingPartyRows))
 
       let generalItemCategory = itemCategories.find(category => category.name === 'General')
       if (!generalItemCategory) {
@@ -699,8 +702,11 @@ export const useAppStore = create<AppState>((set, get) => ({
         itemCategories.push(generalItemCategory)
       }
       const uncategorizedItems = items.filter(item => !item.category_id)
-      await updateItemsByIds(uncategorizedItems.map(item => item.id), { category_id: generalItemCategory.id })
+      if (uncategorizedItems.length) await updateItemsByIds(uncategorizedItems.map(item => item.id), { category_id: generalItemCategory.id })
       for (const item of uncategorizedItems) item.category_id = generalItemCategory.id
+      await updateCompany(company.id, { bootstrap_version: COMPANY_DATA_REPAIR_VERSION })
+      company = { ...company, bootstrap_version: COMPANY_DATA_REPAIR_VERSION }
+      }
 
       const accounts = recomputeAllBalances(rawAccounts, vouchers)
       const stock = recomputeStock(items, vouchers, valuationMethod(company))
@@ -788,8 +794,8 @@ export const useAppStore = create<AppState>((set, get) => ({
       bank_account_no: null,
       bank_branch: null,
     }
-    await trace.measure('party_ledger_insert', () => insertAccount(newAccount), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
-    const newParty = await trace.measure('party_master_insert', () => insertParty({ company_id: company.id, name: partyName, type, phone, pan_vat, address, default_credit_days, account_id: accountId, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' })
+    if (!category?.id) throw new Error(`The ${categoryName} category is missing. Reload company data and try again.`)
+    const newParty = await trace.measure('party_and_ledger_insert', () => createPartyWithLedgerAtomic({ company_id: company.id, account_id: accountId, name: partyName, type, phone, pan_vat, address, default_credit_days, opening_balance, category_id: category.id }), { category: 'network_database', query: true, dbFunction: 'rpc:create_party_with_ledger_atomic' })
     const nextState = trace.sync('affected_ledger_recompute', () => {
       const updatedRawAccounts = [...rawAccounts, { ...newAccount, balance: 0 }]
       return { rawAccounts: updatedRawAccounts, accounts: recomputeAffectedBalances(updatedRawAccounts, get().accounts, vouchers, [accountId]), parties: [...get().parties, newParty] }
@@ -837,8 +843,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const category = get().accountCategories.find(entry => entry.id === category_id)
     const partyType = partyTypeForCategory(category)
     const newAcc = { id: crypto.randomUUID(), company_id: company.id, name: ledgerName, type, group, category_id, is_system: false, is_party: !!partyType, is_archived: false, opening_balance, address, contact_no, pan_no, credit_days, bank_account_no, bank_branch }
-    await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' })
-    const newParty = partyType ? await trace.measure('linked_party_insert', () => insertParty({ company_id: company.id, name: ledgerName, type: partyType, phone: contact_no, pan_vat: pan_no, address, default_credit_days: credit_days || 0, account_id: newAcc.id, is_archived: false }), { category: 'network_database', query: true, dbFunction: 'postgrest:parties.insert' }) : null
+    const newParty = partyType && category?.id
+      ? await trace.measure('party_and_ledger_insert', () => createPartyWithLedgerAtomic({ company_id: company.id, account_id: newAcc.id, name: ledgerName, type: partyType, category_id: category.id, opening_balance, phone: contact_no || undefined, pan_vat: pan_no || undefined, address: address || undefined, default_credit_days: credit_days || 0 }), { category: 'network_database', query: true, dbFunction: 'rpc:create_party_with_ledger_atomic' })
+      : (await trace.measure('account_insert', () => insertAccount(newAcc), { category: 'network_database', query: true, dbFunction: 'postgrest:accounts.insert' }), null)
     const updatedRaw = [...rawAccounts, { ...newAcc, balance: 0 }]
     const accounts = recomputeAffectedBalances(updatedRaw, get().accounts, vouchers, [newAcc.id])
     set({ rawAccounts: updatedRaw, accounts, parties: newParty ? [...get().parties, newParty] : get().parties })

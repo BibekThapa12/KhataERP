@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
-import type { WritePerformanceTrace } from '@/lib/writePerformance'
+import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type WritePerformanceTrace } from '@/lib/writePerformance'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
 
@@ -100,7 +100,36 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,allow_admin_chronological_bypass,enforce_sales_invoice_chronology,print_format,show_company_details_on_sales_invoice,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,plan_expires_at,suspended,fiscal_year_start,fiscal_year_configured,created_at'
+setWritePerformanceReporter((sample: PersistedWritePerformanceSample) => {
+  const { company_id, ...safeSample } = sample
+  void supabase.rpc('record_performance_sample', { p_company_id: company_id, p_sample: safeSample })
+})
+
+export interface DeveloperPerformanceOperation {
+  operation: string
+  samples: number
+  p50_ms: number
+  p95_ms: number
+  p99_ms: number
+  average_ms: number
+  error_rate: number
+  max_ms: number
+}
+
+export interface DeveloperPerformanceSummary {
+  window_days: number
+  total_samples: number
+  operations: DeveloperPerformanceOperation[]
+  slowest_stages: Array<{ stage: string; category: string; samples: number; average_ms: number; p95_ms: number }>
+}
+
+export async function fetchDeveloperPerformanceSummary(days = 7): Promise<DeveloperPerformanceSummary> {
+  const { data, error } = await supabase.rpc('developer_performance_summary', { p_days: days })
+  if (error) throw error
+  return (data || { window_days: days, total_samples: 0, operations: [], slowest_stages: [] }) as DeveloperPerformanceSummary
+}
+
+const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_enabled,inventory_valuation_method,sales_prefix,purchase_prefix,receipt_prefix,payment_prefix,sales_return_prefix,purchase_return_prefix,journal_numbering_mode,reset_numbering_fiscal_year,allow_admin_chronological_bypass,enforce_sales_invoice_chronology,print_format,show_company_details_on_sales_invoice,invoice_terms,payment_qr_text,logo_url,plan_status,trial_ends_at,plan_expires_at,suspended,fiscal_year_start,fiscal_year_configured,bootstrap_version,created_at'
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
 const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
@@ -871,6 +900,88 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
     .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
 }
 
+export async function createPartyWithLedgerAtomic(params: {
+  company_id: string
+  account_id: string
+  name: string
+  type: 'customer' | 'supplier'
+  category_id: string
+  opening_balance: number
+  phone?: string
+  pan_vat?: string
+  address?: string
+  default_credit_days: number
+}): Promise<Party> {
+  const { data, error } = await supabase.rpc('create_party_with_ledger_atomic', {
+    p_company_id: params.company_id,
+    p_account_id: params.account_id,
+    p_name: params.name,
+    p_party_type: params.type,
+    p_category_id: params.category_id,
+    p_opening_balance: params.opening_balance,
+    p_phone: params.phone || null,
+    p_pan_vat: params.pan_vat || null,
+    p_address: params.address || null,
+    p_credit_days: params.default_credit_days,
+  })
+  if (error) throw error
+  return data as Party
+}
+
+export interface VoucherPageCursor {
+  date_bs_key: number
+  seq: number
+  id: string
+}
+
+export interface VoucherPage {
+  records: Voucher[]
+  next_cursor: VoucherPageCursor | null
+  has_more: boolean
+}
+
+export interface VoucherPageQuery {
+  limit?: number
+  cursor?: VoucherPageCursor | null
+  status?: Voucher['status']
+  type?: Voucher['type']
+  from_date_bs_key?: number
+  to_date_bs_key?: number
+  invoice_number?: string
+}
+
+/** Stable server-side page used by large voucher lists. Reports can request
+ * their own date range instead of requiring the entire company history. */
+export async function fetchVoucherPage(company_id: string, options: VoucherPageQuery = {}): Promise<VoucherPage> {
+  const limit = Math.max(1, Math.min(options.limit || 100, 250))
+  let query = supabase.from('vouchers').select(VOUCHER_WITH_CHILDREN_FIELDS)
+    .eq('company_id', company_id)
+    .order('date_bs_key', { ascending: false })
+    .order('seq', { ascending: false })
+    .order('id', { ascending: false })
+    .limit(limit + 1)
+  if (options.status) query = query.eq('status', options.status)
+  if (options.type) query = query.eq('type', options.type)
+  if (options.from_date_bs_key != null) query = query.gte('date_bs_key', options.from_date_bs_key)
+  if (options.to_date_bs_key != null) query = query.lte('date_bs_key', options.to_date_bs_key)
+  if (options.invoice_number?.trim()) query = query.ilike('invoice_no', `%${options.invoice_number.trim().replaceAll('%', '\\%').replaceAll('_', '\\_')}%`)
+  if (options.cursor) {
+    const { date_bs_key, seq, id } = options.cursor
+    query = query.or(`date_bs_key.lt.${date_bs_key},and(date_bs_key.eq.${date_bs_key},seq.lt.${seq}),and(date_bs_key.eq.${date_bs_key},seq.eq.${seq},id.lt.${id})`)
+  }
+  const { data, error } = await query
+  if (error) throw error
+  const rows = (data || []).map(row => normalizeVoucherDates(row) as Voucher)
+  const hasMore = rows.length > limit
+  const records = hasMore ? rows.slice(0, limit) : rows
+  const tail = records.at(-1)
+  return {
+    records,
+    has_more: hasMore,
+    next_cursor: tail ? { date_bs_key: tail.date_bs_key, seq: tail.seq, id: tail.id } : null,
+  }
+}
+
 interface InsertVoucherPayload {
   voucher: Omit<Voucher, 'id' | 'seq' | 'created_at' | 'lines' | 'stock_lines' | 'invoice_items' | 'settlements' | 'party'>
   lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]
@@ -934,6 +1045,7 @@ function atomicVoucherRequest(
   numbering?: AtomicVoucherNumbering,
   audit?: AtomicVoucherAudit,
   idempotencyKey?: string,
+  traceId?: string,
 ) {
   return supabase.rpc('save_voucher_with_document_metadata_atomic', {
     p_voucher: idempotencyKey ? { ...voucher, idempotency_key: idempotencyKey } : voucher,
@@ -947,10 +1059,27 @@ function atomicVoucherRequest(
     p_period_start_key: numbering?.periodStartKey ?? null,
     p_next_period_start_key: numbering?.nextPeriodStartKey ?? null,
     p_audit_event_type: audit?.eventType || null,
-    p_audit_metadata: audit?.metadata || {},
+    p_audit_metadata: traceId ? { ...(audit?.metadata || {}), performance_trace_id: traceId } : audit?.metadata || {},
     p_manual_invoice_no: voucher.invoice_no || null,
     p_supplier_invoice_no: voucher.supplier_invoice_no || null,
   })
+}
+
+function isTransientRequestFailure(error: unknown) {
+  const message = error && typeof error === 'object' && 'message' in error ? String((error as { message?: unknown }).message || '') : String(error || '')
+  const code = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || '') : ''
+  return /failed to fetch|network|timeout|timed out|connection|gateway|temporar/i.test(message) || /^(502|503|504|PGRST000)$/.test(code)
+}
+
+async function runIdempotentVoucherRequestWithRetry<T extends { error: unknown }>(request: () => PromiseLike<T>): Promise<T> {
+  try {
+    const first = await request()
+    if (!first.error || !isTransientRequestFailure(first.error)) return first
+  } catch (error) {
+    if (!isTransientRequestFailure(error)) throw error
+  }
+  await new Promise(resolve => globalThis.setTimeout(resolve, 150))
+  return await request()
 }
 
 export async function insertVoucher({ voucher, lines, stock_lines, invoice_items, settlements, numbering, audit, trace }: InsertVoucherPayload): Promise<Voucher> {
@@ -959,7 +1088,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
   const fingerprint = voucherRequestFingerprint(voucher, lines, stock_lines, invoice_items, settlements)
   const idempotencyKey = voucherIdempotencyKeys.get(fingerprint) || crypto.randomUUID()
   voucherIdempotencyKeys.set(fingerprint, idempotencyKey)
-  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit, idempotencyKey)
+  const request = () => runIdempotentVoucherRequestWithRetry(() => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit, idempotencyKey, trace?.traceId))
   const { data, error } = trace
     ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
     : await request()
@@ -974,7 +1103,7 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
 }
 
 export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements, audit, trace }: UpdateVoucherPayload): Promise<Voucher> {
-  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit)
+  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit, undefined, trace?.traceId)
   const { data, error } = trace
     ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
     : await request()

@@ -3,6 +3,7 @@ export interface WriteTraceContext {
   companyId: string
   recordType: string
   lineItems?: number
+  companySize?: number
 }
 
 interface WriteStageOptions {
@@ -22,11 +23,38 @@ interface WritePerformanceSample extends WriteTraceContext {
   errorName?: string
 }
 
+export interface PersistedWritePerformanceSample {
+  trace_id: string
+  company_id: string
+  operation: string
+  record_type: string
+  duration_ms: number
+  success: boolean
+  line_items: number
+  query_count: number
+  network_class?: string
+  company_size_band: 'under_1k' | '1k_10k' | '10k_50k' | '50k_100k' | 'over_100k'
+  app_version?: string
+  error_code?: string
+  stages: Array<{ stage: string; category: string; duration_ms: number; success: boolean }>
+}
+
+type PerformanceReporter = (sample: PersistedWritePerformanceSample) => void | Promise<void>
+let performanceReporter: PerformanceReporter | undefined
+
+export function setWritePerformanceReporter(reporter: PerformanceReporter) {
+  performanceReporter = reporter
+}
+
 const STORAGE_KEY = 'khataerp:write-performance'
 
+export function performanceCompanySizeBand(companySize: number): PersistedWritePerformanceSample['company_size_band'] {
+  return companySize < 1000 ? 'under_1k' : companySize < 10000 ? '1k_10k' : companySize < 50000 ? '10k_50k' : companySize <= 100000 ? '50k_100k' : 'over_100k'
+}
+
 function writeTracingEnabled() {
-  if (!import.meta.env.DEV) return false
   if (import.meta.env.VITE_WRITE_PERF === 'true') return true
+  if (!import.meta.env.DEV) return false
   try {
     return window.localStorage.getItem(STORAGE_KEY) === '1'
   } catch {
@@ -47,13 +75,17 @@ function report(sample: WritePerformanceSample) {
 
 export class WritePerformanceTrace {
   readonly enabled: boolean
+  private readonly consoleEnabled: boolean
   readonly traceId: string
   private readonly startedAt: number
   private queryCount = 0
   private finished = false
+  private readonly sampled = Math.random() < 0.1
+  private readonly stages: PersistedWritePerformanceSample['stages'] = []
 
   constructor(readonly context: WriteTraceContext) {
-    this.enabled = writeTracingEnabled()
+    this.consoleEnabled = writeTracingEnabled()
+    this.enabled = this.consoleEnabled || !!performanceReporter
     this.traceId = crypto.randomUUID()
     this.startedAt = timestamp()
   }
@@ -85,23 +117,45 @@ export class WritePerformanceTrace {
   }
 
   finish(success = true, error?: unknown) {
-    if (!this.enabled || this.finished) return
+    if (this.finished) return
     this.finished = true
-    report({
+    const durationMs = Number((timestamp() - this.startedAt).toFixed(2))
+    const totalSample: WritePerformanceSample = {
       ...this.context,
       traceId: this.traceId,
       stage: 'total',
       category: 'total',
-      durationMs: Number((timestamp() - this.startedAt).toFixed(2)),
+      durationMs,
       success,
       queryCount: this.queryCount,
       errorName: error instanceof Error ? error.name : undefined,
-    })
+    }
+    if (this.consoleEnabled) report(totalSample)
+    if (performanceReporter && (this.sampled || !success || durationMs >= 1000)) {
+      const companySize = this.context.companySize || 0
+      const connection = typeof navigator === 'undefined' ? undefined : (navigator as Navigator & { connection?: { effectiveType?: string } }).connection
+      const errorCode = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || '') : error instanceof Error ? error.name : undefined
+      void Promise.resolve(performanceReporter({
+        trace_id: this.traceId,
+        company_id: this.context.companyId,
+        operation: this.context.operation,
+        record_type: this.context.recordType,
+        duration_ms: durationMs,
+        success,
+        line_items: this.context.lineItems || 0,
+        query_count: this.queryCount,
+        network_class: connection?.effectiveType,
+        company_size_band: performanceCompanySizeBand(companySize),
+        app_version: import.meta.env.VITE_APP_VERSION || 'development',
+        error_code: errorCode,
+        stages: this.stages,
+      })).catch(() => { /* performance reporting must never delay or fail a business write */ })
+    }
   }
 
   private emit(stage: string, duration: number, success: boolean, options: WriteStageOptions, error?: unknown) {
     if (options.query) this.queryCount += 1
-    report({
+    const sample = {
       ...this.context,
       traceId: this.traceId,
       stage,
@@ -111,7 +165,9 @@ export class WritePerformanceTrace {
       queryCount: this.queryCount,
       dbFunction: options.dbFunction,
       errorName: error instanceof Error ? error.name : undefined,
-    })
+    }
+    this.stages.push({ stage, category: options.category || 'frontend', duration_ms: Number(duration.toFixed(2)), success })
+    if (this.consoleEnabled) report(sample)
   }
 }
 
