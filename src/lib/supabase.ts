@@ -1048,7 +1048,7 @@ function atomicVoucherRequest(
   idempotencyKey?: string,
   traceId?: string,
 ) {
-  return supabase.rpc('save_voucher_with_document_metadata_atomic', {
+  return supabase.rpc('save_voucher_with_performance_timing_atomic', {
     p_voucher: idempotencyKey ? { ...voucher, idempotency_key: idempotencyKey } : voucher,
     p_lines: lines,
     p_stock_lines: stockLines || [],
@@ -1090,8 +1090,9 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
   const idempotencyKey = voucherIdempotencyKeys.get(fingerprint) || crypto.randomUUID()
   voucherIdempotencyKeys.set(fingerprint, idempotencyKey)
   const request = () => runIdempotentVoucherRequestWithRetry(() => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, null, numbering, audit, idempotencyKey, trace?.traceId))
+  const requestStartedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
   const { data, error } = trace
-    ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
+    ? await trace.measure('atomic_voucher_post', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
     : await request()
   if (error) {
       globalThis.setTimeout(() => {
@@ -1099,16 +1100,33 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     }, 5 * 60 * 1000)
     throw error
   }
+  if (trace && data && typeof data === 'object') {
+    const postgresMs = Number((data as Record<string, unknown>)._performance && ((data as Record<string, unknown>)._performance as Record<string, unknown>).postgres_ms)
+    const requestEndedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
+    if (Number.isFinite(postgresMs)) {
+      trace.recordStage('postgres_execution', postgresMs, { category: 'network_database', dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
+      trace.recordStage('network_gateway_transfer', Math.max(0, requestEndedAt - requestStartedAt - postgresMs), { category: 'network_database' })
+    }
+  }
   voucherIdempotencyKeys.delete(fingerprint)
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
 export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements, audit, trace }: UpdateVoucherPayload): Promise<Voucher> {
   const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit, undefined, trace?.traceId)
+  const requestStartedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
   const { data, error } = trace
-    ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_document_metadata_atomic' })
+    ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
     : await request()
   if (error) throw error
+  if (trace && data && typeof data === 'object') {
+    const postgresMs = Number((data as Record<string, unknown>)._performance && ((data as Record<string, unknown>)._performance as Record<string, unknown>).postgres_ms)
+    const requestEndedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
+    if (Number.isFinite(postgresMs)) {
+      trace.recordStage('postgres_execution', postgresMs, { category: 'network_database', dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
+      trace.recordStage('network_gateway_transfer', Math.max(0, requestEndedAt - requestStartedAt - postgresMs), { category: 'network_database' })
+    }
+  }
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 

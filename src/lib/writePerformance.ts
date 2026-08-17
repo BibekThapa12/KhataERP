@@ -146,6 +146,11 @@ export class WritePerformanceTrace {
     }
   }
 
+  recordStage(stage: string, durationMs: number, options: WriteStageOptions = {}) {
+    if (!this.enabled || !Number.isFinite(durationMs) || durationMs < 0) return
+    this.emit(stage, durationMs, true, options)
+  }
+
   finish(success = true, error?: unknown) {
     if (this.finished) return
     this.finished = true
