@@ -32,6 +32,7 @@ import {
   type DeveloperBackupAgent,
   type DeveloperPerformanceSummary,
 } from '@/lib/supabase'
+import { getPerformanceIngestionStatus, subscribePerformanceIngestionStatus, type PerformanceIngestionStatus } from '@/lib/writePerformance'
 import { fmtDate } from '@/lib/utils'
 import { publicErrorMessage } from '@/lib/security'
 import { recomputeStock } from '@/lib/engine'
@@ -789,6 +790,7 @@ function LogsTab({ data, companies }: { data?: DeveloperData; companies: Company
 
 function PerformanceTab() {
   const [summary, setSummary] = useState<DeveloperPerformanceSummary | null>(null)
+  const [ingestionStatus, setIngestionStatus] = useState<PerformanceIngestionStatus | null>(() => getPerformanceIngestionStatus())
   const [days, setDays] = useState(7)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
@@ -799,10 +801,13 @@ function PerformanceTab() {
     finally { setLoading(false) }
   }
   useEffect(() => { void load(days) }, [days])
+  useEffect(() => subscribePerformanceIngestionStatus(setIngestionStatus), [])
   return <DashboardCard title="CRUD Performance" Icon={Activity} action={<div className="flex gap-2"><SearchableSelect value={String(days)} onValueChange={value => setDays(Number(value))} options={[{ value: '1', label: '24 hours' }, { value: '7', label: '7 days' }, { value: '30', label: '30 days' }]} className="w-32" /><Button size="sm" variant="outline" onClick={() => void load()} disabled={loading}><RefreshCcw className={`mr-1 h-3.5 w-3.5 ${loading ? 'animate-spin' : ''}`} />Refresh</Button></div>}>
     {error && <p className="text-sm text-destructive">{error}</p>}
+    {ingestionStatus?.state === 'error' && <div className="flex items-start gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"><AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" /><span>Performance collection failed in this browser (code {ingestionStatus.error_code || 'unknown'}). Confirm the performance migration is applied, then complete another voucher.</span></div>}
+    {ingestionStatus?.state === 'success' && <p className="flex items-center gap-1.5 text-xs text-emerald-700"><CheckCircle2 className="h-3.5 w-3.5" />Collector connected · last sample sent {new Date(ingestionStatus.checked_at).toLocaleString()}</p>}
     <div className="grid gap-3 sm:grid-cols-3"><MetricLine label="Samples" value={summary?.total_samples || 0} /><MetricLine label="Target p50" value="< 500 ms" /><MetricLine label="Target p95" value="< 1,500 ms" /></div>
-    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="p-2">Operation</th><th className="p-2 text-right">Samples</th><th className="p-2 text-right">p50</th><th className="p-2 text-right">p95</th><th className="p-2 text-right">p99</th><th className="p-2 text-right">Errors</th><th className="p-2 text-right">Max</th></tr></thead><tbody>{(summary?.operations || []).map(row => <tr key={row.operation} className="border-t"><td className="p-2 font-medium">{row.operation.replaceAll('_', ' ')}</td><td className="p-2 text-right num">{row.samples}</td><td className="p-2 text-right num">{row.p50_ms} ms</td><td className={`p-2 text-right num ${row.p95_ms > 1500 ? 'text-destructive' : 'text-emerald-700'}`}>{row.p95_ms} ms</td><td className="p-2 text-right num">{row.p99_ms} ms</td><td className="p-2 text-right num">{row.error_rate}%</td><td className="p-2 text-right num">{row.max_ms} ms</td></tr>)}</tbody></table>{!loading && !summary?.operations.length && <p className="p-6 text-center text-sm text-muted-foreground">Performance samples will appear after users perform CRUD operations.</p>}</div>
+    <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[680px] text-sm"><thead className="bg-muted/50 text-left text-xs uppercase text-muted-foreground"><tr><th className="p-2">Operation</th><th className="p-2 text-right">Samples</th><th className="p-2 text-right">p50</th><th className="p-2 text-right">p95</th><th className="p-2 text-right">p99</th><th className="p-2 text-right">Errors</th><th className="p-2 text-right">Max</th></tr></thead><tbody>{(summary?.operations || []).map(row => <tr key={row.operation} className="border-t"><td className="p-2 font-medium">{row.operation.replaceAll('_', ' ')}</td><td className="p-2 text-right num">{row.samples}</td><td className="p-2 text-right num">{row.p50_ms} ms</td><td className={`p-2 text-right num ${row.p95_ms > 1500 ? 'text-destructive' : 'text-emerald-700'}`}>{row.p95_ms} ms</td><td className="p-2 text-right num">{row.p99_ms} ms</td><td className="p-2 text-right num">{row.error_rate}%</td><td className="p-2 text-right num">{row.max_ms} ms</td></tr>)}</tbody></table>{!loading && !summary?.operations.length && <p className="p-6 text-center text-sm text-muted-foreground">No samples have been collected in this period. Complete a new Sales or Purchase voucher, then refresh. Earlier operations are not backfilled.</p>}</div>
     {!!summary?.slowest_stages?.length && <div><p className="mb-2 text-sm font-semibold">Slowest stages</p><div className="grid gap-2 md:grid-cols-2">{summary.slowest_stages.slice(0, 8).map(row => <div key={`${row.category}:${row.stage}`} className="flex items-center justify-between rounded-md border px-3 py-2 text-sm"><span><strong>{row.stage.replaceAll('_', ' ')}</strong><small className="ml-2 text-muted-foreground">{row.category}</small></span><span className="num">p95 {row.p95_ms} ms</span></div>)}</div></div>}
   </DashboardCard>
 }

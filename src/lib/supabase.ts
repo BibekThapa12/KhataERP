@@ -100,9 +100,10 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
-setWritePerformanceReporter((sample: PersistedWritePerformanceSample) => {
+setWritePerformanceReporter(async (sample: PersistedWritePerformanceSample) => {
   const { company_id, ...safeSample } = sample
-  void supabase.rpc('record_performance_sample', { p_company_id: company_id, p_sample: safeSample })
+  const { error } = await supabase.rpc('record_performance_sample', { p_company_id: company_id, p_sample: safeSample })
+  if (error) throw error
 })
 
 export interface DeveloperPerformanceOperation {
