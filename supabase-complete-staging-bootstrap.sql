@@ -5077,6 +5077,12 @@ begin
         raise exception 'VAT rate is outside the valid range';
       end if;
       calculated_vat := round(calculated_taxable * coalesce(voucher_record.vat_rate, 0) / 100, 6);
+      -- Preserve Sales/Purchase vouchers posted by the former two-decimal
+      -- engine when their stored VAT is ordinary half-paisa rounding.
+      if abs(coalesce(voucher_record.vat_amount, 0) - calculated_vat) > 0.005 then
+        raise exception 'Invoice totals do not match server-calculated values';
+      end if;
+      calculated_vat := coalesce(voucher_record.vat_amount, calculated_vat);
     else
       if calculated_discount < 0 or calculated_discount > calculated_subtotal then
         raise exception 'Return discount is outside the valid range';

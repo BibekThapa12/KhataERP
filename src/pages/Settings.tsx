@@ -174,6 +174,28 @@ function restorePercent(progress: RestoreProgress) {
   return Math.min(100, Math.round((progress.completed / progress.total) * 100))
 }
 
+function isTransientRestoreNetworkError(error: unknown) {
+  const message = error instanceof Error ? error.message : String(error || '')
+  return error instanceof TypeError || /failed to fetch|networkerror|network request failed|load failed|connection.*(closed|reset)/i.test(message)
+}
+
+async function restoreRequestWithRetry<T>(request: () => PromiseLike<T>, label: string, attempts = 3): Promise<T> {
+  let lastError: unknown
+  for (let attempt = 1; attempt <= attempts; attempt += 1) {
+    try {
+      return await request()
+    } catch (error) {
+      lastError = error
+      if (!isTransientRestoreNetworkError(error) || attempt === attempts) break
+      await new Promise(resolve => window.setTimeout(resolve, 400 * 2 ** (attempt - 1)))
+    }
+  }
+  if (isTransientRestoreNetworkError(lastError)) {
+    throw new Error(`Network connection was interrupted while ${label}. The request was retried ${attempts} times. Check the connection and retry the restore.`)
+  }
+  throw lastError
+}
+
 function RestoreProgressBox({ progress }: { progress: RestoreProgress }) {
   const percent = restorePercent(progress)
   const elapsed = Date.now() - progress.startedAt
@@ -417,8 +439,10 @@ export function SettingsPage() {
     const restoreStartedAt = Date.now()
     let completedStages = 0
     let totalStages = 1
+    let currentRestoreStep = 'reading the backup file'
     let restoreCounts: RestoreProgress['counts'] = []
     const showRestoreProgress = (step: string, detail = '', completed = completedStages) => {
+      currentRestoreStep = step.toLocaleLowerCase()
       setRestoreProgress({
         active: true,
         startedAt: restoreStartedAt,
@@ -745,7 +769,11 @@ export function SettingsPage() {
         if (item.id) invoiceItemIdMap.set(item.id, nextId)
         const conversionFactor = portablePositiveNumber(item.conversion_factor, 1)
         const qty = portableNumber(item.qty, 0)
-        const baseQty = qty / conversionFactor
+        // Preserve the backed-up base quantity. Older vouchers rounded unit
+        // conversions (for example 10 pcs / 24 = 0.4167) before creating the
+        // matching stock movement, so recalculating 0.416667 here breaks the
+        // invoice-to-stock integrity check during restore.
+        const baseQty = portablePositiveNumber(item.base_qty, qty / conversionFactor)
         const row = {
           ...withoutMeta(item as unknown as Record<string, unknown>),
           id: nextId,
@@ -829,13 +857,19 @@ export function SettingsPage() {
       finishRestoreStage('Cheque banks restored', `${sourceChequeBanks.length} bank record(s) mapped.`)
 
       showRestoreProgress('Restoring voucher status', 'Completing imported vouchers in date and serial order.')
-      for (const voucher of orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')) {
-        const { error } = await supabase
-          .from('vouchers')
-          .update({ status: voucher.status || 'Completed', completed_at: voucher.completed_at || new Date().toISOString() })
-          .eq('id', idMap.get(voucher.id)!)
+      const completedSourceVouchers = orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')
+      for (const [voucherIndex, voucher] of completedSourceVouchers.entries()) {
+        const voucherLabel = `${voucher.type} ${voucher.invoice_no || voucher.draft_no || voucher.id}`
+        showRestoreProgress('Restoring voucher status', `Completing ${voucherIndex + 1} of ${completedSourceVouchers.length}: ${voucherLabel}`)
+        const { error } = await restoreRequestWithRetry(
+          () => supabase
+            .from('vouchers')
+            .update({ status: voucher.status || 'Completed', completed_at: voucher.completed_at || new Date().toISOString() })
+            .eq('id', idMap.get(voucher.id)!),
+          `completing ${voucherLabel}`,
+        )
         if (error) {
-          throw new Error(`Could not restore completed status for ${voucher.type} ${voucher.invoice_no || voucher.draft_no || voucher.id}: ${error.message}`)
+          throw new Error(`Could not restore completed status for ${voucherLabel}: ${error.message}`)
         }
       }
       finishRestoreStage('Voucher statuses restored', 'Completed vouchers were restored in serial order.')
@@ -859,6 +893,20 @@ export function SettingsPage() {
         if (sourceCheque.status === 'cleared' && (!clearedDateBs || !clearedDateBsKey)) {
           throw new Error(`Cleared cheque ${sourceCheque.cheque_number} has no usable clearing date or linked voucher date.`)
         }
+        // Received cheques cleared before clearing-account metadata existed
+        // still have an authoritative destination in their linked Receipt:
+        // the non-party debit line for the cheque amount.
+        const legacyClearingAccountId = sourceCheque.status === 'cleared' && (sourceCheque.direction || 'received') === 'received'
+          ? linkedSourceVoucher?.lines?.find(line =>
+            line.account_id !== sourceCheque.party_ledger_id &&
+            portableRound(portableNumber(line.debit, 0)) === portableRound(portableNumber(sourceCheque.amount, 0)) &&
+            portableNumber(line.credit, 0) === 0
+          )?.account_id
+          : null
+        const clearingAccountId = sourceCheque.cleared_to_account_id || legacyClearingAccountId
+        if (sourceCheque.status === 'cleared' && (sourceCheque.direction || 'received') === 'received' && !clearingAccountId) {
+          throw new Error(`Cleared received cheque ${sourceCheque.cheque_number} has no clearing ledger and its linked Receipt cannot supply one.`)
+        }
         return {
           ...withoutMeta(sourceCheque as unknown as Record<string, unknown>, ['created_by', 'updated_by']),
           id: crypto.randomUUID(), company_id: company.id,
@@ -868,7 +916,7 @@ export function SettingsPage() {
           linked_voucher_id: linkedVoucherId,
           cleared_date_bs: clearedDateBs,
           cleared_date_bs_key: clearedDateBsKey,
-          cleared_to_account_id: resolveAccountId(sourceCheque.cleared_to_account_id, 'cheque clearing'),
+          cleared_to_account_id: resolveAccountId(clearingAccountId, 'cheque clearing'),
           created_by: null, updated_by: null,
         }
       })
@@ -882,8 +930,11 @@ export function SettingsPage() {
       setRestoreMessage('Portable company backup restored with fresh IDs for this company.')
       window.setTimeout(() => setRestoreProgress(null), 3000)
     } catch (e: unknown) {
-      setRestoreProgress(current => current ? { ...current, active: false, step: 'Restore failed', detail: 'Fix the reported issue and try again.' } : null)
-      setRestoreMessage(publicErrorMessage(e, 'restoring backup'))
+      const contextualError = isTransientRestoreNetworkError(e)
+        ? new Error(`Network connection was interrupted while ${currentRestoreStep}. Check your internet connection and retry the restore.`)
+        : e
+      setRestoreProgress(current => current ? { ...current, active: false, step: 'Restore failed', detail: `Stopped while ${currentRestoreStep}. Fix the reported issue and try again.` } : null)
+      setRestoreMessage(publicErrorMessage(contextualError, 'restoring backup'))
     }
   }
 
