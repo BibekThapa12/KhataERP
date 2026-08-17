@@ -79,7 +79,6 @@ class AppErrorBoundary extends Component<
             <p className="mt-2 text-sm text-muted-foreground">
               The app hit a runtime error while opening this page.
             </p>
-            <p className="mt-4 rounded bg-muted p-3 font-mono text-xs text-foreground">Reference: {this.state.correlationId}</p>
           </div>
         </div>
       )

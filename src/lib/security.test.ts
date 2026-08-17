@@ -34,9 +34,10 @@ describe('secret-safe logging', () => {
 
   it('does not expose internal error details in a public message', () => {
     const message = publicErrorMessage(new Error('select * from auth.users at C:\\server\\auth.ts'), 'sign in')
-    expect(message).toMatch(/^Could not complete sign in\. Reference: /)
+    expect(message).toBe('Could not complete sign in. Please try again.')
     expect(message).not.toContain('auth.users')
     expect(message).not.toContain('server')
+    expect(message).not.toContain('Reference:')
   })
 
   it('turns invoice integrity errors into actionable messages', () => {
@@ -45,6 +46,7 @@ describe('secret-safe logging', () => {
     const message = publicErrorMessage(error, 'saving purchase invoice')
     expect(message).toContain('Check the item quantities, rates, discount, and VAT')
     expect(message).not.toContain('server-calculated')
+    expect(message).not.toContain('Reference:')
   })
 
   it('maps common database constraint and permission errors', () => {

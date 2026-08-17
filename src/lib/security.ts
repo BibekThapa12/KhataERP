@@ -132,14 +132,15 @@ export function userFacingErrorMessage(error: unknown): string | null {
 }
 
 export function publicErrorMessage(error: unknown, operation = 'request'): string {
-  const correlationId = reportClientError(error, operation)
+  reportClientError(error, operation)
   const friendlyMessage = userFacingErrorMessage(error)
   if (!friendlyMessage) {
-    notifyError(`Could not complete ${operation}`, `Reference: ${correlationId}`)
-    return `Could not complete ${operation}. Reference: ${correlationId}`
+    const fallbackMessage = `Could not complete ${operation}. Please try again.`
+    notifyError(fallbackMessage)
+    return fallbackMessage
   }
-  notifyError(friendlyMessage, `Reference: ${correlationId}`)
-  return `${friendlyMessage} Reference: ${correlationId}`
+  notifyError(friendlyMessage)
+  return friendlyMessage
 }
 
 const AUTH_ERROR_MESSAGES: Record<string, string> = {

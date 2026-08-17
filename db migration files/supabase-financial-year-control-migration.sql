@@ -83,7 +83,7 @@ begin
   if coalesce(new.date_ad, new.date) < company_start then
     raise exception 'Voucher date cannot be before the company Financial Year Start Date %', company_start;
   end if;
-  if coalesce(new.date_ad, new.date) > current_date then
+  if coalesce(new.date_ad, new.date) > (clock_timestamp() at time zone 'Asia/Kathmandu')::date then
     raise exception 'Voucher date cannot be in a future financial period';
   end if;
 

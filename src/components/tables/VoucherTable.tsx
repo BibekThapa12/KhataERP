@@ -46,6 +46,7 @@ type DraftInvoicePayload = {
   lines?: Array<{ item_id: string; qty: number; rate: number; amount?: number; amount_input?: string; entry_unit?: string; conversion_factor?: number }>
   vatRate?: number
   discount?: number
+  discountMode?: 'flat' | 'percent'
   supplierInvoiceNo?: string
   creditDays?: number
 }
@@ -70,6 +71,44 @@ type DraftStockPayload = {
 
 function draftPayload<T>(voucher: Voucher) {
   return voucher.status === 'Draft' ? voucher.draft_payload as T | null : null
+}
+
+function totalQuantityText(values: Array<{ quantity: number }>) {
+  return qtyText(values.reduce((sum, value) => sum + (Number.isFinite(value.quantity) ? value.quantity : 0), 0))
+}
+
+function invoiceQuantityTotals(lines: InvoiceItem[], getItem: (id: string) => Item | undefined) {
+  const primary = lines.map(line => {
+    const item = getItem(line.item_id)
+    return { quantity: Number(line.qty) || 0, unit: line.entry_unit || line.unit || item?.unit }
+  })
+  const alternate = lines.flatMap(line => {
+    const item = getItem(line.item_id)
+    const factor = Number(item?.alternate_conversion || 0)
+    if (!item?.alternate_unit || factor <= 1) return []
+    const entryUnit = (line.entry_unit || line.unit || item.unit || '').trim().toLowerCase()
+    const alternateUnit = item.alternate_unit.trim().toLowerCase()
+    return [{
+      quantity: entryUnit === alternateUnit || Number(line.conversion_factor || 1) > 1
+        ? (Number(line.qty) || 0) / factor
+        : (Number(line.qty) || 0) * factor,
+      unit: entryUnit === alternateUnit || Number(line.conversion_factor || 1) > 1 ? item.unit : item.alternate_unit,
+    }]
+  })
+  return { primary: totalQuantityText(primary), alternate: alternate.length ? totalQuantityText(alternate) : '-' }
+}
+
+function voucherDisplayTotal(voucher: Voucher, vatEnabled: boolean) {
+  if (vatEnabled || voucher.status !== 'Draft' || (voucher.type !== 'Sales' && voucher.type !== 'Purchase')) return voucher.total
+  const draft = draftPayload<DraftInvoicePayload>(voucher)
+  if (!draft?.lines?.length) return voucher.total
+  const subtotal = draft.lines.reduce((sum, line) => {
+    const authoritativeAmount = line.amount ?? (line.amount_input === undefined || line.amount_input === '' ? undefined : Number(line.amount_input))
+    return sum + (Number.isFinite(authoritativeAmount) ? Number(authoritativeAmount) : (Number(line.qty) || 0) * (Number(line.rate) || 0))
+  }, 0)
+  const enteredDiscount = Number(draft.discount) || 0
+  const discount = draft.discountMode === 'percent' ? subtotal * enteredDiscount / 100 : enteredDiscount
+  return Math.round((subtotal - discount + Number.EPSILON) * 1_000_000) / 1_000_000
 }
 
 function draftInvoiceItems(voucher: Voucher): InvoiceItem[] {
@@ -126,6 +165,7 @@ function draftStockLines(voucher: Voucher): StockLine[] {
 export function VoucherDetail({ voucher }: { voucher: Voucher }) {
   const { company, vouchers, getAccount, getItem, getPartyByAccountId } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
+  const displayedTotal = voucherDisplayTotal(voucher, vatEnabled)
   const settlementId = legacySettlementAccountId(voucher) || draftPayload<DraftReceiptPaymentPayload>(voucher)?.moneyAccountId
   const invoiceItems = draftInvoiceItems(voucher)
   const ledgerLines = draftVoucherLines(voucher)
@@ -151,7 +191,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
         {(voucher.type === 'Sales' || voucher.type === 'Purchase') && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Due Date</p><p className="font-medium mt-0.5">{fmtDate(voucher.due_date_bs || voucher.date_bs)}</p></div>}
         <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Party</p><p className="font-medium mt-0.5">{partyName}</p></div>
         {settlementName && <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Settlement Account</p><p className="font-medium mt-0.5">{settlementName}</p></div>}
-        <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Total</p><p className="font-serif font-bold mt-0.5 num">{fmtMoney(voucher.total)}</p></div>
+        <div><p className="text-xs uppercase tracking-wider text-muted-foreground">Total</p><p className="font-serif font-bold mt-0.5 num">{fmtMoney(displayedTotal)}</p></div>
       </div>
 
       {invoiceItems.length > 0 ? (
@@ -185,7 +225,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(subtotal)}</span></div>
             {discount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(discount)}</span></div>}
             {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({vatRate}%)</span><span className="num">{fmtMoney(vatAmount)}</span></div>}
-            <div className="flex justify-between border-t border-border pt-1 font-serif font-bold text-base"><span>Total</span><span className="num">{fmtMoney(voucher.total)}</span></div>
+            <div className="flex justify-between border-t border-border pt-1 font-serif font-bold text-base"><span>Total</span><span className="num">{fmtMoney(displayedTotal)}</span></div>
           </div>
         </>
       ) : stockLines.length > 0 ? (
@@ -278,7 +318,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     const settlementId = legacySettlementAccountId(voucher) || draftPayload<DraftReceiptPaymentPayload>(voucher)?.moneyAccountId
     const party = voucher.party_account_id ? getPartyByAccountId(voucher.party_account_id)?.name : ''
     const accountNames = (voucher.lines || []).map(line => getPartyByAccountId(line.account_id)?.name || getAccount(line.account_id)?.name || '')
-    const text = [savedVoucherNumber(voucher), voucher.invoice_no, voucher.draft_no, voucher.seq, voucher.type, voucher.date_bs, voucher.narration, party, settlementId ? getAccount(settlementId)?.name : '', voucher.total, status, ...accountNames].join(' ').toLowerCase()
+    const text = [savedVoucherNumber(voucher), voucher.invoice_no, voucher.draft_no, voucher.seq, voucher.type, voucher.date_bs, voucher.narration, party, settlementId ? getAccount(settlementId)?.name : '', voucherDisplayTotal(voucher, company?.vat_enabled ?? true), status, ...accountNames].join(' ').toLowerCase()
     return text.includes(query.toLowerCase())
   })
   const selectable = !!selectedIds && !!onSelectionChange
@@ -325,6 +365,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         </tr>
       `
     }).join('')
+    const quantityTotals = invoiceQuantityTotals(invoiceItems, getItem)
+    const invoiceFooter = invoiceItems.length ? `<tr class="quantity-total"><td colspan="2">Total Quantity</td><td class="right">${esc(quantityTotals.primary)}</td><td class="right">${esc(quantityTotals.alternate)}</td><td colspan="2"></td></tr>` : ''
     const ledgerRows = ledgerLines.map((line, index) => {
       const account = getAccount(line.account_id)
       return `
@@ -353,6 +395,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     const isInvoice = invoiceItems.length > 0
     const isStock = !isInvoice && stockLines.length > 0
     const vatEnabled = company?.vat_enabled ?? true
+    const displayedTotal = voucherDisplayTotal(voucher, vatEnabled)
     const rows = isInvoice ? invoiceRows : isStock ? stockRows : ledgerRows
     const head = isInvoice
       ? '<tr><th class="col-no">#</th><th class="col-item">Item</th><th class="right col-qty">Qty</th><th class="right col-alt">Alt. Qty</th><th class="right col-rate">Rate</th><th class="right col-amount">Amount</th></tr>'
@@ -368,16 +411,15 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <div><span>Subtotal</span><strong>${esc(fmtMoney(subtotal))}</strong></div>
         <div><span>Discount</span><strong>${esc(fmtMoney(discount))}</strong></div>
         ${vatEnabled ? `<div><span>VAT (${esc(vatRate)}%)</span><strong>${esc(fmtMoney(vatAmount))}</strong></div>` : ''}
-        <div class="grand"><span>Total</span><strong>${esc(fmtMoney(voucher.total))}</strong></div>
+        <div class="grand"><span>Total</span><strong>${esc(fmtMoney(displayedTotal))}</strong></div>
       </div>
     ` : `
       <div class="totals">
-        <div class="grand"><span>Total</span><strong>${esc(fmtMoney(voucher.total))}</strong></div>
+        <div class="grand"><span>Total</span><strong>${esc(fmtMoney(displayedTotal))}</strong></div>
       </div>
     `
     const printFormat = company?.print_format || 'A5'
     const printableWidthMm = printFormat === 'A4' ? 188 : 126
-    const printableHeightMm = printFormat === 'A4' ? 275 : 188
     const showCompanyIdentity = voucher.type !== 'Sales' || company?.show_company_details_on_sales_invoice !== false
     const originalVoucher = voucher.original_voucher_id ? allVouchers.find(entry => entry.id === voucher.original_voucher_id) : null
     const documentTitle = voucher.type === 'Sales Return' && vatEnabled
@@ -394,7 +436,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             @page { size: ${esc(printFormat)}; margin: 10mm; }
             * { box-sizing: border-box; }
             body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; }
-            .sheet { width: ${printableWidthMm}mm; max-width: 100%; min-height: ${printableHeightMm}mm; margin: 0 auto; padding: 0 1mm; transform-origin: top left; }
+            .sheet { width: ${printableWidthMm}mm; max-width: 100%; margin: 0 auto; padding: 0 1mm; }
             .invoice-head { display: grid; grid-template-columns: minmax(0,1fr) 50mm; gap: 8mm; align-items: start; border-top: 1.5px solid #111827; padding: 8mm 2mm 7mm; }
             .invoice-head.no-company { display: block; padding: 3mm 2mm; }
             .invoice-head.no-company .meta { display: grid; grid-template-columns: minmax(28mm,.7fr) repeat(2,minmax(38mm,1fr)); gap: 2mm 5mm; width: 100%; margin: 0; align-items: center; }
@@ -413,20 +455,24 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             .box { border: 1px solid #111827; padding: 4mm; min-height: 21mm; }
             .box-title { margin-bottom: 4mm; font-weight: 700; }
             table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+            thead { display: table-header-group; }
+            tr { break-inside: avoid; page-break-inside: avoid; }
             th, td { border: 1px solid #d1d5db; padding: 5px; vertical-align: top; }
             th { text-align: left; background: #f3f4f6; font-size: 10px; text-transform: uppercase; }
+            .quantity-total td { border-top: 1.5px solid #111827; background: #f8fafc; font-weight: 700; vertical-align: middle; }
             .right { text-align: right; }
             .col-no { width: 7mm; }
             .col-item { width: auto; }
             .col-qty, .col-alt { width: 15mm; }
             .col-rate, .col-amount { width: 23mm; }
             .totals { margin-left: auto; margin-top: 8px; width: 55mm; }
+            .totals, .note, .signatures { break-inside: avoid; page-break-inside: avoid; }
             .totals div { display: flex; justify-content: space-between; padding: 3px 0; }
             .totals .grand { border-top: 1px solid #111827; font-size: 13px; padding-top: 6px; }
             .note { margin-top: 12px; border-top: 1px solid #d1d5db; padding-top: 6px; }
             .signatures { margin-top: 22mm; display: flex; justify-content: space-between; gap: 24mm; }
             .signatures div { border-top: 1px solid #111827; flex: 1; text-align: center; padding-top: 4px; }
-            @media print { .sheet { min-height: auto; } }
+            @media print { .sheet { width: 100%; max-width: none; } }
           </style>
         </head>
         <body>
@@ -466,6 +512,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             <table>
               <thead>${head}</thead>
               <tbody>${rows}</tbody>
+              ${isInvoice ? `<tfoot>${invoiceFooter}</tfoot>` : ''}
             </table>
             ${totals}
             ${voucher.return_reason ? `<p class="note"><strong>Return reason:</strong> ${esc(voucher.return_reason)}</p>` : voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
@@ -484,31 +531,16 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
     win.document.write(html)
     win.document.close()
-    const printableWidth = printableWidthMm * 96 / 25.4
-    const printableHeight = printableHeightMm * 96 / 25.4
     let printStarted = false
-    const fitAndPrint = () => {
+    const printWhenReady = () => {
       if (printStarted || win.closed) return
       printStarted = true
-      try {
-        const sheet = win.document.querySelector<HTMLElement>('.sheet')
-        if (sheet) {
-          sheet.style.zoom = '1'
-          const widthScale = printableWidth / Math.max(sheet.scrollWidth, 1)
-          const heightScale = printableHeight / Math.max(sheet.scrollHeight, 1)
-          const requiredScale = Math.min(1, widthScale, heightScale)
-          const safeScale = requiredScale < 1 ? Math.max(0.01, requiredScale * 0.97) : 1
-          sheet.style.zoom = String(Number(safeScale.toFixed(4)))
-          win.document.body.style.width = `${printableWidth * safeScale}px`
-        }
-      } finally {
-        win.focus()
-        win.print()
-      }
+      win.focus()
+      win.print()
     }
-    if (win.document.readyState === 'complete') window.setTimeout(fitAndPrint, 50)
-    else win.addEventListener('load', fitAndPrint, { once: true })
-    window.setTimeout(fitAndPrint, 800)
+    if (win.document.readyState === 'complete') window.setTimeout(printWhenReady, 50)
+    else win.addEventListener('load', printWhenReady, { once: true })
+    window.setTimeout(printWhenReady, 800)
   }
 
   registerVoucherPrinter(printVoucher)
@@ -551,6 +583,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
           </thead>
           <tbody>
             {filteredVouchers.map(v => {
+              const displayedTotal = voucherDisplayTotal(v, company?.vat_enabled ?? true)
               const settlementId = legacySettlementAccountId(v)
               const allocationNames = (v.type === 'Receipt' || v.type === 'Payment') ? (v.lines || []).filter(line => line.account_id !== settlementId).map(line => getPartyByAccountId(line.account_id)?.name || getAccount(line.account_id)?.name || line.account_id) : []
               const partyName = allocationNames.length ? `${allocationNames[0]}${allocationNames.length > 1 ? ` + ${allocationNames.length - 1} more` : ''}` : v.party_account_id
@@ -569,7 +602,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell max-w-[200px] truncate">{v.narration}</td>
                   <td className="px-4 py-3"><Badge variant={v.status === 'Draft' ? 'secondary' : 'sales'} className={v.status === 'Draft' ? 'bg-amber-50 text-amber-700' : 'bg-emerald-50 text-emerald-700'}>{v.status === 'Draft' ? 'Draft' : 'Completed'}</Badge></td>
-                  <td className="px-4 py-3 text-right num font-semibold">{fmtMoney(v.total)}</td>
+                  <td className="px-4 py-3 text-right num font-semibold">{fmtMoney(displayedTotal)}</td>
                   {showActions && (
                     <td className="px-4 py-3">
                       <div className="flex items-center justify-end gap-1">
@@ -622,7 +655,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
                                 <AlertDialogHeader>
                                   <AlertDialogTitle>Cancel this voucher?</AlertDialogTitle>
                                   <AlertDialogDescription>
-                                    This will reverse <strong>{v.type} {savedVoucherNumber(v)}</strong> dated {fmtDate(v.date_bs)} for {fmtMoney(v.total)}.
+                                    This will reverse <strong>{v.type} {savedVoucherNumber(v)}</strong> dated {fmtDate(v.date_bs)} for {fmtMoney(displayedTotal)}.
                                     All affected balances and stock will be reversed. The voucher stays in history marked cancelled.
                                   </AlertDialogDescription>
                                 </AlertDialogHeader>

@@ -1,6 +1,6 @@
 import * as XLSX from 'xlsx'
 import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, Voucher } from '@/types'
-import { parseBsDate } from '@/lib/nepaliDate'
+import { normalizeBsDateInput, parseBsDate } from '@/lib/nepaliDate'
 import { masterNameKey } from '@/lib/nameFormat'
 
 export type ImportModule =
@@ -258,7 +258,20 @@ function emptyPreview(module: ImportModule, errors: ImportRowIssue[]): ImportPre
 }
 
 function normalizeRow(row: Record<string, unknown>) {
-  return Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeKey(key), value]))
+  const normalized = Object.fromEntries(Object.entries(row).map(([key, value]) => [normalizeKey(key), value]))
+  if ('date_bs' in normalized) normalized.date_bs = normalizeImportedBsDate(normalized.date_bs) || normalized.date_bs
+  return normalized
+}
+
+export function normalizeImportedBsDate(value: unknown): string | null {
+  const text = String(value ?? '').trim()
+  if (!text) return null
+  return normalizeBsDateInput(text.replace(/[./]/g, '-'))
+}
+
+export function importedVoucherVatRate(companyVatEnabled: boolean, value: unknown): number {
+  if (!companyVatEnabled) return 0
+  return value === '' || value === null || value === undefined ? 13 : num(value)
 }
 
 function normalizeKey(value: string) {
@@ -275,7 +288,7 @@ export function validateRows(module: ImportModule, rows: Record<string, unknown>
     template.columns.filter(column => column.required).forEach(column => {
       if (!str(row[column.key])) errors.push({ row: rowNo, field: column.key, message: `${column.label} is required.` })
     })
-    if (knownKeys.has('date_bs') && str(row.date_bs) && !parseBsDate(str(row.date_bs))) errors.push({ row: rowNo, field: 'date_bs', message: 'Date must be a valid B.S. date in YYYY-MM-DD format.' })
+    if (knownKeys.has('date_bs') && str(row.date_bs) && !parseBsDate(str(row.date_bs))) errors.push({ row: rowNo, field: 'date_bs', message: 'Date must be a valid B.S. date such as 2083-05-01, 2083.05.01, or 2083/05/01.' })
     Object.keys(row).forEach(key => {
       if (!knownKeys.has(key)) warnings.push({ row: rowNo, field: key, message: `Unknown column "${key}" will be ignored.` })
     })
@@ -521,7 +534,10 @@ async function saveDraftGroup(module: ImportModule, rows: Record<string, unknown
     })
     const subtotal = lines.reduce((sum, row) => sum + row.qty * row.rate, 0)
     const discount = num(first.discount_flat)
-    const vatRate = first.vat_rate === '' ? 13 : num(first.vat_rate)
+    // A non-VAT company must not acquire VAT merely because the spreadsheet
+    // contains the template's default VAT rate. Keep the saved draft summary
+    // and its editable payload aligned with the voucher form.
+    const vatRate = importedVoucherVatRate(context.company.vat_enabled, first.vat_rate)
     const total = Math.round((subtotal - discount + ((subtotal - discount) * vatRate / 100) + Number.EPSILON) * 1_000_000) / 1_000_000
     await context.saveDraftVoucher({ type: isSales ? 'Sales' : 'Purchase', date_bs: dateBs, narration, party_account_id: isCash ? null : party?.account_id || null, is_cash: isCash, total, draft_payload: { dateBs, isCash, partyAccountId: isCash ? '' : party?.account_id || '', creditDays: num(first.credit_days), supplierInvoiceNo: str(first.supplier_invoice_no), lines, vatRate, discount, discountMode: 'flat', narration } })
     return
