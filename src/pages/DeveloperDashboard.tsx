@@ -880,7 +880,17 @@ function SystemTab({
           )) : <p className="text-sm text-warning">{schemaStatus?.error || 'Schema checker is not installed yet.'}</p>}
         </DashboardCard>
         <DashboardCard title="Error Log" Icon={AlertTriangle} action={<Button size="sm" variant="outline" onClick={onClearErrors} disabled={!metrics.errorEvents.length || clearingErrors}><Trash2 className="mr-1 h-3.5 w-3.5" />{clearingErrors ? 'Clearing...' : 'Clear errors'}</Button>}>
-          {metrics.errorEvents.slice(0, 8).map(event => <div key={event.id} className="rounded-md border p-3 text-sm"><Badge variant="destructive">{event.event_type}</Badge><span className="ml-2 text-xs text-muted-foreground">{new Date(event.created_at).toLocaleString()}</span><EventMetadata metadata={event.metadata} /></div>)}
+          {metrics.errorEvents.slice(0, 8).map(event => {
+            const company = event.company_id ? metrics.companies.find(entry => entry.id === event.company_id) : null
+            const companyLabel = company?.name || (event.company_id ? 'Deleted or unavailable company' : 'Global / authentication')
+            return <div key={event.id} className="rounded-md border p-3 text-sm">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-b pb-2">
+                <span className="flex min-w-0 items-center gap-2"><Building2 className="h-4 w-4 shrink-0 text-muted-foreground" /><strong className="truncate">{companyLabel}</strong></span>
+                <span className="text-xs text-muted-foreground">{new Date(event.created_at).toLocaleString()}</span>
+              </div>
+              <div className="pt-2"><Badge variant="destructive">{event.event_type}</Badge><EventMetadata metadata={event.metadata} /></div>
+            </div>
+          })}
           {!metrics.errorEvents.length && <p className="text-sm text-muted-foreground">No errors logged yet.</p>}
         </DashboardCard>
       </div>
