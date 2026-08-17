@@ -1,5 +1,6 @@
 import { Component, Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { Analytics } from '@vercel/analytics/react'
 import { logAppError, supabase } from '@/lib/supabase'
 import { useAppStore } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
@@ -220,6 +221,7 @@ export default function App() {
     <AppErrorBoundary>
       <AppToaster />
       <VoucherTable vouchers={[]} printerOnly />
+      <Analytics />
       <BrowserRouter>
         <Suspense fallback={<FullPageStatus message="Loading page..." />}>
         <Routes>
