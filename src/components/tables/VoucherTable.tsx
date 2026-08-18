@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import type { InvoiceItem, Item, StockLine, Voucher, VoucherLine } from '@/types'
 import { legacySettlementAccountId } from '@/lib/banks'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
-import { registerVoucherPrinter } from '@/lib/voucherPrinterRegistry'
+import { printHtmlDocument, registerVoucherPrinter } from '@/lib/voucherPrinterRegistry'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
@@ -98,7 +98,7 @@ function invoiceQuantityTotals(lines: InvoiceItem[], getItem: (id: string) => It
   return { primary: totalQuantityText(primary), alternate: alternate.length ? totalQuantityText(alternate) : '-' }
 }
 
-function voucherDisplayTotal(voucher: Voucher, vatEnabled: boolean) {
+export function voucherDisplayTotal(voucher: Voucher, vatEnabled: boolean) {
   if (vatEnabled || voucher.status !== 'Draft' || (voucher.type !== 'Sales' && voucher.type !== 'Purchase')) return voucher.total
   const draft = draftPayload<DraftInvoicePayload>(voucher)
   if (!draft?.lines?.length) return voucher.total
@@ -420,6 +420,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     `
     const printFormat = company?.print_format || 'A5'
     const printableWidthMm = printFormat === 'A4' ? 188 : 126
+    const pageMarginMm = printFormat === 'A4' ? 9 : 7
+    const densePrint = Math.max(invoiceItems.length, stockLines.length, ledgerLines.length) > 6
     const showCompanyIdentity = voucher.type !== 'Sales' || company?.show_company_details_on_sales_invoice !== false
     const originalVoucher = voucher.original_voucher_id ? allVouchers.find(entry => entry.id === voucher.original_voucher_id) : null
     const documentTitle = voucher.type === 'Sales Return' && vatEnabled
@@ -433,52 +435,63 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <head>
           <title>${esc(documentTitle)} ${esc(savedVoucherNumber(voucher))}</title>
           <style>
-            @page { size: ${esc(printFormat)}; margin: 10mm; }
+            @page { size: ${esc(printFormat)}; margin: ${pageMarginMm}mm; }
             * { box-sizing: border-box; }
-            body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 11px; }
+            body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 10px; }
+            body::after { content: "KhataERP"; position: fixed; right: 0; bottom: 1mm; left: 0; text-align: center; color: #6b7280; font-size: 6.5px; font-weight: 600; letter-spacing: .35px; }
             .sheet { width: ${printableWidthMm}mm; max-width: 100%; margin: 0 auto; padding: 0 1mm; }
-            .invoice-head { display: grid; grid-template-columns: minmax(0,1fr) 50mm; gap: 8mm; align-items: start; border-top: 1.5px solid #111827; padding: 8mm 2mm 7mm; }
-            .invoice-head.no-company { display: block; padding: 3mm 2mm; }
+            .invoice-head { display: grid; grid-template-columns: minmax(0,1fr) 50mm; gap: 5mm; align-items: start; border-top: 1.5px solid #111827; padding: 4mm 1mm; }
+            .invoice-head.no-company { display: block; padding: 2mm 1mm; }
             .invoice-head.no-company .meta { display: grid; grid-template-columns: minmax(28mm,.7fr) repeat(2,minmax(38mm,1fr)); gap: 2mm 5mm; width: 100%; margin: 0; align-items: center; }
             .invoice-head.no-company .meta h2 { grid-row: 1 / 3; margin: 0; text-align: left; }
             .invoice-head.no-company .meta-row { grid-template-columns: max-content 2mm max-content; width: auto; margin: 0; }
-            h1 { margin: 0 0 5px; font-size: 24px; line-height: 1.05; letter-spacing: 0; }
-            h2 { margin: 0 0 4px; font-size: 24px; line-height: 1; text-align: left; text-transform: uppercase; }
-            p { margin: 3px 0; }
+            h1 { margin: 0 0 3px; font-size: 21px; line-height: 1.05; letter-spacing: 0; }
+            h2 { margin: 0 0 3px; font-size: 21px; line-height: 1; text-align: left; text-transform: uppercase; }
+            p { margin: 2px 0; }
             .muted { color: #4b5563; }
-            .company-lines { font-size: 12px; line-height: 1.35; }
+            .company-lines { font-size: 10px; line-height: 1.25; }
             .meta { width: 44mm; margin-left: auto; text-align: left; }
-            .meta-row { display: grid; grid-template-columns: 20mm 2mm 1fr; gap: 2mm; align-items: baseline; margin: 3px 0; }
+            .meta-row { display: grid; grid-template-columns: 20mm 2mm 1fr; gap: 1mm; align-items: baseline; margin: 2px 0; }
             .meta-row strong { text-align: left; }
             .meta-row strong, .meta-row span { white-space: nowrap; }
-            .party { margin: 0 0 4mm; display: grid; grid-template-columns: 1fr 1fr; gap: 5mm; }
-            .box { border: 1px solid #111827; padding: 4mm; min-height: 21mm; }
-            .box-title { margin-bottom: 4mm; font-weight: 700; }
-            table { width: 100%; border-collapse: collapse; margin-top: 5px; }
+            .party { margin: 0 0 2.5mm; display: grid; grid-template-columns: 1fr 1fr; gap: 3mm; }
+            .box { border: 1px solid #111827; padding: 2.5mm; min-height: 17mm; }
+            .box-title { margin-bottom: 2mm; font-weight: 700; }
+            table { width: 100%; border-collapse: collapse; margin-top: 3px; }
             thead { display: table-header-group; }
             tr { break-inside: avoid; page-break-inside: avoid; }
-            th, td { border: 1px solid #d1d5db; padding: 5px; vertical-align: top; }
-            th { text-align: left; background: #f3f4f6; font-size: 10px; text-transform: uppercase; }
+            th, td { border: 1px solid #d1d5db; padding: 3px; vertical-align: top; }
+            th { text-align: left; background: #f3f4f6; font-size: 9px; text-transform: uppercase; }
             .quantity-total td { border-top: 1.5px solid #111827; background: #f8fafc; font-weight: 700; vertical-align: middle; }
             .right { text-align: right; }
             .col-no { width: 7mm; }
             .col-item { width: auto; }
             .col-qty, .col-alt { width: 15mm; }
             .col-rate, .col-amount { width: 23mm; }
-            .totals { margin-left: auto; margin-top: 8px; width: 55mm; }
-            .totals, .note, .signatures { break-inside: avoid; page-break-inside: avoid; }
-            .totals div { display: flex; justify-content: space-between; padding: 3px 0; }
-            .totals .grand { border-top: 1px solid #111827; font-size: 13px; padding-top: 6px; }
-            .note { margin-top: 12px; border-top: 1px solid #d1d5db; padding-top: 6px; }
-            .payment-qr { margin-top: 10px; display: flex; align-items: center; gap: 8px; break-inside: avoid; page-break-inside: avoid; }
-            .payment-qr img { width: 28mm; height: 28mm; object-fit: contain; border: 1px solid #d1d5db; padding: 1mm; }
-            .signatures { margin-top: 22mm; display: flex; justify-content: space-between; gap: 24mm; }
-            .signatures div { border-top: 1px solid #111827; flex: 1; text-align: center; padding-top: 4px; }
+            .totals { margin-left: auto; margin-top: 5px; width: 55mm; }
+            .totals, .note { break-inside: avoid; page-break-inside: avoid; }
+            .totals div { display: flex; justify-content: space-between; padding: 2px 0; }
+            .totals .grand { border-top: 1px solid #111827; font-size: 12px; padding-top: 4px; }
+            .note { margin-top: 7px; border-top: 1px solid #d1d5db; padding-top: 4px; }
+            .payment-qr { margin-top: 6px; display: flex; align-items: center; gap: 6px; break-inside: avoid; page-break-inside: avoid; }
+            .payment-qr img { width: 22mm; height: 22mm; object-fit: contain; border: 1px solid #d1d5db; padding: .7mm; }
+            .sheet.dense { font-size: 9px; }
+            .sheet.dense .invoice-head { padding: 2.5mm 1mm; }
+            .sheet.dense h1, .sheet.dense h2 { font-size: 18px; }
+            .sheet.dense .party { margin-bottom: 1.5mm; gap: 2mm; }
+            .sheet.dense .box { min-height: 14mm; padding: 2mm; }
+            .sheet.dense .box-title { margin-bottom: 1mm; }
+            .sheet.dense th, .sheet.dense td { padding: 2px 3px; }
+            .sheet.dense .totals { margin-top: 3px; }
+            .sheet.dense .totals div { padding: 1px 0; }
+            .sheet.dense .note { margin-top: 4px; padding-top: 3px; }
+            .sheet.dense .payment-qr { margin-top: 4px; }
+            .sheet.dense .payment-qr img { width: 18mm; height: 18mm; }
             @media print { .sheet { width: 100%; max-width: none; } }
           </style>
         </head>
         <body>
-          <main class="sheet">
+          <main class="sheet${densePrint ? ' dense' : ''}">
             <section class="invoice-head${showCompanyIdentity ? '' : ' no-company'}">
               ${showCompanyIdentity ? `<div>
                 ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" referrerpolicy="no-referrer" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
@@ -522,10 +535,6 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             ${company?.invoice_terms ? `<p class="note"><strong>Terms:</strong> ${esc(company.invoice_terms)}</p>` : ''}
             ${company?.payment_qr_text && !(voucher.type === 'Sales' && company?.payment_qr_url) ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
             ${voucher.type === 'Sales' && company?.payment_qr_url ? `<section class="payment-qr"><img src="${esc(company.payment_qr_url)}" alt="Payment QR" referrerpolicy="no-referrer" /><div><strong>Scan to Pay</strong>${company?.payment_qr_text ? `<p>${esc(company.payment_qr_text)}</p>` : ''}</div></section>` : ''}
-            <section class="signatures">
-              <div>Prepared By</div>
-              <div>Received By</div>
-            </section>
           </main>
         </body>
       </html>
@@ -534,21 +543,9 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
   }
 
   const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
-    const win = targetWindow || window.open('', '_blank', 'width=800,height=900')
-    if (!win) return
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
-    win.document.write(renderVoucherPrintHtml(voucher))
-    win.document.close()
-    let printStarted = false
-    const printWhenReady = () => {
-      if (printStarted || win.closed) return
-      printStarted = true
-      win.focus()
-      win.print()
-    }
-    if (win.document.readyState === 'complete') window.setTimeout(printWhenReady, 50)
-    else win.addEventListener('load', printWhenReady, { once: true })
-    window.setTimeout(printWhenReady, 800)
+    if (targetWindow) targetWindow.close()
+    printHtmlDocument(renderVoucherPrintHtml(voucher))
   }
 
   registerVoucherPrinter(printVoucher, renderVoucherPrintHtml)

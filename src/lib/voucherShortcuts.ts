@@ -4,11 +4,10 @@ import { printPersistedVoucher } from '@/lib/voucherPrinterRegistry'
 import { notifyError } from '@/lib/notifications'
 import type { Voucher } from '@/types'
 
-export type VoucherPrintRequest = { target: Window | null; existingIds: Set<string> }
+export type VoucherPrintRequest = { existingIds: Set<string> }
 
 export function beginVoucherPrint(): VoucherPrintRequest {
   return {
-    target: window.open('', '_blank', 'width=800,height=900'),
     existingIds: new Set(useAppStore.getState().vouchers.map(voucher => voucher.id)),
   }
 }
@@ -19,21 +18,14 @@ export function completeVoucherPrint(request: VoucherPrintRequest | undefined, t
   const saved = editing && editing.status !== 'Draft'
     ? vouchers.find(voucher => voucher.id === editing.id)
     : vouchers.find(voucher => voucher.type === type && voucher.status !== 'Draft' && !request.existingIds.has(voucher.id))
-  if (!request.target) {
-    notifyError('Voucher saved, but the print window was blocked. Print it from the voucher list.')
-    return
-  }
   if (!saved) {
-    request.target.close()
     notifyError('Voucher saved, but the printable copy could not be prepared. Print it from the voucher list.')
     return
   }
-  printPersistedVoucher(saved, request.target)
+  printPersistedVoucher(saved)
 }
 
-export function cancelVoucherPrint(request?: VoucherPrintRequest) {
-  request?.target?.close()
-}
+export function cancelVoucherPrint(_request?: VoucherPrintRequest) {}
 
 export function useVoucherShortcuts(options: {
   open: boolean

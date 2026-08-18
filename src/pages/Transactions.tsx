@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom'
 import { CheckCircle2, Loader2, Plus, Printer, Trash2, XCircle } from 'lucide-react'
 import { useAppStore, type BulkDraftCompletionResult } from '@/store/useAppStore'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
-import { VoucherTable } from '@/components/tables/VoucherTable'
+import { VoucherTable, voucherDisplayTotal } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReceiptPaymentForm, JournalForm } from '@/components/forms/OtherForms'
 import { SimpleEntryForm } from '@/components/forms/SimpleEntryForm'
@@ -23,6 +23,7 @@ import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { userFacingErrorMessage } from '@/lib/security'
 import { printPersistedVouchers } from '@/lib/voucherPrinterRegistry'
 import { notifyError, withoutSuccessNotifications } from '@/lib/notifications'
+import { fmtMoney } from '@/lib/utils'
 
 function useVouchersByType(type: VoucherType) {
   const allVouchers = useAppStore(s => s.vouchers)
@@ -59,6 +60,11 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
   const [draftFilterActive, setDraftFilterActive] = useState(draftOnly)
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const drafts = useMemo(() => vouchers.filter(voucher => voucher.status === 'Draft'), [vouchers])
+  const selectedDrafts = useMemo(() => drafts.filter(voucher => selectedIds.has(voucher.id)), [drafts, selectedIds])
+  const selectedTotal = useMemo(
+    () => selectedDrafts.reduce((sum, voucher) => sum + (Number(voucherDisplayTotal(voucher, company?.vat_enabled ?? true)) || 0), 0),
+    [selectedDrafts, company?.vat_enabled]
+  )
   const canComplete = developerAdmin || companyCanWrite(company)
   useEffect(() => { let active = true; void isDeveloperAdmin().then(value => { if (active) setDeveloperAdmin(value) }); return () => { active = false } }, [])
   useEffect(() => {
@@ -87,13 +93,7 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
   const printSelected = () => {
     if (processing || !selectedIds.size) return
     const selected = drafts.filter(voucher => selectedIds.has(voucher.id)).sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
-    const target = window.open('', '_blank', 'width=800,height=900')
-    if (!target) {
-      notifyError('The print window was blocked', 'Allow popups for KhataERP and try Print Selected again.')
-      return
-    }
-    if (!printPersistedVouchers(selected, target)) {
-      target.close()
+    if (!printPersistedVouchers(selected)) {
       notifyError('The selected drafts could not be prepared for printing. Please try again.')
     }
   }
@@ -124,7 +124,7 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
     return () => window.clearTimeout(timeout)
   }, [processing, results.length, failedCount])
   return <div className="space-y-3">
-    {draftFilterActive && drafts.length > 0 && <Card className="border-amber-200 bg-amber-50/45 shadow-none"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-3"><div><p className="text-sm font-semibold text-amber-950">{selectedIds.size} draft{selectedIds.size === 1 ? '' : 's'} selected</p><p className="text-xs text-amber-800">Select draft rows below. Completion and deletion run oldest first.</p></div><div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={processing || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>Clear Selection</Button><Button variant="outline" disabled={processing || !selectedIds.size} onClick={printSelected}><Printer className="mr-1.5 h-4 w-4" />Print Selected</Button><AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" disabled={processing || !selectedIds.size || !canComplete}><Trash2 className="mr-1.5 h-4 w-4" />Delete Selected</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {selectedIds.size} selected draft{selectedIds.size === 1 ? '' : 's'}?</AlertDialogTitle><AlertDialogDescription>This permanently removes the selected drafts. Drafts have not affected ledgers, stock, or reports, but this action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Drafts</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { void deleteSelected() }}>Delete Drafts</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog><AlertDialog><AlertDialogTrigger asChild><Button disabled={processing || !selectedIds.size || !canComplete}>{processing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}Complete Selected</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Complete {selectedIds.size} selected draft{selectedIds.size === 1 ? '' : 's'}?</AlertDialogTitle><AlertDialogDescription>Completed vouchers will be posted to ledgers, inventory, settlements, reports, and dashboard totals. Valid drafts will complete even if another selected draft fails.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep as Draft</AlertDialogCancel><AlertDialogAction onClick={() => { void completeSelected() }}>Complete Vouchers</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div></CardContent></Card>}
+    {draftFilterActive && drafts.length > 0 && <Card className="border-amber-200 bg-amber-50/45 shadow-none"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-3"><div><div className="flex flex-wrap items-baseline gap-x-5 gap-y-1"><p className="text-sm font-semibold text-amber-950">{selectedDrafts.length} bill{selectedDrafts.length === 1 ? '' : 's'} selected</p><p className="text-sm font-semibold text-amber-950">Selected total: <span className="num text-base">{fmtMoney(selectedTotal)}</span></p></div><p className="text-xs text-amber-800">Select draft rows below. Completion and deletion run oldest first.</p></div><div className="flex flex-wrap items-center gap-2"><Button variant="outline" disabled={processing || !selectedIds.size} onClick={() => setSelectedIds(new Set())}>Clear Selection</Button><Button variant="outline" disabled={processing || !selectedIds.size} onClick={printSelected}><Printer className="mr-1.5 h-4 w-4" />Print Selected</Button><AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" disabled={processing || !selectedIds.size || !canComplete}><Trash2 className="mr-1.5 h-4 w-4" />Delete Selected</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {selectedIds.size} selected draft{selectedIds.size === 1 ? '' : 's'}?</AlertDialogTitle><AlertDialogDescription>This permanently removes the selected drafts. Drafts have not affected ledgers, stock, or reports, but this action cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep Drafts</AlertDialogCancel><AlertDialogAction className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={() => { void deleteSelected() }}>Delete Drafts</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog><AlertDialog><AlertDialogTrigger asChild><Button disabled={processing || !selectedIds.size || !canComplete}>{processing ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-1.5 h-4 w-4" />}Complete Selected</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Complete {selectedIds.size} selected draft{selectedIds.size === 1 ? '' : 's'}?</AlertDialogTitle><AlertDialogDescription>Completed vouchers will be posted to ledgers, inventory, settlements, reports, and dashboard totals. Valid drafts will complete even if another selected draft fails.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Keep as Draft</AlertDialogCancel><AlertDialogAction onClick={() => { void completeSelected() }}>Complete Vouchers</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div></CardContent></Card>}
     {draftFilterActive && !canComplete && drafts.length > 0 && <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">This company is read-only. Renew its billing access before completing drafts.</div>}
     {draftFilterActive && results.length > 0 && <Card className={failedCount ? 'border-amber-200' : 'border-emerald-200'}><CardContent className="p-3"><p className="text-sm font-semibold">Bulk {lastOperation} finished: {completedCount} {lastOperation === 'completion' ? 'completed' : 'deleted'}, {failedCount} failed</p><div className="mt-2 max-h-48 space-y-1 overflow-y-auto">{results.map(result => <div key={result.draftId} className="flex items-start gap-2 rounded px-2 py-1.5 text-sm hover:bg-muted/40">{result.status === 'completed' ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-emerald-600" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-red-600" />}<div className="min-w-0"><span className="font-medium">{result.type} {result.label}</span>{result.status === 'completed' ? <span className="text-muted-foreground">{lastOperation === 'completion' ? ` completed as ${result.completedNumber}` : ' deleted'}</span> : <p className="text-xs text-red-700">{result.error}</p>}</div></div>)}</div></CardContent></Card>}
     <Card><VoucherTable vouchers={vouchers} alwaysShowFilters onEdit={onEdit} selectedIds={draftFilterActive ? selectedIds : undefined} onSelectionChange={draftFilterActive ? setSelectedIds : undefined} selectionDisabled={processing || !canComplete} onStatusFilterChange={status => setDraftFilterActive(draftOnly || status === 'Draft')} /></Card>
