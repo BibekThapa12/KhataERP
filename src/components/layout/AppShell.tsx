@@ -58,14 +58,19 @@ const NAV_SECTIONS: {
     items: [
       { to: '/sales', label: 'Sales Invoices', Icon: TrendingUp },
       { to: '/purchase', label: 'Purchase Bills', Icon: TrendingDown },
-      { to: '/sales-returns', label: 'Sales Returns', Icon: Undo2 },
-      { to: '/purchase-returns', label: 'Purchase Returns', Icon: Redo2 },
       { to: '/receipts', label: 'Receipts', Icon: ArrowDownCircle },
       { to: '/payments', label: 'Payments', Icon: ArrowUpCircle },
       { to: '/transactions/income', label: 'Add Income', Icon: TrendingUp },
       { to: '/transactions/expenses', label: 'Add Expense', Icon: TrendingDown },
-      { to: '/transactions/contra', label: 'Contra', Icon: ArrowLeftRight },
-      { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
+      {
+        kind: 'group', id: 'other-transactions', label: 'Other Transactions', Icon: Files,
+        children: [
+          { to: '/transactions/contra', label: 'Contra', Icon: ArrowLeftRight },
+          { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
+          { to: '/sales-returns', label: 'Sales Returns', Icon: Undo2 },
+          { to: '/purchase-returns', label: 'Purchase Returns', Icon: Redo2 },
+        ],
+      },
     ],
   },
   {
@@ -362,7 +367,7 @@ export function AppShell() {
   const [openReportGroup, setOpenReportGroup] = useState<string | null>(() => activeReportGroupId(location.pathname, location.search))
   const [openSections, setOpenSections] = useState<Set<string>>(() => {
     const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
-    return new Set(active && active.label !== 'Overview' ? [active.label] : [])
+    return new Set([active && active.label !== 'Overview' ? active.label : 'Transactions'])
   })
 
   useEffect(() => {
@@ -382,11 +387,10 @@ export function AppShell() {
   useEffect(() => {
     const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
     if (!active) return
-    const activeLabel = active.label === 'Overview' ? null : active.label
+    const activeLabel = active.label === 'Overview' ? 'Transactions' : active.label
     setOpenSections(current => {
       if (activeLabel && current.size === 1 && current.has(activeLabel)) return current
-      if (!activeLabel && current.size === 0) return current
-      return new Set(activeLabel ? [activeLabel] : [])
+      return new Set([activeLabel])
     })
   }, [location.pathname, location.search])
 
@@ -415,6 +419,11 @@ export function AppShell() {
   }, [navigate, readOnly])
 
   const toggleSection = (label: string) => setOpenSections(current => {
+    const active = NAV_SECTIONS.find(section => section.items.some(item => itemIsActive(item, location.pathname, location.search)))
+    // Keep Transactions visible while the user is working on any transaction
+    // route. Navigating to another menu changes the active section and the
+    // route effect above collapses it normally.
+    if (label === 'Transactions' && active?.label === 'Transactions') return current
     return current.has(label) ? new Set() : new Set([label])
   })
 
@@ -440,13 +449,13 @@ export function AppShell() {
   }
 
   return (
-    <div className="flex h-dvh overflow-hidden bg-background">
+    <div className="app-shell flex h-dvh min-h-0 w-full overflow-hidden bg-background">
       <button type="button" aria-label="Open navigation" onClick={() => setMobileOpen(true)} className="app-mobile-nav fixed left-3 top-3 z-40 flex h-10 w-10 items-center justify-center rounded-md border bg-background shadow-sm md:hidden">
         <Menu className="h-5 w-5" />
       </button>
       {mobileOpen && <button type="button" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="app-mobile-nav fixed inset-0 z-40 bg-black/45 md:hidden" />}
       {/* Sidebar */}
-      <aside className={cn('fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-y-auto bg-[#1B2A4A] transition-transform md:static md:w-56 md:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
+      <aside className={cn('app-shell-sidebar fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-y-auto bg-[#1B2A4A] transition-transform md:static md:w-56 md:translate-x-0', mobileOpen ? 'translate-x-0' : '-translate-x-full')}>
         {/* Brand */}
         <div className="relative px-4 py-5 border-b border-white/10">
           <button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/10 md:hidden"><X className="h-5 w-5" /></button>

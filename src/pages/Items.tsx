@@ -48,6 +48,8 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
   const stockItems = useMemo(() => items.filter(item => !item.is_service), [items])
   const selectedItem = stockItems.find(item => item.id === itemId)
   const selectedStock = stock.find(entry => entry.id === itemId)
@@ -59,13 +61,15 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   useEffect(() => {
     const formIdentity = `StockAdjustment:${voucher?.id || 'new'}`
     if (!open) {
-      initializedFormRef.current = null; baselineRef.current = ''
+      initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
       return
     }
     if (initializedFormRef.current === formIdentity) return
     initializedFormRef.current = formIdentity
     baselineRef.current = ''
+    workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
+    freshAfterDraftRef.current = false
     if (voucher?.status === 'Draft') {
       const draft = voucher.draft_payload as Partial<{ dateBs:string; mode:'adjustment'|'transfer'; itemId:string; stockCondition:StockCondition; transferTo:'damaged'|'expired'; unitMode:UnitMode; qtyDelta:string; rate:string; narration:string }> | null
       setDateBs(draft?.dateBs || voucher.date_bs)
@@ -110,7 +114,9 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       const baseQuantity = toBaseQty(mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), conversionFactor)
       const baseRate = mode === 'transfer' ? selectedStock?.avg_cost || 0 : toBaseRate(rateInputNumber(rate), conversionFactor)
       await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: voucher?.status === 'Draft' ? todayBs() : dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined }, status)
-      if (voucher?.status === 'Draft') await deleteDraftVoucher(voucher.id)
+      const draftId = freshAfterDraftRef.current ? undefined : (voucher?.status === 'Draft' ? voucher.id : workingDraftIdRef.current)
+      if (draftId) await deleteDraftVoucher(draftId)
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, 'Stock Adjustment', voucher)
       printRequest = undefined
       onClose()
@@ -121,7 +127,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
 
   const handleSaveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') {
@@ -132,15 +138,16 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     setSaving(true)
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type: 'Stock Adjustment',
         date_bs: dateBs,
         narration: narration.trim(),
         total: Math.abs(Number(qtyDelta) || 0) * rateInputNumber(rate),
         draft_payload: { dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration },
       })
-      onClose()
+      workingDraftIdRef.current = undefined; freshAfterDraftRef.current = true; baselineRef.current = ''
       setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (error: unknown) {
       setError(publicErrorMessage(error, 'saving stock adjustment draft'))
     } finally { setSaving(false) }
@@ -174,7 +181,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       <DialogFooter className="flex-row flex-wrap justify-end gap-2 space-x-0">
         {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}><Trash2 className="mr-1 h-4 w-4" />Delete Draft</Button>}
         <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-        {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+        {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}</Button>}
         <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
         <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
       </DialogFooter>

@@ -135,6 +135,28 @@
 /* Permanent high-density workspace. Portalled dialogs and comboboxes opt in
    through compact-workspace-surface; the sidebar and authentication shell do not. */
 @media screen {
+  /* Keep the authenticated application pinned to the visible viewport. Pages
+     scroll inside app-workspace-scroll, avoiding a second document scrollbar
+     and preventing the desktop sidebar from ending at the page content height. */
+  .app-shell {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100vh;
+    height: 100dvh;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .app-shell-sidebar {
+    height: 100%;
+    min-height: 0;
+  }
+
+  .app-workspace-scroll {
+    overscroll-behavior: contain;
+  }
+
   :where(.compact-workspace, .compact-workspace-surface) {
     font-size: 13px;
     line-height: 1.35;

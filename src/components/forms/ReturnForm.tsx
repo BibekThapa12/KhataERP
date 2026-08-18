@@ -67,6 +67,8 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
   const pendingManualLineFocus = useRef(false)
 
   const emptyManualLine = useCallback((): ReturnLine => ({
@@ -121,12 +123,16 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     if (!open) {
       initializedFormRef.current = null
       baselineRef.current = ''
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = false
       setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError(''); setDateInvalid(false)
       return
     }
     if (initializedFormRef.current === formIdentity) return
     initializedFormRef.current = formIdentity
     baselineRef.current = ''
+    workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
+    freshAfterDraftRef.current = false
     if (voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
         partyAccountId: string; originalId: string; dateBs: string; lines: ReturnLine[]; settlementMode: 'party' | 'cash' | 'bank'; settlementAccountId: string; stockCondition: StockCondition; manualVatRate: number; reason: string
@@ -239,8 +245,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
-      if (voucher) await updateReturnVoucher(voucher.id, params, status)
+      const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
+      if (targetVoucherId) await updateReturnVoucher(targetVoucherId, params, status)
       else await saveReturnVoucher(params, status)
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, type, voucher)
       printRequest = undefined
       if (voucher) {
@@ -274,7 +282,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void save('Completed') }, onSaveAndPrint: () => { void save('Completed', true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void save('Completed') }, onSaveAndPrint: () => { void save('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
 
   const deleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -293,7 +301,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
     setSaving(true)
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type,
         date_bs: dateBs,
         narration: reason,
@@ -302,7 +310,11 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         total: preview?.total || 0,
         draft_payload: { partyAccountId, originalId, dateBs, lines: numericSelectedItems.map(line => ({ ...line, rate: formatRateInput(line.rate) })), settlementMode, settlementAccountId, stockCondition, manualVatRate, reason },
       })
-      onClose()
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = true
+      baselineRef.current = ''
+      setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError(''); setDateInvalid(false)
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)) }
     finally { setSaving(false) }
   }
@@ -317,7 +329,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
   return (
     <Dialog open={open} onOpenChange={value => { if (!value) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
       <DialogContent onClickCapture={event => { const target = event.target; if (target instanceof Element && target.closest('button')?.textContent?.includes('Add item')) pendingManualLineFocus.current = true }} className="voucher-dialog max-w-4xl max-h-[92vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>{voucher ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
+        <DialogHeader><DialogTitle>{voucher && !freshAfterDraftRef.current ? 'Alter' : 'New'} {documentName}</DialogTitle></DialogHeader>
         <div className="space-y-5 py-2">
           <div className="grid gap-3 md:grid-cols-2">
             <div className="space-y-1.5"><Label>Return Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
@@ -353,7 +365,7 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={deleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-          {canSaveDraft && <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          {canSaveDraft && <Button variant="outline" onClick={saveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}</Button>}
           <Button onClick={() => save('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => save('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
         </DialogFooter>

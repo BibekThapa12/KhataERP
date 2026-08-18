@@ -57,6 +57,8 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
   const pendingLineFocus = useRef(false)
 
   const activeAccounts = useMemo(() => rawAccounts.filter(account => !account.is_archived).sort((a, b) => a.name.localeCompare(b.name)), [rawAccounts])
@@ -65,10 +67,12 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
 
   useEffect(() => {
     const formIdentity = `${entryType}:${voucher?.id || 'new'}`
-    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; return }
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false; return }
     if (initializedFormRef.current === formIdentity) return
     initializedFormRef.current = formIdentity
     baselineRef.current = ''
+    workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
+    freshAfterDraftRef.current = false
     const draft = (voucher?.draft_payload || {}) as DraftPayload
     const storedLines = draft.lines?.length
       ? draft.lines
@@ -111,8 +115,10 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
     let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true); setError('')
     try {
-      if (voucher) await updateSimpleEntry(voucher.id, params(), 'Completed')
+      const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
+      if (targetVoucherId) await updateSimpleEntry(targetVoucherId, params(), 'Completed')
       else await saveSimpleEntry(params(), 'Completed')
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, 'Journal', voucher)
       printRequest = undefined
       onClose()
@@ -120,19 +126,21 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
     finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
 
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed entries cannot be saved as draft.')
     setSaving(true); setError('')
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type: 'Journal', date_bs: dateBs, narration, total,
         settlement_account_id: counterAccountId || null, simple_entry_type: entryType,
         draft_payload: { simpleEntryType: entryType, counterAccountId, lines, narration, dateBs, journalInvoiceNo: invoiceNo },
       })
-      onClose()
+      workingDraftIdRef.current = undefined; freshAfterDraftRef.current = true; baselineRef.current = ''
+      setDateBs(selectedFiscalYearEndBs(company)); setInvoiceNo(''); setCounterAccountId(''); setLines([blankLine()]); setNarration(''); setError('')
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (caught) { setError(publicErrorMessage(caught, `saving ${entryType.toLowerCase()} draft`)) }
     finally { setSaving(false) }
   }
@@ -181,7 +189,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}
           <Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-          {(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}
+          {(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd></Button>}
           <Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : `Complete ${entryType}`}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
         </DialogFooter>

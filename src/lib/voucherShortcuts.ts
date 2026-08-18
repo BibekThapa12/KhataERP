@@ -30,23 +30,30 @@ export function cancelVoucherPrint(_request?: VoucherPrintRequest) {}
 export function useVoucherShortcuts(options: {
   open: boolean
   disabled: boolean
+  draftDisabled?: boolean
   onSave: () => void
   onSaveAndPrint: () => void
+  onSaveDraft?: () => void
 }) {
-  const { open, disabled, onSave, onSaveAndPrint } = options
+  const { open, disabled, draftDisabled = disabled, onSave, onSaveAndPrint, onSaveDraft } = options
   useEffect(() => {
     if (!open) return
     const handler = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return
       const key = event.key.toLowerCase()
-      if (key !== 's' && key !== 'p') return
+      if (key !== 's' && key !== 'p' && key !== 'd') return
+      if (key === 'd' && !onSaveDraft) return
       event.preventDefault()
       event.stopPropagation()
+      if (key === 'd') {
+        if (!draftDisabled) onSaveDraft?.()
+        return
+      }
       if (disabled) return
       if (key === 's') onSave()
       else onSaveAndPrint()
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [open, disabled, onSave, onSaveAndPrint])
+  }, [open, disabled, draftDisabled, onSave, onSaveAndPrint, onSaveDraft])
 }

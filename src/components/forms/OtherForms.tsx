@@ -204,12 +204,14 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
 
   useEffect(() => {
     const formIdentity = `${type}:${voucher?.id || 'new'}`
-    if (!open) { initializedFormRef.current = null; baselineRef.current = '' }
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false }
     else if (initializedFormRef.current === formIdentity) return
-    else { initializedFormRef.current = formIdentity; baselineRef.current = '' }
+    else { initializedFormRef.current = formIdentity; baselineRef.current = ''; workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined; freshAfterDraftRef.current = false }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; allocations: typeof allocations; moneyAccountId: string; narration: string }> | null : null
       setDateBs(voucher.date_bs)
@@ -275,13 +277,15 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
+      const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
       if (isReceipt) {
-        if (voucher) await updateReceipt(voucher.id, { allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
+        if (targetVoucherId) await updateReceipt(targetVoucherId, { allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
         else await saveReceipt({ allocations: validAllocations, deposit_to_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
       } else {
-        if (voucher) await updatePayment(voucher.id, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
+        if (targetVoucherId) await updatePayment(targetVoucherId, { allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
         else await savePayment({ allocations: validAllocations, paid_from_account_id: moneyAccountId, narration, date_bs: dateBs }, status)
       }
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, type, voucher)
       printRequest = undefined
       if (voucher) {
@@ -310,7 +314,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -329,7 +333,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     setSaving(true)
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type,
         date_bs: dateBs,
         narration,
@@ -338,7 +342,11 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         total,
         draft_payload: { dateBs, allocations, moneyAccountId, narration },
       })
-      onClose()
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = true
+      baselineRef.current = ''
+      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)) }
     finally { setSaving(false) }
   }
@@ -399,7 +407,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={() => void confirmReceiptPaymentDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}</Button>}
           <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
         </DialogFooter>
@@ -447,12 +455,14 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
 
   useEffect(() => {
     const formIdentity = `Journal:${voucher?.id || 'new'}`
-    if (!open) { initializedFormRef.current = null; baselineRef.current = '' }
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false }
     else if (initializedFormRef.current === formIdentity) return
-    else { initializedFormRef.current = formIdentity; baselineRef.current = '' }
+    else { initializedFormRef.current = formIdentity; baselineRef.current = ''; workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined; freshAfterDraftRef.current = false }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{ dateBs: string; journalInvoiceNo: string; jLines: JLine[]; narration: string }> | null : null
       setDateBs(voucher.date_bs)
@@ -529,8 +539,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     setSaving(true)
     try {
       const params = { lines: validLines as Omit<VoucherLine, 'id' | 'voucher_id'>[], narration, date_bs: dateBs, invoice_no: manualJournalNumbering ? journalInvoiceNo.trim() : undefined }
-      if (voucher) await updateJournal(voucher.id, params, status)
+      const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
+      if (targetVoucherId) await updateJournal(targetVoucherId, params, status)
       else await saveJournal(params, status)
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, 'Journal', voucher)
       printRequest = undefined
       if (voucher) {
@@ -559,7 +571,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving || !balanced, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
+  useVoucherShortcuts({ open, disabled: saving || !balanced, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -578,14 +590,18 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     setSaving(true)
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type: 'Journal',
         date_bs: dateBs,
         narration,
         total: totalDebit || totalCredit,
         draft_payload: { dateBs, journalInvoiceNo, jLines, narration },
       })
-      onClose()
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = true
+      baselineRef.current = ''
+      setDateBs(selectedFiscalYearEndBs(company)); setJournalInvoiceNo(''); setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }]); setNarration(''); setError(''); setDateInvalid(false)
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, 'saving journal draft')) }
     finally { setSaving(false) }
   }
@@ -659,7 +675,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         <DialogFooter>
           {voucher?.status === 'Draft' && <Button variant="destructive" onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
           <Button variant="outline" onClick={() => void confirmJournalDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}</Button>}
+          {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>{saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}</Button>}
           <Button onClick={() => handleSave('Completed')} disabled={saving || !balanced} title="Save voucher (Alt+S)">{saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button>
           <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving || !balanced} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button>
         </DialogFooter>

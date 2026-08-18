@@ -69,6 +69,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
 
   const partyType = isSales ? 'customer' : 'supplier'
   const partyTerms = partyTerminology(partyType)
@@ -77,7 +79,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const selectedPartyAccount = accounts.find(account => account.id === partyAccountId)
   const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
   const cashAccount = accounts.find(account => account.id === cashAccountId)
-  const isEditing = !!voucher
+  const isEditing = !!voucher && !freshAfterDraftRef.current
   const dueDateBs = (() => {
     try { return addDaysToBs(dateBs, isCash ? 0 : creditDays) } catch { return '' }
   })()
@@ -89,6 +91,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     amount: round2Local(line.amount_input !== undefined && line.amount_input !== '' ? Number(line.amount_input) : line.qty * rateInputNumber(line.rate)),
   })), [lines])
   const subtotal = invoiceSubtotal(numericLines)
+  const totalQuantity = useMemo(
+    () => round2Local(lines.reduce((sum, line) => sum + (Number(line.qty) || 0), 0)),
+    [lines],
+  )
+  const totalQuantityLabel = totalQuantity.toLocaleString('en-IN', { maximumFractionDigits: 6 })
   const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
   const taxable = round2Local(subtotal - discountAmount)
   const effectiveVatRate = vatEnabled ? vatRate : 0
@@ -109,11 +116,15 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!open) {
       initializedFormRef.current = null
       baselineRef.current = ''
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = false
     } else if (initializedFormRef.current === formIdentity) {
       return
     } else {
       initializedFormRef.current = formIdentity
       baselineRef.current = ''
+      workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
+      freshAfterDraftRef.current = false
     }
     if (open && voucher) {
       const draft = voucher.status === 'Draft' ? voucher.draft_payload as Partial<{
@@ -275,13 +286,15 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setSaving(true)
     try {
       const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, amount_input: _amountInput, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
+      const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
       if (isSales) {
-        if (voucher) await updateSalesVoucher(voucher.id, params, status)
+        if (targetVoucherId) await updateSalesVoucher(targetVoucherId, params, status)
         else await saveSalesVoucher(params, status)
       } else {
-        if (voucher) await updatePurchaseVoucher(voucher.id, params, status)
+        if (targetVoucherId) await updatePurchaseVoucher(targetVoucherId, params, status)
         else await savePurchaseVoucher(params, status)
       }
+      workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, type, voucher)
       printRequest = undefined
       if (voucher) {
@@ -321,7 +334,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
 
   const handleSaveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') {
@@ -332,7 +345,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     setSaving(true)
     try {
       await saveDraftVoucher({
-        id: voucher?.status === 'Draft' ? voucher.id : undefined,
+        id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)),
         type,
         date_bs: dateBs,
         narration: narration.trim(),
@@ -341,7 +354,14 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         total,
         draft_payload: { dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines: numericLines.map(line => ({ ...line, rate: formatRateInput(line.rate) })), vatRate, discount, discountMode, narration },
       })
-      onClose()
+      workingDraftIdRef.current = undefined
+      freshAfterDraftRef.current = true
+      baselineRef.current = ''
+      setDateBs(selectedFiscalYearEndBs(company)); setIsCash(false); setPartyAccountId(''); setCreditDays(0); setSupplierInvoiceNo('')
+      setLines([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
+      setDiscount(0); setDiscountMode('flat'); setNarration(''); setError(''); setDateInvalid(false)
+      itemTriggerRefs.current = []; pendingLineFocus.current = null
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (e: unknown) {
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`))
     } finally {
@@ -494,6 +514,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
               </div>
 
               <div className="h-full space-y-2 rounded-lg bg-[#f6f6f6] p-3 text-[14px]">
+                <div className="flex justify-between"><span className="text-muted-foreground">Total Quantity</span><span className="num font-medium">{totalQuantityLabel}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num font-medium">{fmtMoney(subtotal)}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Discount{discountMode === 'percent' && discount > 0 ? ` (${discount}%)` : ''}</span><span className="num font-medium">- {fmtMoney(discountAmount)}</span></div>
                 {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num font-medium">{fmtMoney(vatAmount)}</span></div>}
@@ -510,7 +531,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
             <Button variant="outline" tabIndex={-1} onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
             {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
-              {saving ? 'Saving...' : voucher?.status === 'Draft' ? 'Update Draft' : 'Save as Draft'}
+              {saving ? 'Saving...' : voucher?.status === 'Draft' && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}
+              {!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}
             </Button>}
             <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">
               {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}

@@ -43,15 +43,19 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
+  const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
+  const freshAfterDraftRef = useRef(false)
   const accounts = useMemo(() => company ? contraMoneyAccounts(rawAccounts, accountCategories, company.id) : [], [company, rawAccounts, accountCategories])
   const options = accounts.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))
 
   useEffect(() => {
     const formIdentity = `Contra:${voucher?.id || 'new'}`
-    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; return }
+    if (!open) { initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false; return }
     if (initializedFormRef.current === formIdentity) return
     initializedFormRef.current = formIdentity
     baselineRef.current = ''
+    workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
+    freshAfterDraftRef.current = false
     const draft = (voucher?.draft_payload || {}) as ContraDraft
     const destinationLine = voucher?.lines?.find(line => line.account_id === voucher.contra_destination_account_id)
     setDateBs(draft.dateBs || voucher?.date_bs || selectedFiscalYearEndBs(company))
@@ -81,23 +85,25 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     if (!lock.tryAcquire()) return
     let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true); setError('')
-    try { if (voucher) await updateContra(voucher.id, params(), 'Completed'); else await saveContra(params(), 'Completed'); completeVoucherPrint(printRequest, 'Journal', voucher); printRequest = undefined; onClose() }
+    try { const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current); if (targetVoucherId) await updateContra(targetVoucherId, params(), 'Completed'); else await saveContra(params(), 'Completed'); workingDraftIdRef.current = undefined; completeVoucherPrint(printRequest, 'Journal', voucher); printRequest = undefined; onClose() }
     catch (caught) { cancelVoucherPrint(printRequest); setError(contraError(caught)) }
     finally { lock.release(); setSaving(false) }
   }
-  useVoucherShortcuts({ open, disabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) } })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed Contra vouchers cannot be saved as draft.')
     setSaving(true); setError('')
     try {
-      await saveDraftVoucher({ id: voucher?.status === 'Draft' ? voucher.id : undefined, type: 'Journal', date_bs: dateBs, narration, total: amount + charge, settlement_account_id: sourceId || null, contra_entry: true, contra_destination_account_id: destinationId || null, contra_charge_amount: charge, draft_payload: { journalEntryType: 'Contra', sourceAccountId: sourceId, destinationAccountId: destinationId, amount, chargeAmount: charge, narration, dateBs, journalInvoiceNo: invoiceNo } })
-      onClose()
+      await saveDraftVoucher({ id: freshAfterDraftRef.current ? undefined : (workingDraftIdRef.current || (voucher?.status === 'Draft' ? voucher.id : undefined)), type: 'Journal', date_bs: dateBs, narration, total: amount + charge, settlement_account_id: sourceId || null, contra_entry: true, contra_destination_account_id: destinationId || null, contra_charge_amount: charge, draft_payload: { journalEntryType: 'Contra', sourceAccountId: sourceId, destinationAccountId: destinationId, amount, chargeAmount: charge, narration, dateBs, journalInvoiceNo: invoiceNo } })
+      workingDraftIdRef.current = undefined; freshAfterDraftRef.current = true; baselineRef.current = ''
+      setDateBs(selectedFiscalYearEndBs(company)); setInvoiceNo(''); setSourceId(''); setDestinationId(''); setAmount(0); setCharge(0); setNarration(''); setError('')
+      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (caught) { setError(contraError(caught)) } finally { setSaving(false) }
   }
   const removeDraft = async () => { if (!voucher || voucher.status !== 'Draft') return; setSaving(true); try { await deleteDraftVoucher(voucher.id); onClose() } catch (caught) { setError(publicErrorMessage(caught, 'deleting Contra draft')) } finally { setSaving(false) } }
 
   return <Dialog open={open} onOpenChange={next => { if (!next) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}><DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
-    <DialogHeader><DialogTitle>{voucher ? 'Edit' : 'Add'} Contra</DialogTitle></DialogHeader>
+    <DialogHeader><DialogTitle>{voucher && !freshAfterDraftRef.current ? 'Edit' : 'Add'} Contra</DialogTitle></DialogHeader>
     <p className="-mt-2 text-sm text-muted-foreground">Move money seamlessly between your Cash and Bank ledgers.</p>
     <div className="space-y-4 py-2">
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>{manualNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={invoiceNo} onChange={event => setInvoiceNo(event.target.value)} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}</div>
@@ -106,6 +112,6 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
       <div className="space-y-1.5"><Label>Note</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Transfer reference or details" /></div>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
-    <DialogFooter>{voucher?.status === 'Draft' && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher ? 'Update Draft' : 'Save as Draft'}</Button>}<Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button><Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button></DialogFooter>
+    <DialogFooter>{voucher?.status === 'Draft' && !freshAfterDraftRef.current && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd></Button>}<Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button><Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button></DialogFooter>
   </DialogContent></Dialog>
 }
