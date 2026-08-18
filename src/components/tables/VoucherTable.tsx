@@ -340,7 +340,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     onSelectionChange(next)
   }
 
-  const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
+  const renderVoucherPrintHtml = (voucher: Voucher) => {
     const party = voucher.party_account_id
       ? getPartyByAccountId(voucher.party_account_id)
       : null
@@ -501,6 +501,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
                 <p class="box-title">Party Details</p>
                 <p><strong>${esc(partyName)}</strong></p>
                 <p>${esc(party?.address || '')}</p>
+                ${(voucher.type === 'Sales' || voucher.type === 'Purchase') && party?.phone ? `<p>Phone: ${esc(party.phone)}</p>` : ''}
                 <p>${party?.pan_vat ? `PAN/VAT: ${esc(party.pan_vat)}` : ''}</p>
               </div>
               <div class="box">
@@ -526,10 +527,14 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         </body>
       </html>
     `
+    return html
+  }
+
+  const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
     const win = targetWindow || window.open('', '_blank', 'width=800,height=900')
     if (!win) return
     logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
-    win.document.write(html)
+    win.document.write(renderVoucherPrintHtml(voucher))
     win.document.close()
     let printStarted = false
     const printWhenReady = () => {
@@ -543,7 +548,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     window.setTimeout(printWhenReady, 800)
   }
 
-  registerVoucherPrinter(printVoucher)
+  registerVoucherPrinter(printVoucher, renderVoucherPrintHtml)
 
   if (printerOnly) return null
 

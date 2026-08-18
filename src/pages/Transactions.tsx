@@ -21,7 +21,7 @@ import { companyCanWrite } from '@/lib/billing'
 import { isDeveloperAdmin } from '@/lib/supabase'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { userFacingErrorMessage } from '@/lib/security'
-import { printPersistedVoucher } from '@/lib/voucherPrinterRegistry'
+import { printPersistedVouchers } from '@/lib/voucherPrinterRegistry'
 import { notifyError, withoutSuccessNotifications } from '@/lib/notifications'
 
 function useVouchersByType(type: VoucherType) {
@@ -87,10 +87,15 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
   const printSelected = () => {
     if (processing || !selectedIds.size) return
     const selected = drafts.filter(voucher => selectedIds.has(voucher.id)).sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
-    const targets = selected.map(() => window.open('', '_blank', 'width=800,height=900'))
-    const blocked = targets.filter(target => !target).length
-    selected.forEach((voucher, index) => { const target = targets[index]; if (target) printPersistedVoucher(voucher, target) })
-    if (blocked) notifyError(`${blocked} print window${blocked === 1 ? ' was' : 's were'} blocked`, 'Allow popups for KhataERP and try Print Selected again.')
+    const target = window.open('', '_blank', 'width=800,height=900')
+    if (!target) {
+      notifyError('The print window was blocked', 'Allow popups for KhataERP and try Print Selected again.')
+      return
+    }
+    if (!printPersistedVouchers(selected, target)) {
+      target.close()
+      notifyError('The selected drafts could not be prepared for printing. Please try again.')
+    }
   }
   const deleteSelected = async () => {
     if (processing || !canComplete || !selectedIds.size) return
