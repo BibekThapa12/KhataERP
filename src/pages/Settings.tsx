@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react'
-import { Building2, Database, Download, FileSpreadsheet, ReceiptText, Upload, Users } from 'lucide-react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { Building2, Database, Download, FileSpreadsheet, ImagePlus, ReceiptText, Trash2, Upload, Users } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
 import { downloadImportTemplate, executeImport, importModuleOptions, previewImportWorkbook, templateFor, type ImportModule, type ImportPreview } from '@/lib/importData'
@@ -36,7 +36,7 @@ const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
-  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'show_company_details_on_sales_invoice', 'invoice_terms', 'payment_qr_text', 'logo_url', 'fiscal_year_start',
+  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'show_company_details_on_sales_invoice', 'invoice_terms', 'payment_qr_text', 'payment_qr_url', 'logo_url', 'fiscal_year_start',
   'fiscal_year_configured',
 ] as const
 
@@ -260,6 +260,8 @@ export function SettingsPage() {
   const [showCompanyDetailsOnSalesInvoice, setShowCompanyDetailsOnSalesInvoice] = useState(company?.show_company_details_on_sales_invoice ?? true)
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
+  const [paymentQrUrl, setPaymentQrUrl] = useState(company?.payment_qr_url ?? '')
+  const [paymentQrSaving, setPaymentQrSaving] = useState(false)
   const [logoUrl, setLogoUrl] = useState(company?.logo_url ?? '')
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
@@ -276,6 +278,7 @@ export function SettingsPage() {
   const [importMessage, setImportMessage] = useState('')
   const [importError, setImportError] = useState('')
   const [settingsSection, setSettingsSection] = useState<SettingsSection>('company')
+  const settingsNavigationRef = useRef<HTMLDivElement>(null)
   const fiscalYearStartAd = parseBsDate(fiscalYearStartBs) ? bsToAd(fiscalYearStartBs) : ''
   const fiscalYearLocked = vouchers.length > 0
   const currentFiscalYear = Number(currentFiscalYearStartBs(company).slice(0, 4))
@@ -322,8 +325,56 @@ export function SettingsPage() {
     setShowCompanyDetailsOnSalesInvoice(company?.show_company_details_on_sales_invoice ?? true)
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
+    setPaymentQrUrl(company?.payment_qr_url ?? '')
     setLogoUrl(company?.logo_url ?? '')
   }, [company, effectiveFiscalYearStartBs])
+
+  useEffect(() => {
+    const workspace = settingsNavigationRef.current?.closest('.app-workspace-scroll') as HTMLElement | null
+    workspace?.scrollTo({ top: 0, behavior: 'auto' })
+  }, [settingsSection])
+
+  const handlePaymentQrUpload = async (file: File | undefined) => {
+    if (!file || !company || paymentQrSaving) return
+    setSaveError('')
+    if (!['image/png', 'image/jpeg', 'image/webp'].includes(file.type)) {
+      setSaveError('Payment QR must be a PNG, JPEG, or WebP image.')
+      return
+    }
+    if (file.size > 2 * 1024 * 1024) {
+      setSaveError('Payment QR image must be 2 MB or smaller.')
+      return
+    }
+    setPaymentQrSaving(true)
+    try {
+      const objectPath = `${company.id}/payment-qr`
+      const { error: uploadError } = await supabase.storage.from('company-assets').upload(objectPath, file, { upsert: true, contentType: file.type, cacheControl: '3600' })
+      if (uploadError) throw uploadError
+      const { data } = supabase.storage.from('company-assets').getPublicUrl(objectPath)
+      const nextUrl = `${data.publicUrl}?v=${Date.now()}`
+      await saveCompany({ payment_qr_url: nextUrl })
+      setPaymentQrUrl(nextUrl)
+    } catch (error) {
+      setSaveError(publicErrorMessage(error, 'saving payment QR'))
+    } finally {
+      setPaymentQrSaving(false)
+    }
+  }
+
+  const handlePaymentQrRemove = async () => {
+    if (!company || paymentQrSaving || !paymentQrUrl) return
+    setSaveError('')
+    setPaymentQrSaving(true)
+    try {
+      await saveCompany({ payment_qr_url: '' })
+      setPaymentQrUrl('')
+      await supabase.storage.from('company-assets').remove([`${company.id}/payment-qr`])
+    } catch (error) {
+      setSaveError(publicErrorMessage(error, 'removing payment QR'))
+    } finally {
+      setPaymentQrSaving(false)
+    }
+  }
 
   const handleSave = async () => {
     setSaveError('')
@@ -370,6 +421,7 @@ export function SettingsPage() {
         show_company_details_on_sales_invoice: showCompanyDetailsOnSalesInvoice,
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
+        payment_qr_url: paymentQrUrl.trim(),
         logo_url: logoUrl.trim(),
       })
       setSaved(true)
@@ -1019,7 +1071,7 @@ export function SettingsPage() {
     <div>
       <PageHeader title="Settings" description="Company details and data management" />
       <PageContent className="max-w-none">
-        <div className="mb-5 grid gap-2 sm:grid-cols-2 xl:grid-cols-4" role="navigation" aria-label="Settings sections">
+        <div ref={settingsNavigationRef} className="sticky top-0 z-20 mb-5 grid gap-2 border-b border-border bg-background/95 py-2 backdrop-blur sm:grid-cols-2 xl:grid-cols-4" role="navigation" aria-label="Settings sections">
           {([
             ['company', 'Company Details', Building2],
             ['vouchers', 'Voucher Config', ReceiptText],
@@ -1031,7 +1083,7 @@ export function SettingsPage() {
             </Button>
           ))}
         </div>
-        <div className="mx-auto max-w-5xl space-y-5">
+        <div className="mx-auto max-w-5xl space-y-5" style={{ overflowAnchor: 'none' }}>
         <Card className={settingsSection === 'admins' ? '' : 'hidden'}>
           <CardHeader><CardTitle className="text-base">Account Diagnostic</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-xs text-muted-foreground">
@@ -1183,6 +1235,22 @@ export function SettingsPage() {
             <div className="space-y-1.5">
               <Label>Payment QR / Note</Label>
               <Textarea value={paymentQrText} onChange={e => setPaymentQrText(e.target.value)} rows={2} placeholder="eSewa/Khalti/bank QR note or payment instructions" />
+            </div>
+            <div className="space-y-2 rounded-md border border-border p-3">
+              <div>
+                <Label>Payment QR for Sales invoices</Label>
+                <p className="text-xs text-muted-foreground">Optional. The QR image appears only on printed Sales vouchers.</p>
+              </div>
+              {paymentQrUrl && <img src={paymentQrUrl} alt="Current payment QR" className="h-28 w-28 rounded-md border bg-white object-contain p-1" />}
+              <div className="flex flex-wrap gap-2">
+                <Button type="button" variant="outline" size="sm" disabled={paymentQrSaving} asChild>
+                  <label className="cursor-pointer">
+                    <ImagePlus className="mr-1.5 h-4 w-4" />{paymentQrSaving ? 'Saving…' : paymentQrUrl ? 'Change QR' : 'Add QR'}
+                    <input type="file" accept="image/png,image/jpeg,image/webp" className="sr-only" disabled={paymentQrSaving} onChange={event => { const file = event.target.files?.[0]; event.target.value = ''; void handlePaymentQrUpload(file) }} />
+                  </label>
+                </Button>
+                {paymentQrUrl && <Button type="button" variant="outline" size="sm" disabled={paymentQrSaving} onClick={() => void handlePaymentQrRemove()}><Trash2 className="mr-1.5 h-4 w-4" />Remove QR</Button>}
+              </div>
             </div>
             </div>
             <Button onClick={handleSave} disabled={saving}>

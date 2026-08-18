@@ -195,6 +195,7 @@ export interface Company {
   show_company_details_on_sales_invoice?: boolean
   invoice_terms?: string
   payment_qr_text?: string
+  payment_qr_url?: string
   logo_url?: string
   plan_status?: 'free' | 'trial' | 'paid' | 'expired'
   trial_ends_at?: string | null
@@ -256,6 +257,7 @@ export interface CompanyCreateInput {
   show_company_details_on_sales_invoice?: boolean
   invoice_terms?: string
   payment_qr_text?: string
+  payment_qr_url?: string
 }
 
 export interface DeveloperUserCompanyLicense {

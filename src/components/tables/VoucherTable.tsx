@@ -470,6 +470,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             .totals div { display: flex; justify-content: space-between; padding: 3px 0; }
             .totals .grand { border-top: 1px solid #111827; font-size: 13px; padding-top: 6px; }
             .note { margin-top: 12px; border-top: 1px solid #d1d5db; padding-top: 6px; }
+            .payment-qr { margin-top: 10px; display: flex; align-items: center; gap: 8px; break-inside: avoid; page-break-inside: avoid; }
+            .payment-qr img { width: 28mm; height: 28mm; object-fit: contain; border: 1px solid #d1d5db; padding: 1mm; }
             .signatures { margin-top: 22mm; display: flex; justify-content: space-between; gap: 24mm; }
             .signatures div { border-top: 1px solid #111827; flex: 1; text-align: center; padding-top: 4px; }
             @media print { .sheet { width: 100%; max-width: none; } }
@@ -518,7 +520,8 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             ${totals}
             ${voucher.return_reason ? `<p class="note"><strong>Return reason:</strong> ${esc(voucher.return_reason)}</p>` : voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
             ${company?.invoice_terms ? `<p class="note"><strong>Terms:</strong> ${esc(company.invoice_terms)}</p>` : ''}
-            ${company?.payment_qr_text ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
+            ${company?.payment_qr_text && !(voucher.type === 'Sales' && company?.payment_qr_url) ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
+            ${voucher.type === 'Sales' && company?.payment_qr_url ? `<section class="payment-qr"><img src="${esc(company.payment_qr_url)}" alt="Payment QR" referrerpolicy="no-referrer" /><div><strong>Scan to Pay</strong>${company?.payment_qr_text ? `<p>${esc(company.payment_qr_text)}</p>` : ''}</div></section>` : ''}
             <section class="signatures">
               <div>Prepared By</div>
               <div>Received By</div>

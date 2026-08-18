@@ -96,6 +96,7 @@ begin
     'status', case when exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'sales_prefix')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'print_format')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'show_company_details_on_sales_invoice')
+                   and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'payment_qr_url')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'logo_url')
                    and exists (select 1 from information_schema.columns where table_schema = 'public' and table_name = 'companies' and column_name = 'enforce_sales_invoice_chronology')
               then 'ok' else 'missing' end,
@@ -185,6 +186,7 @@ create table if not exists companies (
   show_company_details_on_sales_invoice boolean not null default true,
   invoice_terms    text,
   payment_qr_text  text,
+  payment_qr_url   text,
   logo_url         text,
   plan_status      text not null default 'trial' check (plan_status in ('free','trial','paid','expired')),
   trial_ends_at    date,
@@ -229,6 +231,7 @@ alter table companies add column if not exists print_format text not null defaul
 alter table companies add column if not exists show_company_details_on_sales_invoice boolean not null default true;
 alter table companies add column if not exists invoice_terms text;
 alter table companies add column if not exists payment_qr_text text;
+alter table companies add column if not exists payment_qr_url text;
 alter table companies add column if not exists logo_url text;
 alter table companies add column if not exists plan_status text not null default 'trial';
 alter table companies add column if not exists trial_ends_at date;
@@ -10039,6 +10042,147 @@ $$;
 commit;
 notify pgrst, 'reload schema';
 -- END SYNCED MIGRATION: 202608180001_nepal_voucher_date_boundary.sql
+
+-- BEGIN SYNCED MIGRATION: 202608180002_sales_payment_qr.sql
+-- Optional company payment QR images for printed Sales vouchers.
+begin;
+
+alter table public.companies
+  add column if not exists payment_qr_url text;
+
+alter table public.companies
+  drop constraint if exists companies_payment_qr_url_valid;
+alter table public.companies
+  add constraint companies_payment_qr_url_valid
+  check (
+    payment_qr_url is null
+    or btrim(payment_qr_url) = ''
+    or (length(payment_qr_url) <= 2048 and payment_qr_url ~ '^https://')
+  );
+
+comment on column public.companies.payment_qr_url is
+  'Optional HTTPS URL for the payment QR image printed on Sales vouchers.';
+
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values (
+  'company-assets',
+  'company-assets',
+  true,
+  2097152,
+  array['image/png', 'image/jpeg', 'image/webp']
+)
+on conflict (id) do update
+set public = true,
+    file_size_limit = excluded.file_size_limit,
+    allowed_mime_types = excluded.allowed_mime_types;
+
+drop policy if exists company_assets_public_read on storage.objects;
+create policy company_assets_public_read
+on storage.objects for select
+using (bucket_id = 'company-assets');
+
+drop policy if exists company_assets_admin_insert on storage.objects;
+create policy company_assets_admin_insert
+on storage.objects for insert to authenticated
+with check (
+  bucket_id = 'company-assets'
+  and exists (
+    select 1 from public.companies company
+    where company.id::text = (storage.foldername(name))[1]
+      and public.is_company_admin(company.id)
+  )
+);
+
+drop policy if exists company_assets_admin_update on storage.objects;
+create policy company_assets_admin_update
+on storage.objects for update to authenticated
+using (
+  bucket_id = 'company-assets'
+  and exists (
+    select 1 from public.companies company
+    where company.id::text = (storage.foldername(name))[1]
+      and public.is_company_admin(company.id)
+  )
+)
+with check (
+  bucket_id = 'company-assets'
+  and exists (
+    select 1 from public.companies company
+    where company.id::text = (storage.foldername(name))[1]
+      and public.is_company_admin(company.id)
+  )
+);
+
+drop policy if exists company_assets_admin_delete on storage.objects;
+create policy company_assets_admin_delete
+on storage.objects for delete to authenticated
+using (
+  bucket_id = 'company-assets'
+  and exists (
+    select 1 from public.companies company
+    where company.id::text = (storage.foldername(name))[1]
+      and public.is_company_admin(company.id)
+  )
+);
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED MIGRATION: 202608180002_sales_payment_qr.sql
+
+-- BEGIN SYNCED MIGRATION: 202608180003_fix_company_asset_authorization.sql
+-- Make company asset authorization reliable for both owners and active admins.
+begin;
+
+create or replace function public.can_manage_company_asset(object_name text)
+returns boolean
+language sql
+stable
+security definer
+set search_path = public
+as $$
+  select auth.uid() is not null
+    and (
+      public.is_developer_admin()
+      or exists (
+        select 1
+        from public.companies company
+        where company.id::text = split_part(object_name, '/', 1)
+          and (
+            company.user_id = auth.uid()
+            or exists (
+              select 1
+              from public.company_members member
+              where member.company_id = company.id
+                and member.user_id = auth.uid()
+                and member.status = 'active'
+                and member.role = 'Admin'
+            )
+          )
+      )
+    )
+$$;
+
+revoke all on function public.can_manage_company_asset(text) from public, anon;
+grant execute on function public.can_manage_company_asset(text) to authenticated;
+
+drop policy if exists company_assets_admin_insert on storage.objects;
+create policy company_assets_admin_insert on storage.objects for insert to authenticated
+with check (bucket_id = 'company-assets' and public.can_manage_company_asset(name));
+
+drop policy if exists company_assets_admin_update on storage.objects;
+create policy company_assets_admin_update on storage.objects for update to authenticated
+using (bucket_id = 'company-assets' and public.can_manage_company_asset(name))
+with check (bucket_id = 'company-assets' and public.can_manage_company_asset(name));
+
+drop policy if exists company_assets_admin_delete on storage.objects;
+create policy company_assets_admin_delete on storage.objects for delete to authenticated
+using (bucket_id = 'company-assets' and public.can_manage_company_asset(name));
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED MIGRATION: 202608180003_fix_company_asset_authorization.sql
+
+
 
 notify pgrst, 'reload schema';
 
