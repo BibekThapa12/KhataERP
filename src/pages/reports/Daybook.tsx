@@ -155,17 +155,17 @@ export function DaybookPage() {
             <div className="py-16 text-center text-sm text-muted-foreground">No vouchers in this date range.</div>
           ) : (
             <div className="overflow-x-auto">
-              <table className="w-full min-w-[1050px] border-collapse text-sm">
+              <table className="daybook-table w-full min-w-[1050px] border-collapse text-sm">
                 <thead>
                   <tr className="bg-muted/50">
-                    <th className="report-th text-left">S.No.</th>
-                    <th className="report-th text-left">Date</th>
-                    <th className="report-th text-left">Voucher Type</th>
-                    <th className="report-th text-left">Voucher No.</th>
-                    <th className="report-th text-left">Party / Account</th>
+                    <th className="daybook-col-serial report-th text-left">S.No.</th>
+                    <th className="daybook-col-date report-th text-left">Date</th>
+                    <th className="daybook-col-type report-th text-left">Voucher Type</th>
+                    <th className="daybook-col-number report-th text-left">Voucher No.</th>
+                    <th className="daybook-col-party report-th text-left">Party / Account</th>
                     {columns.has('narration') && <th className="daybook-print-hide report-th text-left">Narration</th>}
-                    {columns.has('debit') && <th className="report-th text-right"><span className="daybook-screen-money">Debit</span><span className="daybook-print-money hidden">Debit (Rs.)</span></th>}
-                    {columns.has('credit') && <th className="report-th text-right"><span className="daybook-screen-money">Credit</span><span className="daybook-print-money hidden">Credit (Rs.)</span></th>}
+                    {columns.has('debit') && <th className="daybook-col-money report-th text-right"><span className="daybook-screen-money">Debit</span><span className="daybook-print-money hidden">Debit (Rs.)</span></th>}
+                    {columns.has('credit') && <th className="daybook-col-money report-th text-right"><span className="daybook-screen-money">Credit</span><span className="daybook-print-money hidden">Credit (Rs.)</span></th>}
                     {columns.has('net') && <th className="daybook-print-hide report-th text-right">Net Amount</th>}
                     {columns.has('status') && <th className="daybook-print-hide report-th text-left">Status</th>}
                     <th className="report-th report-controls text-center">Action</th>
@@ -178,14 +178,14 @@ export function DaybookPage() {
                       onClick={() => setSelected(row.voucher)}
                       className={`cursor-pointer border-t border-border transition-colors hover:bg-muted/30 ${row.cancelled ? 'opacity-50' : ''}`}
                     >
-                      <td className="report-td whitespace-nowrap text-muted-foreground num">{index + 1}</td>
-                      <td className="report-td whitespace-nowrap text-muted-foreground">{fmtDate(row.date_bs)}</td>
-                      <td className="report-td"><Badge variant={badgeVariant(row.voucher_type, row.cancelled)}>{row.voucher_type}</Badge></td>
-                      <td className="report-td num">{row.voucher_no}</td>
-                      <td className="report-td font-medium">{(() => { const names = rowParticulars(row); return <>{names.primary}{names.secondary && names.secondary !== names.primary && <span className="block text-xs font-normal text-muted-foreground">{names.secondary}</span>}</> })()}</td>
+                      <td className="daybook-col-serial report-td whitespace-nowrap text-muted-foreground num">{index + 1}</td>
+                      <td className="daybook-col-date report-td whitespace-nowrap text-muted-foreground">{fmtDate(row.date_bs)}</td>
+                      <td className="daybook-col-type report-td"><Badge variant={badgeVariant(row.voucher_type, row.cancelled)}>{row.voucher_type}</Badge></td>
+                      <td className="daybook-col-number report-td num">{row.voucher_no}</td>
+                      <td className="daybook-col-party report-td font-medium">{(() => { const names = rowParticulars(row); return <>{names.primary}{names.secondary && names.secondary !== names.primary && <span className="block text-xs font-normal text-muted-foreground">{names.secondary}</span>}</> })()}</td>
                       {columns.has('narration') && <td className="daybook-print-hide report-td max-w-[220px] truncate text-muted-foreground">{row.narration || '-'}</td>}
-                      {columns.has('debit') && <td className="report-td text-right num debit-amt"><span className="daybook-screen-money">{row.debit ? fmtMoney(row.debit) : '—'}</span><span className="daybook-print-money hidden">{row.debit ? printMoney(row.debit) : '—'}</span></td>}
-                      {columns.has('credit') && <td className="report-td text-right num credit-amt"><span className="daybook-screen-money">{row.credit ? fmtMoney(row.credit) : '—'}</span><span className="daybook-print-money hidden">{row.credit ? printMoney(row.credit) : '—'}</span></td>}
+                      {columns.has('debit') && <td className="daybook-col-money report-td text-right num debit-amt"><span className="daybook-screen-money">{row.debit ? fmtMoney(row.debit) : '—'}</span><span className="daybook-print-money hidden">{row.debit ? printMoney(row.debit) : '—'}</span></td>}
+                      {columns.has('credit') && <td className="daybook-col-money report-td text-right num credit-amt"><span className="daybook-screen-money">{row.credit ? fmtMoney(row.credit) : '—'}</span><span className="daybook-print-money hidden">{row.credit ? printMoney(row.credit) : '—'}</span></td>}
                       {columns.has('net') && <td className={`daybook-print-hide report-td text-right num font-semibold ${row.debit - row.credit > 0 ? 'debit-amt' : row.credit - row.debit > 0 ? 'credit-amt' : ''}`}>{fmtMoney(Math.abs(row.debit - row.credit))}</td>}
                       {columns.has('status') && <td className="daybook-print-hide report-td"><Badge variant={row.cancelled ? 'cancelled' : 'default'}>{row.cancelled ? 'Cancelled' : 'Active'}</Badge></td>}
                       <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher_no}`} onClick={event => { event.stopPropagation(); setSelected(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>

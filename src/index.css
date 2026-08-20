@@ -345,6 +345,13 @@
   .daybook-print-total { display: table-row !important; }
   .daybook-screen-money { display: none !important; }
   .daybook-print-money { display: inline !important; }
+  .daybook-report-page .daybook-table { table-layout: fixed; width: 100% !important; min-width: 0 !important; }
+  .daybook-report-page .daybook-table .daybook-col-serial { width: 2% !important; }
+  .daybook-report-page .daybook-table .daybook-col-date { width: 12% !important; white-space: nowrap; }
+  .daybook-report-page .daybook-table .daybook-col-type { width: 12% !important; }
+  .daybook-report-page .daybook-table .daybook-col-number { width: 12% !important; white-space: nowrap; }
+  .daybook-report-page .daybook-table .daybook-col-party { width: 38% !important; }
+  .daybook-report-page .daybook-table .daybook-col-money { width: 10% !important; white-space: nowrap; }
   .register-print-hide,
   .register-screen-total { display: none !important; }
   .register-print-total { display: table-row !important; }
@@ -476,12 +483,6 @@
   .report-page.trial-balance-report-page .report-content .trial-balance-print-table tfoot td { border-top: 1px solid #111 !important; border-bottom: 3px double #111 !important; font-weight: 700; }
   .trial-balance-print-table tfoot td:first-child { letter-spacing: .24em; }
   .report-page.daybook-report-page .report-content .report-table-card table { table-layout: fixed; }
-  .daybook-report-page .report-table-card th:nth-child(1) { width: 13%; }
-  .daybook-report-page .report-table-card th:nth-child(2) { width: 18%; }
-  .daybook-report-page .report-table-card th:nth-child(3) { width: 15%; }
-  .daybook-report-page .report-table-card th:nth-child(4) { width: 24%; }
-  .daybook-report-page .report-table-card th:nth-child(6),
-  .daybook-report-page .report-table-card th:nth-child(7) { width: 15%; }
   .report-page.daybook-report-page .report-content .report-table-card th:nth-child(6),
   .report-page.daybook-report-page .report-content .report-table-card td:nth-child(6),
   .report-page.daybook-report-page .report-content .report-table-card th:nth-child(7),
