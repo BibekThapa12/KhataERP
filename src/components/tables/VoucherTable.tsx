@@ -474,7 +474,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             .totals .grand { border-top: 1px solid #111827; font-size: 12px; padding-top: 4px; }
             .note { margin-top: 7px; border-top: 1px solid #d1d5db; padding-top: 4px; }
             .payment-qr { margin-top: 6px; display: flex; align-items: center; gap: 6px; break-inside: avoid; page-break-inside: avoid; }
-            .payment-qr img { width: 22mm; height: 22mm; object-fit: contain; border: 1px solid #d1d5db; padding: .7mm; }
+            .payment-qr img { width: 32mm; height: 32mm; object-fit: contain; border: 1px solid #d1d5db; background: #fff; padding: 1.2mm; }
             .sheet.dense { font-size: 9px; }
             .sheet.dense .invoice-head { padding: 2.5mm 1mm; }
             .sheet.dense h1, .sheet.dense h2 { font-size: 18px; }
@@ -486,7 +486,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             .sheet.dense .totals div { padding: 1px 0; }
             .sheet.dense .note { margin-top: 4px; padding-top: 3px; }
             .sheet.dense .payment-qr { margin-top: 4px; }
-            .sheet.dense .payment-qr img { width: 18mm; height: 18mm; }
+            .sheet.dense .payment-qr img { width: 30mm; height: 30mm; }
             @media print { .sheet { width: 100%; max-width: none; } }
           </style>
         </head>
