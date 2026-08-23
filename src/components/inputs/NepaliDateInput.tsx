@@ -2,7 +2,7 @@ import { type Ref, useMemo, useState } from 'react'
 import * as Popover from '@radix-ui/react-popover'
 import { CalendarDays } from 'lucide-react'
 import { Input } from '@/components/ui/input'
-import { normalizeBsDateInput, parseBsDate } from '@/lib/nepaliDate'
+import { formatAdDate, normalizeBsDateInput, parseBsDate } from '@/lib/nepaliDate'
 import { cn } from '@/lib/utils'
 import { NepaliCalendar } from '@/components/inputs/NepaliCalendar'
 
@@ -20,12 +20,13 @@ export interface NepaliDateInputProps {
   tabIndex?: number
   error?: string | boolean
   showErrorText?: boolean
+  showAdDate?: boolean
   inputRef?: Ref<HTMLInputElement>
 }
 
 export function NepaliDateInput({
   value, onChange, className, min, max, disabled, required, allowClear = false,
-  placeholder = '2083-03-21', id, tabIndex, error, showErrorText = true, inputRef,
+  placeholder = '2083-03-21', id, tabIndex, error, showErrorText = true, showAdDate = true, inputRef,
 }: NepaliDateInputProps) {
   const [focused, setFocused] = useState(false)
   const [open, setOpen] = useState(false)
@@ -38,6 +39,12 @@ export function NepaliDateInput({
     if (max && parseBsDate(max) && value > max) return true
     return false
   }, [error, focused, max, min, value])
+  const adDate = useMemo(() => {
+    if (!showAdDate || !parseBsDate(value)) return ''
+    if (min && parseBsDate(min) && value < min) return ''
+    if (max && parseBsDate(max) && value > max) return ''
+    return formatAdDate(value)
+  }, [max, min, showAdDate, value])
   const handleChange = (nextValue: string) => onChange(normalizeBsDateInput(nextValue) || nextValue)
 
   const handleBlur = () => {
@@ -86,6 +93,7 @@ export function NepaliDateInput({
           </Popover.Content>
         </Popover.Portal>
       </Popover.Root>
+      {adDate && <p className="mt-1 text-[10px] leading-tight text-muted-foreground" aria-live="polite">AD: {adDate}</p>}
       {showErrorText && invalid && <p className="mt-1 text-xs text-destructive">{typeof error === 'string' ? error : `Enter a valid BS date${min || max ? ' within the allowed range' : ''}.`}</p>}
     </div>
   )

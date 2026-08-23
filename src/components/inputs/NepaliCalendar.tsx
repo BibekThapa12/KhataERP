@@ -5,8 +5,8 @@ import {
   addDaysToBs,
   BS_MONTH_NAMES,
   BS_WEEKDAY_NAMES,
-  bsToAd,
   compareBsDates,
+  formatAdDate,
   formatBsParts,
   getBsMonthLength,
   getBsWeekday,
@@ -25,23 +25,18 @@ interface NepaliCalendarProps {
   onClose?: () => void
 }
 
-function formatAdDate(bsDate: string) {
-  try {
-    return new Intl.DateTimeFormat('en', { day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kathmandu' })
-      .format(new Date(`${bsToAd(bsDate)}T12:00:00+05:45`))
-  } catch {
-    return ''
-  }
-}
-
 export function NepaliCalendar({ value, onSelect, min, max, allowClear = false, onClose }: NepaliCalendarProps) {
   const today = todayBs()
   const selected = parseBsDate(value)
   const initial = selected || parseBsDate(today)!
   const [view, setView] = useState({ year: initial.year, month: initial.month })
+  const [focusedDate, setFocusedDate] = useState(value || today)
 
   useEffect(() => {
-    if (selected) setView({ year: selected.year, month: selected.month })
+    if (selected) {
+      setView({ year: selected.year, month: selected.month })
+      setFocusedDate(value)
+    }
   }, [value]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const monthLength = getBsMonthLength(view.year, view.month)
@@ -86,7 +81,7 @@ export function NepaliCalendar({ value, onSelect, min, max, allowClear = false, 
     window.requestAnimationFrame(() => document.getElementById(`bs-day-${target}`)?.focus())
   }
 
-  const selectedAd = selected ? formatAdDate(value) : ''
+  const focusedAd = parseBsDate(focusedDate) ? formatAdDate(focusedDate) : ''
 
   return (
     <div className="w-[18rem] max-w-[calc(100vw-1rem)] select-none p-2" aria-label="Nepali date calendar">
@@ -121,24 +116,33 @@ export function NepaliCalendar({ value, onSelect, min, max, allowClear = false, 
               role="gridcell"
               aria-selected={active}
               aria-current={current ? 'date' : undefined}
-              aria-label={`${BS_MONTH_NAMES[view.month - 1]} ${day}, ${view.year}`}
+              aria-label={`${BS_MONTH_NAMES[view.month - 1]} ${day}, ${view.year}; AD ${formatAdDate(date)}`}
               disabled={disabled}
               tabIndex={active || (!selected && current) ? 0 : -1}
               onClick={() => choose(date)}
+              onFocus={() => setFocusedDate(date)}
+              onMouseEnter={() => setFocusedDate(date)}
               onKeyDown={event => handleDayKeyDown(event, date)}
               className={cn(
-                'relative flex h-8 items-center justify-center rounded-md text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-30',
+                'group relative flex h-8 items-center justify-center rounded-md text-xs outline-none hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-30',
                 active && 'bg-primary font-semibold text-primary-foreground hover:bg-primary',
                 current && !active && 'font-bold text-primary after:absolute after:bottom-0.5 after:h-1 after:w-1 after:rounded-full after:bg-primary',
               )}
-            >{day}</button>
+            >
+              {day}
+              {!disabled && (
+                <span className="pointer-events-none absolute bottom-[calc(100%+0.25rem)] left-1/2 z-20 hidden -translate-x-1/2 whitespace-nowrap rounded-md bg-popover px-2 py-1 text-[10px] font-medium text-popover-foreground shadow-md ring-1 ring-border group-hover:block group-focus-visible:block">
+                  AD: {formatAdDate(date)}
+                </span>
+              )}
+            </button>
           )
         })}
       </div>
 
       <div className="mt-2 flex items-center justify-between border-t pt-2">
         <div className="min-w-0">
-          <p className="text-[10px] text-muted-foreground">{selectedAd ? `AD ${selectedAd}` : 'Select a BS date'}</p>
+          <p className="text-[10px] text-muted-foreground" aria-live="polite">{focusedAd ? `AD: ${focusedAd}` : 'Select a BS date'}</p>
         </div>
         <div className="flex gap-1">
           {allowClear && value && <button type="button" onClick={() => { onSelect(''); onClose?.() }} className="h-7 rounded-md px-2 text-[11px] font-semibold text-muted-foreground hover:bg-accent">Clear</button>}

@@ -89,6 +89,19 @@ export function bsToAd(bsDate: string): string {
   return `${ad.getFullYear()}-${pad2(ad.getMonth() + 1)}-${pad2(ad.getDate())}`
 }
 
+export function formatAdDate(bsDate: string): string {
+  try {
+    return new Intl.DateTimeFormat('en-GB', {
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+      timeZone: 'Asia/Kathmandu',
+    }).format(new Date(`${bsToAd(bsDate)}T12:00:00+05:45`))
+  } catch {
+    return ''
+  }
+}
+
 export function addDaysToBs(bsDate: string, days: number): string {
   const safeDays = Math.trunc(Number(days) || 0)
   const [year, month, day] = bsToAd(bsDate).split('-').map(Number)

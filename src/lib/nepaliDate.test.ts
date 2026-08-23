@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   addDaysToBs,
   compareBsDates,
+  formatAdDate,
   formatBsParts,
   getBsMonthLength,
   normalizeBsDateInput,
@@ -43,5 +44,14 @@ describe('Nepali date input normalization', () => {
   it('supports keyboard-style movement into the previous day', () => {
     const previous = addDaysToBs('2083-01-01', -1)
     expect(compareBsDates(previous, '2083-01-01')).toBeLessThan(0)
+  })
+
+  it('formats a valid BS date as a compact English AD date', () => {
+    expect(formatAdDate('2083-01-01')).toBe('14 Apr 2026')
+  })
+
+  it('returns no AD label for partial or invalid BS dates', () => {
+    expect(formatAdDate('2083-01')).toBe('')
+    expect(formatAdDate('not-a-date')).toBe('')
   })
 })
