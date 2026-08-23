@@ -15,11 +15,19 @@ import { PageContent, PageHeader } from '@/components/layout/PageHeader'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { VoucherTable } from '@/components/tables/VoucherTable'
+import { InvoiceForm } from '@/components/forms/InvoiceForm'
+import { JournalForm, ReceiptPaymentForm } from '@/components/forms/OtherForms'
+import { SimpleEntryForm } from '@/components/forms/SimpleEntryForm'
+import { ContraForm } from '@/components/forms/ContraForm'
+import { ReturnForm } from '@/components/forms/ReturnForm'
+import { StockAdjustmentForm } from '@/pages/Items'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { voucherSimpleEntryType } from '@/lib/simpleEntries'
+import { voucherIsContra } from '@/lib/contra'
 import type { Account, Company, Party, Voucher } from '@/types'
 
 type Mode = 'ledger' | 'group'
@@ -41,6 +49,9 @@ export function LedgerReportPage() {
   const [showCancelled, setShowCancelled] = useState(false)
   const [search, setSearch] = useState('')
   const [selected, setSelected] = useState<Voucher | null>(null)
+  const [editing, setEditing] = useState<Voucher | null>(null)
+  const editingSimpleType = editing ? voucherSimpleEntryType(editing, rawAccounts) : null
+  const editingContra = editing ? voucherIsContra(editing) : false
 
   useEffect(() => {
     const choices = mode === 'ledger' ? sortedAccounts : categories
@@ -134,6 +145,11 @@ export function LedgerReportPage() {
   }
 
   const switchMode = (next: Mode) => { setMode(next); setTargetId(''); setView(next === 'group' ? 'summary' : 'transactions') }
+  const editVoucher = (voucher: Voucher) => {
+    setSelected(null)
+    setEditing(voucher)
+  }
+  const closeEdit = () => setEditing(null)
   return <div className="report-page ledger-report-page">
     <PageHeader title="Ledger / Account Group" description="Ledger movements and recursive category reports" action={<div className="flex gap-2"><Button variant="outline" onClick={exportCsv}><Download className="mr-2 h-4 w-4" />CSV</Button><Button variant="outline" onClick={() => window.print()}><Printer className="mr-2 h-4 w-4" />Print</Button></div>} />
     <PageContent className="report-content space-y-4">
@@ -148,7 +164,14 @@ export function LedgerReportPage() {
         {mode === 'group' && view === 'summary' ? <table className="ledger-summary-table w-full min-w-[760px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">S.No.</th><th className="report-th text-left">Ledger</th><th className="report-th text-left">Type</th><th className="report-th text-right">Opening</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th><th className="report-th text-right">Closing</th></tr></thead><tbody>{filteredGroupSummary.length ? filteredGroupSummary.map((row, index) => <tr key={row.account.id} className="border-t hover:bg-muted/30"><td className="report-td text-muted-foreground num">{index + 1}</td><td className="report-td font-medium"><a href={`/reports/ledger?account=${encodeURIComponent(row.account.id)}`} className="hover:underline">{row.account.name}</a></td><td className="report-td text-muted-foreground">{row.account.type}</td><td className="report-td text-right num">{formatLedgerBalance(row.opening, row.account)}</td><td className="report-td text-right num">{fmtMoney(row.debit)}</td><td className="report-td text-right num">{fmtMoney(row.credit)}</td><td className="report-td text-right num font-semibold">{formatLedgerBalance(row.closing, row.account)}</td></tr>) : <tr><td colSpan={7} className="px-4 py-14 text-center text-muted-foreground">No ledgers match this search.</td></tr>}</tbody></table> : <TransactionTable rows={filteredStatementRows} onSelect={setSelected} />}
       </div></Card>
     </PageContent>
-    <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}><DialogContent className="max-w-4xl"><DialogHeader><DialogTitle>Voucher actions</DialogTitle></DialogHeader>{selected && <VoucherTable vouchers={[selected]} />}</DialogContent></Dialog>
+    <Dialog open={!!selected} onOpenChange={open => !open && setSelected(null)}><DialogContent className="max-w-4xl"><DialogHeader><DialogTitle>Voucher actions</DialogTitle></DialogHeader>{selected && <VoucherTable vouchers={[selected]} onEdit={editVoucher} />}</DialogContent></Dialog>
+    {editing && (editing.type === 'Sales' || editing.type === 'Purchase') && <InvoiceForm type={editing.type} open voucher={editing} onClose={closeEdit} />}
+    {editing && (editing.type === 'Receipt' || editing.type === 'Payment') && <ReceiptPaymentForm type={editing.type} open voucher={editing} onClose={closeEdit} />}
+    {editing?.type === 'Journal' && editingContra && <ContraForm open voucher={editing} onClose={closeEdit} />}
+    {editing?.type === 'Journal' && !editingContra && editingSimpleType && <SimpleEntryForm entryType={editingSimpleType} open voucher={editing} onClose={closeEdit} />}
+    {editing?.type === 'Journal' && !editingContra && !editingSimpleType && <JournalForm open voucher={editing} onClose={closeEdit} />}
+    {editing && (editing.type === 'Sales Return' || editing.type === 'Purchase Return') && <ReturnForm type={editing.type} open voucher={editing} onClose={closeEdit} />}
+    {editing?.type === 'Stock Adjustment' && <StockAdjustmentForm open voucher={editing} onClose={closeEdit} />}
   </div>
 }
 

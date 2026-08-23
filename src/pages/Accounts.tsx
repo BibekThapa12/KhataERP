@@ -12,6 +12,7 @@ import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/misc'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
@@ -181,13 +182,13 @@ export function AccountsPage() {
     <PageContent>
       <Card className="overflow-hidden p-3 sm:p-4">
         <div className="report-controls mb-4">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center">
-            <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search accounts, groups, parties..." className="pl-9" /></div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:flex">
-              <SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="xl:w-36" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} />
-              <SearchableSelect value={accountType} onValueChange={value => setAccountType(value as 'all' | AccountType)} className="xl:w-36" options={[{ value: 'all', label: 'All types' }, ...ACCOUNT_TYPES.map(value => ({ value, label: value }))]} />
-              <div className="flex min-w-0 items-center gap-2 rounded-md border border-input bg-background px-3 shadow-sm xl:w-52"><span className="shrink-0 text-xs text-muted-foreground">As of</span><NepaliDateInput value={asOf} onChange={setAsOf} className="min-w-0 flex-1 [&_input]:border-0 [&_input]:px-0 [&_input]:shadow-none [&_input]:focus-visible:ring-0" /></div>
-              <label className="flex h-9 items-center gap-2 whitespace-nowrap px-2 text-xs"><input type="checkbox" checked={hideZero} onChange={event => setHideZero(event.target.checked)} className="h-4 w-4 accent-primary" />Hide zero balances</label>
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-start">
+            <div className="relative min-w-0 flex-1 xl:pt-[1.375rem]"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground xl:mt-[0.6875rem]" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search accounts, groups, parties..." className="pl-9" /></div>
+            <div className="grid grid-cols-1 items-start gap-2 sm:grid-cols-2 xl:flex">
+              <div className="xl:pt-[1.375rem]"><SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="w-full xl:w-36" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} /></div>
+              <div className="xl:pt-[1.375rem]"><SearchableSelect value={accountType} onValueChange={value => setAccountType(value as 'all' | AccountType)} className="w-full xl:w-36" options={[{ value: 'all', label: 'All types' }, ...ACCOUNT_TYPES.map(value => ({ value, label: value }))]} /></div>
+              <div className="min-w-0 space-y-1.5 sm:col-span-2 xl:w-44"><Label>As of</Label><NepaliDateInput value={asOf} onChange={setAsOf} className="w-full" /></div>
+              <label className="flex h-9 items-center gap-2 whitespace-nowrap px-2 text-xs xl:mt-[1.375rem]"><input type="checkbox" checked={hideZero} onChange={event => setHideZero(event.target.checked)} className="h-4 w-4 accent-primary" />Hide zero balances</label>
             </div>
           </div>
           <div className="mt-3 flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"><span>{filteredAccounts.length} of {balanceAccounts.length} ledgers</span><div className="flex flex-wrap items-center gap-2">{asOf !== todayBs() && <Button size="sm" variant="ghost" className="h-7" onClick={() => setAsOf(todayBs())}>Show current balances</Button>}<ExpandCollapseControls expanded={allExpanded} onToggle={() => { if (allExpanded) { setSearch(''); setExpandedCategories(new Set()) } else setExpandedCategories(new Set(expandableIds)) }} /></div></div>

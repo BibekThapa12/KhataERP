@@ -4,8 +4,8 @@ import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, Trend
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeStockConditionSummary, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, round2 } from '@/lib/engine'
-import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearOptions as companyFiscalYearOptions, fiscalYearStartBs, groupReportAccounts, saveSelectedFiscalYear, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
-import { dashboardFiscalYearRange, dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
+import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
+import { dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
 import { alternateQtyText, formatStockQuantity } from '@/lib/units'
@@ -490,21 +490,19 @@ export function ProfitLossPage() {
 export function BalanceSheetPage() {
   const { company, rawAccounts, accountCategories, items, vouchers } = useAppStore()
   const currentFiscalStart = fiscalYearStartBs(company)
-  const [selectedFiscalYear, setSelectedFiscalYear] = useState(() => Number(selectedFiscalYearStartBs(company).slice(0, 4)))
-  const [asOf, setAsOf] = useState(() => selectedFiscalYearEndBs(company))
-  const fiscalYearOptions = useMemo(() => companyFiscalYearOptions(company, vouchers), [company, vouchers])
+  const [range, setRange] = useState<ReportRange>('fiscal')
+  const [from, setFrom] = useState(() => selectedFiscalYearStartBs(company))
+  const [to, setTo] = useState(() => selectedFiscalYearEndBs(company))
   useEffect(() => {
-    const year = Number(selectedFiscalYearStartBs(company).slice(0, 4))
-    setSelectedFiscalYear(year)
-    setAsOf(dashboardFiscalYearRange(year, currentFiscalStart).to)
+    setRange('fiscal')
+    setFrom(selectedFiscalYearStartBs(company))
+    setTo(selectedFiscalYearEndBs(company))
   }, [company, currentFiscalStart])
-  const fiscalStart = `${selectedFiscalYear}-${currentFiscalStart.slice(5)}`
-  const changeFiscalYear = (value: string) => {
-    const year = Number(value)
-    saveSelectedFiscalYear(company, year)
-    setSelectedFiscalYear(year)
-    setAsOf(dashboardFiscalYearRange(year, currentFiscalStart).to)
-  }
+  const asOf = to
+  const fiscalMonthDay = currentFiscalStart.slice(5)
+  const asOfYear = Number(asOf.slice(0, 4))
+  const selectedFiscalYear = asOf.slice(5) >= fiscalMonthDay ? asOfYear : asOfYear - 1
+  const fiscalStart = `${selectedFiscalYear}-${fiscalMonthDay}`
   const valuationMethod = company?.inventory_valuation_method || 'weighted_average'
   const retainedCategoryId = accountCategories.find(category => category.account_type === 'Equity' && category.name === 'Reserves & Surplus')?.id
   const currentAssetsCategory = accountCategories.find(category => category.account_type === 'Asset' && category.name.trim().toLowerCase() === 'current assets')
@@ -534,9 +532,10 @@ export function BalanceSheetPage() {
 
   return (
     <div className="report-page balance-sheet-report-page">
-      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<div className="flex flex-wrap items-end gap-2"><div className="min-w-32 space-y-1"><Label>Fiscal Year</Label><SearchableSelect value={String(selectedFiscalYear)} onValueChange={changeFiscalYear} options={fiscalYearOptions} searchPlaceholder="Search fiscal year..." className="w-32" /></div><ReportActions onExport={exportCsv} /></div>} />
+      <PageHeader title="Balance Sheet" description="Assets, liabilities and equity including closing stock and current profit" action={<ReportActions onExport={exportCsv} />} />
       <PageContent className="report-content space-y-4">
         <FormalReportPrintHeader company={company} title="Balance Sheet" periodLabel={`As of ${fmtDate(asOf)}`} detailLabel={`Fiscal Year ${selectedFiscalYear}/${String(selectedFiscalYear + 1).slice(-2)}`} />
+        <Card className="report-controls"><CardContent className="p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
         <div className="balance-sheet-simple-print hidden" aria-hidden="true">
           <header className="balance-sheet-print-heading">
             <h1>{company?.name || 'Our Company'}</h1>

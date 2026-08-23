@@ -175,13 +175,13 @@ export function ReceivablesPayablesPage() {
       <FormalReportPrintHeader company={company} title={title} periodLabel={`As of ${fmtDate(asOf)}`} detailLabel={`${printDetails ? 'Detailed' : 'Summary'} view${activeBucket ? ` · Bucket: ${bucketLabels[activeBucket]}` : ''}${overdueOnly ? ' · Overdue only' : ''}${search ? ` · Search: ${search}` : ''} · Generated ${generatedAt}`} />
 
       <Card className="report-controls"><CardContent className="space-y-3 p-4">
-        <div className="flex flex-wrap items-end gap-3">
-          <div className="flex gap-1 rounded-md border bg-background p-0.5" role="group" aria-label="Report view">
+        <div className="flex flex-wrap items-start gap-3">
+          <div className="flex shrink-0 gap-1 rounded-md border bg-background p-0.5 lg:mt-[1.375rem]" role="group" aria-label="Report view">
             <Button size="sm" variant={view === 'summary' ? 'default' : 'ghost'} onClick={() => updateParams({ view: 'summary' }, false)}>Summary</Button>
             <Button size="sm" variant={view === 'aging' ? 'default' : 'ghost'} onClick={() => updateParams({ view: 'aging' }, false)}>Detailed</Button>
           </div>
-          <div className="min-w-[220px] flex-1 sm:max-w-sm"><Label className="sr-only">Search parties or vouchers</Label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => updateParams({ search: event.target.value || null })} placeholder="Search party, PAN, phone, voucher..." className="pl-9" /></div></div>
-          <div className="space-y-1"><Label>As of</Label><NepaliDateInput value={asOf} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} onChange={value => updateParams({ asOf: value })} className="w-40" /></div>
+          <div className="min-w-[220px] flex-1 lg:pt-[1.375rem]"><Label className="sr-only">Search parties or vouchers</Label><div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => updateParams({ search: event.target.value || null })} placeholder="Search party, PAN, phone, voucher..." className="pl-9" /></div></div>
+          <div className="w-44 shrink-0 space-y-1.5"><Label>As of</Label><NepaliDateInput value={asOf} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} onChange={value => updateParams({ asOf: value })} className="w-full" /></div>
         </div>
         <div className="flex flex-wrap items-center gap-x-5 gap-y-2 text-sm">
           <label className="flex cursor-pointer items-center gap-2"><input type="checkbox" checked={overdueOnly} onChange={event => updateParams({ overdue: event.target.checked ? '1' : null, bucket: event.target.checked && activeBucket === 'Not Due' ? null : activeBucket })} />Show overdue only</label>
