@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Download, Printer, Search } from 'lucide-react'
 import { useSearchParams } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
@@ -34,9 +34,15 @@ type Mode = 'ledger' | 'group'
 type View = 'summary' | 'transactions'
 type StatementRow = ReturnType<typeof getLedgerRows>['rows'][number] & { account?: { name: string } | null; displayBalance: number }
 
+const ledgerPrintMoney = (value: number) => fmtMoney(value).replace(/^(-?)Rs[\s\u00a0]*/, '$1')
+
 export function LedgerReportPage() {
   const { company, rawAccounts, accountCategories, items, vouchers, parties } = useAppStore()
   const [searchParams, setSearchParams] = useSearchParams()
+  const partyStatementPrint = searchParams.get('print') === 'party-statement'
+  const embeddedPartyStatementPrint = partyStatementPrint && searchParams.get('embedded') === '1'
+  const partyStatementPrintStarted = useRef(false)
+  const handledPartyPrintRequest = useRef('')
   const initialMode: Mode = searchParams.get('mode') === 'group' ? 'group' : 'ledger'
   const [mode, setMode] = useState<Mode>(initialMode)
   const [view, setView] = useState<View>(initialMode === 'group' ? 'summary' : 'transactions')
@@ -55,13 +61,14 @@ export function LedgerReportPage() {
 
   useEffect(() => {
     const choices = mode === 'ledger' ? sortedAccounts : categories
-    if (!choices.some(choice => choice.id === targetId)) setTargetId(choices[0]?.id || '')
+    if (choices.length && !choices.some(choice => choice.id === targetId)) setTargetId(choices[0].id)
   }, [mode, targetId, sortedAccounts, categories])
   useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   useEffect(() => {
     if (!targetId) return
-    setSearchParams(mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }, { replace: true })
-  }, [mode, targetId, setSearchParams])
+    const next = mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }
+    setSearchParams(partyStatementPrint ? { ...next, print: 'party-statement', ...(embeddedPartyStatementPrint ? { embedded: '1' } : {}) } : next, { replace: true })
+  }, [mode, targetId, setSearchParams, partyStatementPrint, embeddedPartyStatementPrint])
 
   const retainedAccountId = company ? resolveSystemAccountId(rawAccounts, company.id, 'retained_earnings') : ''
   const reportFiscalStart = useMemo(() => {
@@ -135,6 +142,70 @@ export function LedgerReportPage() {
   const statementGroup = mode === 'ledger'
     ? categoryPath(accountCategories, ledger.account?.category_id) || ledger.account?.group || '-'
     : categoryPath(accountCategories, group.category?.id) || group.category?.name || '-'
+
+  useEffect(() => {
+    if (!partyStatementPrint || !balanceAccount || partyStatementPrintStarted.current) return
+    let disposed = false
+    let printInvoked = false
+    let completionSent = false
+    const finishPrint = () => {
+      if (completionSent) return
+      completionSent = true
+      partyStatementPrintStarted.current = false
+      if (embeddedPartyStatementPrint) {
+        window.parent.postMessage({ type: 'khataerp:party-statement-print-complete' }, window.location.origin)
+      } else {
+        window.history.back()
+      }
+    }
+    const invokePrint = () => {
+      if (disposed) return
+      if (partyStatementPrintStarted.current) return
+      partyStatementPrintStarted.current = true
+      completionSent = false
+      printInvoked = true
+      try {
+        window.focus()
+        if (embeddedPartyStatementPrint) {
+          window.parent.postMessage({ type: 'khataerp:party-statement-print-started' }, window.location.origin)
+        }
+        window.print()
+        // Chromium blocks until the print dialog is printed or cancelled. The
+        // statement iframe can therefore be removed safely when this returns,
+        // even on browsers that do not dispatch `afterprint` for iframes.
+        finishPrint()
+      } catch {
+        if (embeddedPartyStatementPrint) {
+          window.parent.postMessage({ type: 'khataerp:party-statement-print-error', message: 'Could not initialize the party statement print dialog. Please try again.' }, window.location.origin)
+        }
+      }
+    }
+    if (embeddedPartyStatementPrint) {
+      const receivePrintRequest = (event: MessageEvent) => {
+        if (event.origin !== window.location.origin || event.source !== window.parent || event.data?.type !== 'khataerp:party-statement-print') return
+        const requestId = typeof event.data.requestId === 'string' ? event.data.requestId : ''
+        if (!requestId || handledPartyPrintRequest.current === requestId) return
+        handledPartyPrintRequest.current = requestId
+        invokePrint()
+      }
+      window.addEventListener('message', receivePrintRequest)
+      window.parent.postMessage({ type: 'khataerp:party-statement-print-ready' }, window.location.origin)
+      return () => {
+        disposed = true
+        window.removeEventListener('message', receivePrintRequest)
+        if (!printInvoked) partyStatementPrintStarted.current = false
+      }
+    }
+    const timer = window.setTimeout(invokePrint, 350)
+    return () => {
+      disposed = true
+      window.clearTimeout(timer)
+      // React Strict Mode intentionally mounts and cleans effects once before
+      // the real run in development. Unlock the guard when printing was never
+      // invoked so the real effect can initialize the dialog.
+      if (!printInvoked) partyStatementPrintStarted.current = false
+    }
+  }, [partyStatementPrint, embeddedPartyStatementPrint, balanceAccount])
 
   const exportCsv = () => {
     if (mode === 'group' && view === 'summary') {
@@ -229,10 +300,10 @@ function PrintableLedgerStatement({ company, mode, title, groupLabel, account, p
         {rows.map((row, index) => {
           const isCalculated = !row.voucher.company_id
           const particulars = mode === 'group' && row.account?.name ? `${row.account.name} - ${row.particulars}` : row.particulars
-          return <tr key={`print-${row.voucher.id}-${index}`} className={row.cancelled ? 'ledger-cancelled-row' : ''}><td>{index + 1}</td><td>{fmtDate(row.date_bs)}</td><td>{isCalculated ? 'Calculated' : row.voucher_type}</td><td>{row.voucher_no}</td><td>{particulars}</td><td>{row.debit ? fmtMoney(row.debit) : '-'}</td><td>{row.credit ? fmtMoney(row.credit) : '-'}</td><td>{formatLedgerBalance(row.displayBalance, account)}</td></tr>
+          return <tr key={`print-${row.voucher.id}-${index}`} className={row.cancelled ? 'ledger-cancelled-row' : ''}><td>{index + 1}</td><td>{fmtDate(row.date_bs)}</td><td>{isCalculated ? 'Calculated' : row.voucher_type}</td><td>{row.voucher_no}</td><td>{particulars}</td><td>{row.debit ? ledgerPrintMoney(row.debit) : '-'}</td><td>{row.credit ? ledgerPrintMoney(row.credit) : '-'}</td><td>{formatLedgerBalance(row.displayBalance, account)}</td></tr>
         })}
         {!rows.length && <tr><td colSpan={8} className="ledger-empty-row">No movements in the selected period.</td></tr>}
-        <tr className="ledger-total-row"><td colSpan={5}>Total</td><td>{fmtMoney(debit)}</td><td>{fmtMoney(credit)}</td><td /></tr>
+        <tr className="ledger-total-row"><td colSpan={5}>Total</td><td>{ledgerPrintMoney(debit)}</td><td>{ledgerPrintMoney(credit)}</td><td /></tr>
         <tr className="ledger-closing-row"><td colSpan={7}>Closing Balance</td><td>{formatLedgerBalance(closing, account)}</td></tr>
       </tbody>
     </table>

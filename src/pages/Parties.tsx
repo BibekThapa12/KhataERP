@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import * as DropdownMenuPrimitive from '@radix-ui/react-dropdown-menu'
 import { useSearchParams } from 'react-router-dom'
 import { Plus, Download, Eye, Printer, Search, Share2, ChevronDown, UserRound, Building2 } from 'lucide-react'
@@ -39,6 +39,14 @@ function partyBalanceLabel(balance: number, type: Party['type']) {
 
 function PartyLedger({ party }: { party: Party }) {
   const { company, vouchers, rawAccounts, getAccount } = useAppStore()
+  const printFrameRef = useRef<HTMLIFrameElement | null>(null)
+  const printTimeoutRef = useRef<number | null>(null)
+  const printFrameReadyRef = useRef(false)
+  const printRequestedRef = useRef(false)
+  const printCommandSentRef = useRef(false)
+  const printRequestIdRef = useRef('')
+  const [printingStatement, setPrintingStatement] = useState(false)
+  const [printError, setPrintError] = useState('')
   const account = getAccount(party.account_id)
   const accountMap = new Map(rawAccounts.map(entry => [entry.id, entry.name]))
   const related = vouchers
@@ -57,21 +65,95 @@ function PartyLedger({ party }: { party: Party }) {
     return { v, dr, cr, particulars, balance: running }
   })
 
+  const cleanupPrintFrame = useCallback(() => {
+    if (printTimeoutRef.current !== null) {
+      window.clearTimeout(printTimeoutRef.current)
+      printTimeoutRef.current = null
+    }
+    printFrameRef.current?.remove()
+    printFrameRef.current = null
+    printFrameReadyRef.current = false
+    printRequestedRef.current = false
+    printCommandSentRef.current = false
+    printRequestIdRef.current = ''
+    setPrintingStatement(false)
+  }, [])
+
+  useEffect(() => {
+    const receivePrintStatus = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin || event.source !== printFrameRef.current?.contentWindow) return
+      if (event.data?.type === 'khataerp:party-statement-print-ready') {
+        printFrameReadyRef.current = true
+        if (printRequestedRef.current && !printCommandSentRef.current) {
+          printCommandSentRef.current = true
+          printFrameRef.current?.contentWindow?.postMessage({ type: 'khataerp:party-statement-print', requestId: printRequestIdRef.current }, window.location.origin)
+        }
+      } else if (event.data?.type === 'khataerp:party-statement-print-started') {
+        if (printTimeoutRef.current !== null) {
+          window.clearTimeout(printTimeoutRef.current)
+          printTimeoutRef.current = null
+        }
+      } else if (event.data?.type === 'khataerp:party-statement-print-complete') {
+        printRequestedRef.current = false
+        printCommandSentRef.current = false
+        setPrintingStatement(false)
+      } else if (event.data?.type === 'khataerp:party-statement-print-error') {
+        cleanupPrintFrame()
+        setPrintError(typeof event.data.message === 'string' ? event.data.message : 'Could not open the party statement for printing. Please try again.')
+      }
+    }
+    window.addEventListener('message', receivePrintStatus)
+    return () => {
+      window.removeEventListener('message', receivePrintStatus)
+      cleanupPrintFrame()
+    }
+  }, [cleanupPrintFrame])
+
+  useEffect(() => {
+    if (!account) return
+    const printUrl = new URL('/reports/ledger', window.location.origin)
+    printUrl.searchParams.set('account', account.id)
+    printUrl.searchParams.set('print', 'party-statement')
+    printUrl.searchParams.set('embedded', '1')
+    const frame = document.createElement('iframe')
+    frame.title = `${party.name} ledger statement print`
+    frame.setAttribute('aria-hidden', 'true')
+    Object.assign(frame.style, {
+      position: 'fixed', left: '-10000px', top: '0', width: '794px', height: '1123px',
+      border: '0', pointerEvents: 'none',
+    })
+    frame.onerror = () => {
+      cleanupPrintFrame()
+      setPrintError('Could not load the party ledger statement for printing. Please try again.')
+    }
+    frame.src = `${printUrl.pathname}${printUrl.search}`
+    printFrameRef.current = frame
+    document.body.appendChild(frame)
+    return cleanupPrintFrame
+  }, [account?.id, party.name, cleanupPrintFrame])
+
   const printStatement = () => {
-    const opening = account?.opening_balance ?? 0
-    const totalDebit = round2(statementRows.reduce((sum, row) => sum + row.dr, 0))
-    const totalCredit = round2(statementRows.reduce((sum, row) => sum + row.cr, 0))
-    const closing = statementRows.at(-1)?.balance ?? opening
-    const fromDate = statementRows[0]?.v.date_bs || company?.fiscal_year_start || todayBs()
-    const toDate = statementRows.at(-1)?.v.date_bs || todayBs()
-    const rows = statementRows.map(({ v, dr, cr, particulars, balance }, index) => `<tr><td>${index + 1}</td><td>${escapePrintHtml(fmtDate(v.date_bs))}</td><td>${escapePrintHtml(v.type)}</td><td>${escapePrintHtml(v.invoice_no || v.seq)}</td><td>${escapePrintHtml(particulars)}</td><td class="right">${dr ? escapePrintHtml(fmtMoney(dr)) : '-'}</td><td class="right">${cr ? escapePrintHtml(fmtMoney(cr)) : '-'}</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(balance, party.type))}</td></tr>`).join('')
-    const win = window.open('', '_blank', 'width=900,height=900')
-    if (!win) return
+    if (printingStatement) return
+    if (!account) {
+      setPrintError('This party does not have an available ledger account to print.')
+      return
+    }
+    setPrintError('')
+    setPrintingStatement(true)
+    printRequestedRef.current = true
+    printCommandSentRef.current = false
+    printRequestIdRef.current = crypto.randomUUID()
     logAppEvent('print_party_statement', company?.id, { party_type: party.type })
-    win.document.write(`<!doctype html><html><head><title>${escapePrintHtml(party.name)} Statement</title><style>${statementPrintStyles}</style></head><body><main class="statement"><header class="heading"><h1>Party Ledger Statement</h1><h2>${escapePrintHtml(company?.name || 'Company')}</h2>${company?.address ? `<p>${escapePrintHtml(company.address)}</p>` : ''}${company?.pan_vat ? `<p>PAN/VAT No: ${escapePrintHtml(company.pan_vat)}</p>` : ''}</header><section class="meta"><div><p><strong>Party Name</strong><span>:</span><b>${escapePrintHtml(party.name)}</b></p><p><strong>Party Type</strong><span>:</span><b>${escapePrintHtml(terminology.singular)}</b></p><p><strong>Address</strong><span>:</span><b>${escapePrintHtml(party.address || '-')}</b></p><p><strong>Phone</strong><span>:</span><b>${escapePrintHtml(party.phone || '-')}</b></p></div><div><p><strong>Group</strong><span>:</span><b>${escapePrintHtml(account?.group || '-')}</b></p><p><strong>Opening Balance</strong><span>:</span><b>${escapePrintHtml(partyBalanceLabel(opening, party.type))}</b></p><p><strong>From Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(fromDate))}</b></p><p><strong>To Date (BS)</strong><span>:</span><b>${escapePrintHtml(fmtDate(toDate))}</b></p></div></section><table class="ledger-table"><colgroup><col style="width:4%"><col style="width:11%"><col style="width:10%"><col style="width:10%"><col style="width:29%"><col style="width:12%"><col style="width:12%"><col style="width:12%"></colgroup><thead><tr><th>S.No.</th><th>Date (BS)</th><th>Vch Type</th><th>Vch No.</th><th>Particulars</th><th>Debit (Rs.)</th><th>Credit (Rs.)</th><th>Balance</th></tr></thead><tbody><tr><td></td><td></td><td></td><td></td><td class="strong">Opening Balance</td><td class="right">-</td><td class="right">-</td><td class="right strong">${escapePrintHtml(partyBalanceLabel(opening, party.type))}</td></tr>${rows || '<tr><td colspan="8" class="empty">No transactions in this statement.</td></tr>'}<tr class="strong"><td colspan="5" class="center">Total</td><td class="right">${escapePrintHtml(fmtMoney(totalDebit))}</td><td class="right">${escapePrintHtml(fmtMoney(totalCredit))}</td><td></td></tr><tr class="closing"><td colspan="7" class="center">Closing Balance</td><td class="right">${escapePrintHtml(partyBalanceLabel(closing, party.type))}</td></tr></tbody></table><footer class="footer"><div><p>Prepared By: ____________________</p><p>Date: ${escapePrintHtml(fmtDate(toDate))}</p></div><div><p>Checked By: ____________________</p><p>Authorized By: _________________</p></div><p class="generated">This is a computer-generated report.</p></footer></main></body></html>`)
-    win.document.close()
-    win.focus()
-    win.print()
+    if (printFrameReadyRef.current) {
+      printCommandSentRef.current = true
+      printFrameRef.current?.contentWindow?.postMessage({ type: 'khataerp:party-statement-print', requestId: printRequestIdRef.current }, window.location.origin)
+    }
+    printTimeoutRef.current = window.setTimeout(() => {
+      printRequestedRef.current = false
+      printCommandSentRef.current = false
+      setPrintingStatement(false)
+      setPrintError('The party ledger statement took too long to prepare. Please try again.')
+    }, 15000)
   }
 
   const shareStatement = async () => {
@@ -91,9 +173,10 @@ function PartyLedger({ party }: { party: Party }) {
         </div>
       </div>
       <div className="flex gap-2">
-        <Button variant="outline" size="sm" onClick={printStatement}><Printer className="h-3.5 w-3.5 mr-1.5" />Print statement</Button>
+        <Button variant="outline" size="sm" onClick={printStatement} disabled={printingStatement}><Printer className="h-3.5 w-3.5 mr-1.5" />{printingStatement ? 'Preparing print...' : 'Print statement'}</Button>
         <Button variant="outline" size="sm" onClick={shareStatement}><Share2 className="h-3.5 w-3.5 mr-1.5" />Share</Button>
       </div>
+      {printError && <p role="alert" className="text-sm text-destructive">{printError}</p>}
       <p className="text-sm text-muted-foreground">Opening balance: <span className="num font-semibold">{fmtMoney(account?.opening_balance ?? 0)}</span></p>
       {related.length === 0 ? (
         <p className="text-sm text-muted-foreground text-center py-8">No transactions yet.</p>

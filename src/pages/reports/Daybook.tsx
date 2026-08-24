@@ -158,9 +158,9 @@ export function DaybookPage() {
               <table className="daybook-table w-full min-w-[1050px] border-collapse text-sm">
                 <thead>
                   <tr className="bg-muted/50">
-                    <th className="daybook-col-serial report-th text-left">S.No.</th>
+                    <th className="daybook-col-serial report-th text-left">S.N.</th>
                     <th className="daybook-col-date report-th text-left">Date</th>
-                    <th className="daybook-col-type report-th text-left">Voucher Type</th>
+                    <th className="daybook-col-type report-th text-left">Voucher Types</th>
                     <th className="daybook-col-number report-th text-left">Voucher No.</th>
                     <th className="daybook-col-party report-th text-left">Party / Account</th>
                     {columns.has('narration') && <th className="daybook-print-hide report-th text-left">Narration</th>}

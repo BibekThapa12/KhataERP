@@ -275,7 +275,12 @@
   .report-page .report-print-header { display: block !important; margin-bottom: 12px; }
   .report-print-header h1 { margin: 0; font-size: 20px; }
   .report-print-header p { margin: 3px 0 0; font-size: 11px; }
-  .ledger-report-page { page: ledger-report; }
+  .ledger-report-page { page: auto; }
+  .ledger-report-page .report-content,
+  .ledger-report-page .ledger-print-statement {
+    break-before: auto !important;
+    page-break-before: auto !important;
+  }
   .ledger-report-page .report-print-header { margin-bottom: 7px; border-bottom: 1px solid #9ca3af; padding-bottom: 6px; }
   .ledger-report-page .report-print-header h1 { font-size: 16px; }
   .ledger-report-page .report-print-header .ledger-print-title { font-size: 12px; font-weight: 700; }
@@ -346,12 +351,13 @@
   .daybook-screen-money { display: none !important; }
   .daybook-print-money { display: inline !important; }
   .daybook-report-page .daybook-table { table-layout: fixed; width: 100% !important; min-width: 0 !important; }
-  .daybook-report-page .daybook-table .daybook-col-serial { width: 2% !important; }
-  .daybook-report-page .daybook-table .daybook-col-date { width: 12% !important; white-space: nowrap; }
-  .daybook-report-page .daybook-table .daybook-col-type { width: 12% !important; }
+  .daybook-report-page .daybook-table .daybook-col-serial { width: 4% !important; }
+  .daybook-report-page .daybook-table .daybook-col-date { width: 10% !important; white-space: nowrap; }
+  .daybook-report-page .daybook-table .daybook-col-type { width: 14% !important; }
+  .daybook-report-page .daybook-table th.daybook-col-type { overflow-wrap: normal !important; word-break: normal !important; white-space: normal !important; }
   .daybook-report-page .daybook-table .daybook-col-number { width: 12% !important; white-space: nowrap; }
-  .daybook-report-page .daybook-table .daybook-col-party { width: 38% !important; }
-  .daybook-report-page .daybook-table .daybook-col-money { width: 10% !important; white-space: nowrap; }
+  .daybook-report-page .daybook-table .daybook-col-party { width: 36% !important; }
+  .daybook-report-page .daybook-table .daybook-col-money { width: 12% !important; white-space: nowrap; }
   .register-print-hide,
   .register-screen-total { display: none !important; }
   .register-print-total { display: table-row !important; }
@@ -541,4 +547,51 @@
   .report-page button { color: inherit !important; text-decoration: none !important; }
   .ageing-screen-table { display: none !important; }
   .ageing-print-detail { display: block !important; }
+}
+
+/* Day Book only: compact typography and balanced columns on A5 portrait.
+   Print CSS cannot read the paper-size name, so the printable width identifies
+   A5 and other genuinely narrow sheets without changing A4/Letter output. */
+@media print and (max-width: 160mm) {
+  .daybook-report-page .daybook-table {
+    width: 100% !important;
+    min-width: 0 !important;
+    table-layout: fixed !important;
+    font-size: 6.5px !important;
+    line-height: 1.15 !important;
+  }
+
+  .daybook-report-page .daybook-table th,
+  .daybook-report-page .daybook-table td,
+  .daybook-report-page .daybook-table th *,
+  .daybook-report-page .daybook-table td * {
+    font-size: inherit !important;
+  }
+
+  .daybook-report-page .daybook-table th,
+  .daybook-report-page .daybook-table td {
+    padding: 2px 1px !important;
+    line-height: 1.15 !important;
+  }
+
+  .daybook-report-page .daybook-table .daybook-col-serial { width: 5% !important; }
+  .daybook-report-page .daybook-table .daybook-col-date { width: 10% !important; }
+  .daybook-report-page .daybook-table .daybook-col-type { width: 14% !important; }
+  .daybook-report-page .daybook-table .daybook-col-number { width: 13% !important; }
+  .daybook-report-page .daybook-table .daybook-col-party { width: 28% !important; }
+  .daybook-report-page .daybook-table .daybook-col-money { width: 15% !important; }
+
+  .daybook-report-page .daybook-table .daybook-col-type > span {
+    display: inline !important;
+    border: 0 !important;
+    background: transparent !important;
+    padding: 0 !important;
+    white-space: normal !important;
+    line-height: inherit !important;
+  }
+
+  .daybook-report-page .daybook-table .daybook-col-money {
+    letter-spacing: -0.12px;
+    font-variant-numeric: tabular-nums;
+  }
 }
