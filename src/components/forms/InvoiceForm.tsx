@@ -459,7 +459,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                       </div>
                       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${!isServiceLine && stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={!isServiceLine && stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : undefined}>{isServiceLine ? 'Service' : stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : '—'}</div></div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Qty</Label>
-                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} placeholder="0" className="invoice-entry-value h-8 px-2" />
+                        <Input type="number" min="0.01" step="any" value={line.qty || ''} onChange={e => updateLine(idx, 'qty', e.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="0" className="invoice-entry-value h-8 px-2" />
                         {isSales && !isServiceLine && stock && stock.qty < toBaseQty(line.qty, line.conversion_factor || 1) && line.qty > 0 && (
                           <p className="text-xs text-destructive mt-0.5">Only {selectedItem ? formatStockQuantity(stock.qty, selectedItem) : stock.qty} in stock</p>
                         )}
@@ -473,8 +473,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
-                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
