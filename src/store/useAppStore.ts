@@ -964,8 +964,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const nextName = updates.name === undefined ? undefined : formatMasterName(updates.name)
     if (updates.name !== undefined && !nextName) throw new Error('Enter a ledger name.')
     if (nextName && get().rawAccounts.some(account => account.id !== id && masterNameKey(account.name) === masterNameKey(nextName))) throw new Error('Ledger already exist')
-    const used = get().vouchers.some(voucher => voucher.lines?.some(line => line.account_id === id))
-    if ((existing.is_system || used) && updates.type && updates.type !== existing.type) throw new Error('The account type of a system or used ledger cannot be changed')
+    if (existing.is_system && updates.type && updates.type !== existing.type) throw new Error('The account type of a system ledger cannot be changed')
     const categoryId = updates.category_id || existing.category_id
     const category = get().accountCategories.find(entry => entry.id === categoryId)
     const partyType = partyTypeForCategory(category)

@@ -123,7 +123,7 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
 }
 
 export function LedgerDialog({ account, party, defaultCategoryId, allowedAccountType, defaultPartyType, open, onClose, onCreated }: { account?: Account | null; party?: Party | null; defaultCategoryId?: string; allowedAccountType?: AccountType; defaultPartyType?: 'customer' | 'supplier'; open: boolean; onClose: () => void; onCreated?: (account: Account, party?: Party) => void }) {
-  const { accountCategories, addAccount, alterAccount, vouchers } = useAppStore()
+  const { accountCategories, addAccount, alterAccount } = useAppStore()
   const activeCategories = useMemo(() => accountCategories.filter(category => !category.is_archived && (!allowedAccountType || category.account_type === allowedAccountType)), [accountCategories, allowedAccountType])
   const [name, setName] = useState('')
   const [categoryId, setCategoryId] = useState('')
@@ -140,7 +140,6 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
   const [error, setError] = useState('')
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
   const initializedSessionRef = useRef<string | null>(null)
-  const isUsed = !!account && vouchers.some(voucher => voucher.lines?.some(line => line.account_id === account.id))
   const selectedCategory = activeCategories.find(category => category.id === categoryId)
   const visibility = useMemo(() => ledgerFieldVisibility(accountCategories, categoryId), [accountCategories, categoryId])
   const fixedPartyType = defaultPartyType || party?.type
@@ -254,7 +253,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
             <div className="space-y-1.5"><Label>Branch</Label><Input value={bankBranch} maxLength={IDENTITY_LIMITS.branch} onChange={event => setBankBranch(event.target.value)} /></div>
           </section>}
           {selectedCategory && (selectedCategory.account_type === 'Income' || selectedCategory.account_type === 'Expense') && <p className="rounded-md border border-dashed px-3 py-2 text-xs text-muted-foreground">Income and expense ledgers require only the base accounting details.</p>}
-          {(account?.is_system || isUsed) && <p className="text-xs text-amber-700">This ledger is protected from account-type changes because it is {account?.is_system ? 'a system ledger' : 'used in vouchers'}.</p>}
+          {account?.is_system && <p className="text-xs text-amber-700">System-created ledgers are protected from account-type changes.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Ledger'}</Button></DialogFooter>

@@ -53,6 +53,7 @@ const SettledIssuedChequesPage = lazy(() => import('@/pages/cheques/ChequeManage
 const ChequeBanksPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeBanksPage })))
 const ChequePartiesPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequePartiesPage })))
 const ChequeDetailPage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.ChequeDetailPage })))
+const EditChequePage = lazy(() => import('@/pages/cheques/ChequeManagement').then(m => ({ default: m.EditChequePage })))
 
 class AppErrorBoundary extends Component<
   { children: React.ReactNode },
@@ -283,6 +284,7 @@ export default function App() {
             <Route path="cheques/issued/settled" element={<ChequeModuleGuard><SettledIssuedChequesPage /></ChequeModuleGuard>} />
             <Route path="cheques/banks" element={<ChequeModuleGuard permission="cheque.manage_banks" write><ChequeBanksPage /></ChequeModuleGuard>} />
             <Route path="cheques/parties" element={<ChequeModuleGuard permission="cheque.view_parties"><ChequePartiesPage /></ChequeModuleGuard>} />
+            <Route path="cheques/:id/edit" element={<ChequeModuleGuard permission="cheque.edit" write><EditChequePage /></ChequeModuleGuard>} />
             <Route path="cheques/:id" element={<ChequeModuleGuard><ChequeDetailPage /></ChequeModuleGuard>} />
           </Route>
           <Route path="*" element={<Navigate to="/" replace />} />
