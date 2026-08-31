@@ -70,6 +70,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const pendingLineFocus = useRef<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
+  const pricingReadyFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
   const snapshotRef = useRef('')
   const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
@@ -161,7 +162,19 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   }, [open, voucher, vatEnabled, items, parties, company, type])
 
   useEffect(() => {
-    if (!open || !isSales || voucher?.status === 'Completed') return
+    if (!open) {
+      pricingReadyFormRef.current = null
+      return
+    }
+    if (!isSales || voucher?.status === 'Completed') return
+    const formIdentity = `${type}:${voucher?.id || 'new'}`
+    // Opening a draft queues its persisted lines in the hydration effect above.
+    // Do not let this effect overwrite that queued state with the previous
+    // form's blank line during the same React effect cycle.
+    if (pricingReadyFormRef.current !== formIdentity) {
+      pricingReadyFormRef.current = formIdentity
+      return
+    }
     const input = lines.map((line, index) => {
       const item = items.find(entry => entry.id === line.item_id)
       const factor = line.conversion_factor || unitFactor(item, line.unit_mode)
