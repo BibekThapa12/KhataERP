@@ -1,5 +1,5 @@
 import { lazy, useState, useEffect, useMemo, useRef } from 'react'
-import { Plus, Printer, Trash2 } from 'lucide-react'
+import { Plus, Printer, Tag, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { addDaysToBs } from '@/lib/nepaliDate'
@@ -25,10 +25,12 @@ import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Voucher } from '@/types'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { repriceSalesLines } from '@/lib/pricing'
+import type { PricingSnapshot } from '@/types'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
-interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string }
+interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string; pricing_rule_id?: string; pricing_slab_id?: string; calculated_rate?: number; price_overridden?: boolean; pricing_snapshot?: PricingSnapshot; pricing_warning?: string }
 type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000 }
@@ -42,7 +44,8 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { company, accounts, items, parties, vouchers, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
+  const { company, companyMemberships, companyPermissions, accounts, items, itemCategories, pricingRules, parties, vouchers, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
+  const canOverridePricing = !!company && (companyMemberships.some(membership => membership.company_id === company.id && membership.role === 'Admin') || companyPermissions.includes('pricing.override'))
   const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
@@ -139,7 +142,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setLines(draft?.lines?.length ? draft.lines : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
-        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor }
+        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined }
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
@@ -157,6 +160,31 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     }
   }, [open, voucher, vatEnabled, items, parties, company, type])
 
+  useEffect(() => {
+    if (!open || !isSales || voucher?.status === 'Completed') return
+    const input = lines.map((line, index) => {
+      const item = items.find(entry => entry.id === line.item_id)
+      const factor = line.conversion_factor || unitFactor(item, line.unit_mode)
+      const automaticBase = item ? fromBaseRate(item.sell_rate || 0, factor) : rateInputNumber(line.rate)
+      return { ...line, key: String(index), rate: line.price_overridden ? rateInputNumber(line.rate) : automaticBase }
+    })
+    const priced = repriceSalesLines({ lines: input, items, categories: itemCategories, rules: pricingRules, dateBs })
+    const next = priced.map((result, index): LineItem => {
+      const current = lines[index]
+      return {
+        ...current,
+        rate: formatRateInput(result.rate),
+        amount_input: current.price_overridden ? current.amount_input : undefined,
+        calculated_rate: result.calculated_rate,
+        pricing_rule_id: result.pricing_rule_id,
+        pricing_slab_id: result.pricing_slab_id,
+        pricing_snapshot: result.pricing_snapshot,
+        pricing_warning: result.pricing_warning,
+      }
+    })
+    if (JSON.stringify(next) !== JSON.stringify(lines)) setLines(next)
+  }, [dateBs, isSales, itemCategories, items, lines, open, pricingRules, voucher?.status])
+
   const selectParty = (accountId: string) => {
     setPartyAccountId(accountId)
     setCreditDays(parties.find(party => party.account_id === accountId)?.default_credit_days ?? 0)
@@ -171,7 +199,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const next = [...lines]
     if (field === 'item_id') {
       const item = items.find(i => i.id === value)
-      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined }
+      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined, price_overridden: false, pricing_rule_id: undefined, pricing_slab_id: undefined, calculated_rate: undefined, pricing_snapshot: undefined, pricing_warning: undefined }
       if (!isSales) {
         const stock = getStockEntry(value as string)
         if (stock.avg_cost > 0) next[idx].rate = formatRateInput(stock.avg_cost)
@@ -182,7 +210,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         if (item?.sell_rate) next[idx].rate = formatRateInput(item.sell_rate)
       }
     } else if (field === 'rate') {
-      next[idx] = { ...next[idx], rate: value, amount_input: undefined }
+      next[idx] = { ...next[idx], rate: value, amount_input: undefined, price_overridden: isSales && !!next[idx].pricing_rule_id, pricing_snapshot: next[idx].pricing_snapshot ? { ...next[idx].pricing_snapshot!, price_overridden: true } : undefined }
     } else if (field === 'qty') {
       const qty = Number(value)
       const enteredAmount = next[idx].amount_input
@@ -205,7 +233,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!line) return
     if (value === '') {
       const next = [...lines]
-      next[idx] = { ...line, amount_input: '', rate: '' }
+      next[idx] = { ...line, amount_input: '', rate: '', price_overridden: isSales && !!line.pricing_rule_id, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
       setLines(next)
       return
     }
@@ -216,7 +244,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       return
     }
     const next = [...lines]
-    next[idx] = { ...line, amount_input: value, rate: String(invoiceRateFromAmount(amount, line.qty) ?? 0) }
+    next[idx] = { ...line, amount_input: value, rate: String(invoiceRateFromAmount(amount, line.qty) ?? 0), price_overridden: isSales && !!line.pricing_rule_id, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
     setLines(next)
     setError('')
   }
@@ -285,7 +313,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     let printRequest: VoucherPrintRequest | undefined = shouldPrint ? beginVoucherPrint() : undefined
     setSaving(true)
     try {
-      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, amount_input: _amountInput, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
+      const params = { party_account_id: partyAccountId || null, is_cash: isCash, items: validLines.map(({ unit_mode: _mode, amount_input: _amountInput, pricing_warning: _warning, ...line }) => line), vat_rate: effectiveVatRate, credit_days: isCash ? 0 : creditDays, supplier_invoice_no: isSales ? undefined : supplierInvoiceNo.trim(), discount: discountAmount, narration: narration.trim(), date_bs: dateBs }
       const targetVoucherId = freshAfterDraftRef.current ? undefined : (voucher?.id || workingDraftIdRef.current)
       if (isSales) {
         if (targetVoucherId) await updateSalesVoucher(targetVoucherId, params, status)
@@ -473,8 +501,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className="invoice-entry-value h-8 px-2" /></div>
-                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><div className="relative"><Input type="number" min="0" step="any" disabled={!!line.pricing_rule_id && !canOverridePricing} value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className={`invoice-entry-value h-8 px-2 ${line.pricing_rule_id ? 'pr-7' : ''}`} />{line.pricing_rule_id && <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-primary" title={line.price_overridden ? `${line.pricing_snapshot?.rule_name || 'Slab rate'} calculated ${formatRateInput(line.calculated_rate || 0)}; manually overridden` : `${line.pricing_snapshot?.rule_name || 'Slab pricing'}: threshold ${line.pricing_snapshot?.min_quantity} ${line.pricing_snapshot?.quantity_unit}`}><Tag className="h-3.5 w-3.5"/></span>}</div>{line.pricing_warning && <p className="text-[10px] text-amber-700">{line.pricing_warning}</p>}</div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" disabled={!!line.pricing_rule_id && !canOverridePricing} value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

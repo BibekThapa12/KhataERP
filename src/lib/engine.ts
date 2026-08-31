@@ -543,6 +543,11 @@ export interface InvoiceEntryInput {
   conversion_factor?: number
   cost_rate?: number
   is_service?: boolean
+  pricing_rule_id?: string | null
+  pricing_slab_id?: string | null
+  calculated_rate?: number | null
+  price_overridden?: boolean
+  pricing_snapshot?: import('@/types').PricingSnapshot | null
 }
 
 interface InvoiceParams {

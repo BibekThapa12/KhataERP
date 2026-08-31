@@ -12,6 +12,7 @@ import { buildCategoryTree, categoryPath } from '@/lib/categoryHierarchy'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { ItemForm } from '@/components/forms/OtherForms'
 import { ItemDialog, CategoryDialog, CategoryLegend, CategoryTable } from '@/pages/Masters'
+import { SlabPricingPage } from '@/pages/SlabPricing'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -226,8 +227,8 @@ export function ItemsPage() {
     <PageContent className="space-y-4">
       <Tabs value={tab} onValueChange={setTab}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="items">Items</TabsTrigger><TabsTrigger value="categories">Item Categories</TabsTrigger><TabsTrigger value="adjustments">Stock Adjustments</TabsTrigger></TabsList></div>
-          {tab !== 'categories' && <div className="flex flex-wrap gap-2"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={tab === 'items' ? 'Search items...' : 'Search adjustments...'} className="w-full pl-8 sm:w-64" /></div>{tab === 'items' && <SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} />}{tab === 'items' ? <Button onClick={() => setShowForm(true)}><Plus className="mr-1.5 h-4 w-4" />New Item</Button> : <Button onClick={() => { setEditingAdjustment(null); setShowAdjustment(true) }}><SlidersHorizontal className="mr-1.5 h-4 w-4" />New Adjustment</Button>}</div>}
+          <div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="items">Items</TabsTrigger><TabsTrigger value="categories">Item Categories</TabsTrigger><TabsTrigger value="pricing">Slab Pricing</TabsTrigger><TabsTrigger value="adjustments">Stock Adjustments</TabsTrigger></TabsList></div>
+          {(tab === 'items' || tab === 'adjustments') && <div className="flex flex-wrap gap-2"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={tab === 'items' ? 'Search items...' : 'Search adjustments...'} className="w-full pl-8 sm:w-64" /></div>{tab === 'items' && <SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} />}{tab === 'items' ? <Button onClick={() => setShowForm(true)}><Plus className="mr-1.5 h-4 w-4" />New Item</Button> : <Button onClick={() => { setEditingAdjustment(null); setShowAdjustment(true) }}><SlidersHorizontal className="mr-1.5 h-4 w-4" />New Adjustment</Button>}</div>}
         </div>
 
         <TabsContent value="items">
@@ -238,6 +239,8 @@ export function ItemsPage() {
         </TabsContent>
 
         <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="item" title="Item Categories" rows={itemTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as ItemCategory })} onEdit={category => setCategoryDialog({ category: category as ItemCategory })} onArchive={category => alterItemCategory(category.id, { is_archived: !category.is_archived })} /><CategoryLegend kind="item" /></div></TabsContent>
+
+        <TabsContent value="pricing"><SlabPricingPage embedded /></TabsContent>
 
         <TabsContent value="adjustments"><div className="space-y-3">{stockDrafts.length > 0 && <Card className="overflow-hidden border-amber-200"><div className="border-b bg-amber-50/60 px-4 py-3"><p className="font-medium text-amber-900">Draft Stock Vouchers</p><p className="text-sm text-amber-800">Edit a draft to update, delete, or complete the stock adjustment or stock transfer.</p></div><div className="divide-y">{stockDrafts.map(draftVoucher => {
           const draft = draftVoucher.draft_payload as Partial<{ itemId:string; mode:'adjustment'|'transfer'; stockCondition:StockCondition; transferTo:'damaged'|'expired'; qtyDelta:string; narration:string }> | null

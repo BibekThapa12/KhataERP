@@ -17,27 +17,12 @@ alter table invoice_items add column if not exists taxable_amount numeric(18,6);
 alter table invoice_items add column if not exists vat_amount numeric(18,6);
 alter table invoice_items add column if not exists cost_rate numeric(18,6);
 
-do $$
-declare
-  constraint_name text;
-begin
-  select con.conname into constraint_name
-  from pg_constraint con
-  join pg_class rel on rel.oid = con.conrelid
-  join pg_namespace nsp on nsp.oid = rel.relnamespace
-  where nsp.nspname = 'public'
-    and rel.relname = 'vouchers'
-    and con.contype = 'c'
-    and pg_get_constraintdef(con.oid) ilike '%type%'
-  limit 1;
-
-  if constraint_name is not null then
-    execute format('alter table vouchers drop constraint %I', constraint_name);
-  end if;
-
-  alter table vouchers add constraint vouchers_type_check
-    check (type in ('Sales','Purchase','Sales Return','Purchase Return','Receipt','Payment','Journal','Stock Adjustment'));
-end $$;
+-- Replace this exact constraint deterministically. The former definition
+-- searched for any CHECK containing "type", which could drop another check
+-- and then collide with an existing vouchers_type_check after a partial run.
+alter table public.vouchers drop constraint if exists vouchers_type_check;
+alter table public.vouchers add constraint vouchers_type_check
+  check (type in ('Sales','Purchase','Sales Return','Purchase Return','Receipt','Payment','Journal','Stock Adjustment'));
 
 do $$
 begin

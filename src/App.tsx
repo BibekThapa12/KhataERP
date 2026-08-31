@@ -30,6 +30,7 @@ const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
 const AccountsPage = lazy(() => import('@/pages/Accounts').then(m => ({ default: m.AccountsPage })))
 const MastersPage = lazy(() => import('@/pages/Masters').then(m => ({ default: m.MastersPage })))
+const SlabPricingPage = lazy(() => import('@/pages/SlabPricing').then(m => ({ default: m.SlabPricingPage })))
 const TrialBalancePage = lazy(() => import('@/pages/reports/TrialBalance').then(m => ({ default: m.TrialBalancePage })))
 const ProfitLossPage = lazy(() => import('@/pages/reports/ProfitLoss').then(m => ({ default: m.ProfitLossPage })))
 const BalanceSheetPage = lazy(() => import('@/pages/reports/BalanceSheet').then(m => ({ default: m.BalanceSheetPage })))
@@ -259,6 +260,7 @@ export default function App() {
             <Route path="items" element={<ItemsPage />} />
             <Route path="accounts" element={<AccountsPage />} />
             <Route path="masters" element={<MastersPage />} />
+            <Route path="slab-pricing" element={<SlabPricingPage />} />
             <Route path="trial-balance" element={<TrialBalancePage />} />
             <Route path="profit-loss" element={<ProfitLossPage />} />
             <Route path="balance-sheet" element={<BalanceSheetPage />} />
