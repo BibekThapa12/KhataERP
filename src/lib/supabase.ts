@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense, PricingRule } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type WritePerformanceTrace } from '@/lib/writePerformance'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
@@ -137,6 +137,8 @@ const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_cred
 const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion,sell_rate,opening_qty,opening_rate,reorder_level,category_id,sku,barcode,vat_applicable,is_service,is_archived,created_at'
 const ACCOUNT_CATEGORY_FIELDS = 'id,company_id,name,account_type,parent_category_id,is_system,is_archived,created_at'
 const ITEM_CATEGORY_FIELDS = 'id,company_id,name,parent_category_id,is_archived,created_at'
+const PRICING_SLAB_FIELDS = 'id,pricing_rule_id,min_quantity,rate,created_at,updated_at'
+const PRICING_RULE_FIELDS = `id,company_id,name,scope,item_id,category_id,quantity_unit,effective_from_bs,effective_from_bs_key,effective_until_bs,effective_until_bs_key,priority,is_active,created_by,updated_by,created_at,updated_at,slabs:pricing_rule_slabs(${PRICING_SLAB_FIELDS})`
 const MODULE_FIELDS = 'id,key,name,description,default_price,is_active,created_at'
 const COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,price,payment_status,starts_at,expires_at,settings,internal_notes,enabled_by,created_at,updated_at,module:modules(${MODULE_FIELDS})`
 const CLIENT_COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,payment_status,starts_at,expires_at,settings,module:modules(${MODULE_FIELDS})`
@@ -148,7 +150,7 @@ const VOUCHER_SETTLEMENT_FIELDS = 'id,company_id,settlement_voucher_id,invoice_v
 const VOUCHER_FIELDS = 'id,company_id,type,date,date_ad,date_bs,date_bs_key,invoice_no,draft_no,supplier_invoice_no,numbering_period,credit_days,due_date_ad,due_date_bs,due_date_bs_key,narration,original_voucher_id,return_reason,settlement_mode,settlement_account_id,simple_entry_type,contra_entry,contra_destination_account_id,contra_charge_amount,restock_items,party_account_id,is_cash,subtotal,discount,vat_rate,vat_amount,total,cancelled,status,seq,created_by,updated_by,created_at,updated_at,completed_by,completed_at,draft_payload'
 const VOUCHER_LINE_FIELDS = 'id,voucher_id,account_id,debit,credit'
 const STOCK_LINE_FIELDS = 'id,voucher_id,item_id,qty,rate,direction,stock_condition,is_transfer'
-const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,amount,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate'
+const INVOICE_ITEM_FIELDS = 'id,voucher_id,item_id,qty,rate,amount,source_invoice_item_id,item_name,unit,entry_unit,conversion_factor,base_qty,discount_amount,taxable_amount,vat_amount,cost_rate,pricing_rule_id,pricing_slab_id,calculated_rate,price_overridden,pricing_snapshot'
 const VOUCHER_WITH_CHILDREN_FIELDS = `${VOUCHER_FIELDS},lines:voucher_lines(${VOUCHER_LINE_FIELDS}),stock_lines:stock_lines(${STOCK_LINE_FIELDS}),invoice_items:invoice_items(${INVOICE_ITEM_FIELDS}),settlements:voucher_settlements!settlement_voucher_id(${VOUCHER_SETTLEMENT_FIELDS})`
 export const supabaseProjectHost = (() => {
   if (!supabaseUrl) return ''
@@ -577,6 +579,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
       events: [],
       modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
       companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+      pricingRules: [] as PricingRule[],
     }
   }
 
@@ -587,6 +590,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
   let vouchersQuery = supabase.from('vouchers').select(VOUCHER_WITH_CHILDREN_FIELDS).order('date_bs_key', { ascending: false })
   let eventsQuery = supabase.from('app_events').select('id,company_id,user_id,event_type,metadata,created_at').order('created_at', { ascending: false }).limit(1000)
   let companyModulesQuery = supabase.from('company_modules').select(COMPANY_MODULE_FIELDS)
+  let pricingRulesQuery = supabase.from('pricing_rules').select(PRICING_RULE_FIELDS)
 
   if (scoped) {
     companiesQuery = companiesQuery.in('id', companyIds)
@@ -596,9 +600,10 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
     vouchersQuery = vouchersQuery.in('company_id', companyIds)
     eventsQuery = eventsQuery.in('company_id', companyIds)
     companyModulesQuery = companyModulesQuery.in('company_id', companyIds)
+    pricingRulesQuery = pricingRulesQuery.in('company_id', companyIds)
   }
 
-  const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes, modulesRes, companyModulesRes] = await Promise.all([
+  const [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes, eventsRes, modulesRes, companyModulesRes, pricingRulesRes] = await Promise.all([
     companiesQuery,
     accountsQuery,
     partiesQuery,
@@ -607,6 +612,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
     eventsQuery,
     supabase.from('modules').select(MODULE_FIELDS).order('name'),
     companyModulesQuery,
+    pricingRulesQuery,
   ])
 
   for (const res of [companiesRes, accountsRes, partiesRes, itemsRes, vouchersRes]) {
@@ -622,6 +628,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
     events: eventsRes.error ? [] : (eventsRes.data || []),
     modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
     companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+    pricingRules: pricingRulesRes.error ? [] : (pricingRulesRes.data || []) as PricingRule[],
   }
 }
 
@@ -667,6 +674,11 @@ export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_
 }
 export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
   const {data,error}=await supabase.from('company_user_permissions').select('permission').eq('company_id',company_id); if(error) throw error; return (data||[]).map(row=>row.permission as ChequePermission)
+}
+export async function fetchCompanyPermissions(company_id: string): Promise<string[]> {
+  const { data, error } = await supabase.from('company_user_permissions').select('permission').eq('company_id', company_id)
+  if (error) throw error
+  return (data || []).map(row => String(row.permission))
 }
 export async function fetchChequeBanks(company_id:string):Promise<ChequeBank[]> { const {data,error}=await supabase.from('cheque_banks').select(CHEQUE_BANK_FIELDS).eq('company_id',company_id).order('bank_name'); if(error) throw error; return (data||[]) as ChequeBank[] }
 export async function fetchCheques(company_id:string):Promise<Cheque[]> { const {data,error}=await supabase.from('cheques').select(CHEQUE_FIELDS).eq('company_id',company_id).order('due_date_bs_key'); if(error) throw error; return (data||[]) as Cheque[] }
@@ -821,6 +833,40 @@ export async function fetchItemCategories(company_id: string): Promise<ItemCateg
   const { data, error } = await supabase.from('item_categories').select(ITEM_CATEGORY_FIELDS).eq('company_id', company_id).order('name')
   if (error) throw error
   return data || []
+}
+
+export async function fetchPricingRules(company_id: string): Promise<PricingRule[]> {
+  const { data, error } = await supabase.from('pricing_rules').select(PRICING_RULE_FIELDS).eq('company_id', company_id)
+    .order('priority', { ascending: false }).order('name')
+  if (error) throw error
+  return (data || []).map(rule => ({ ...rule, slabs: [...(rule.slabs || [])].sort((a, b) => Number(a.min_quantity) - Number(b.min_quantity)) })) as PricingRule[]
+}
+
+export async function savePricingRule(rule: Partial<PricingRule> & Pick<PricingRule, 'company_id' | 'name' | 'scope' | 'quantity_unit' | 'effective_from_bs' | 'priority' | 'is_active'>) {
+  const { slabs = [], ...record } = rule
+  const { data, error } = await supabase.rpc('save_pricing_rule_atomic', {
+    p_rule: record,
+    p_slabs: slabs.map(slab => ({ id: slab.id, min_quantity: slab.min_quantity, rate: slab.rate })),
+  })
+  if (error) throw error
+  return data as PricingRule
+}
+
+export async function setPricingRuleActive(id: string, active: boolean) {
+  const { data, error } = await supabase.rpc('set_pricing_rule_active', { p_rule_id: id, p_active: active })
+  if (error) throw error
+  return data as PricingRule
+}
+
+export async function duplicatePricingRule(id: string) {
+  const { data, error } = await supabase.rpc('duplicate_pricing_rule', { p_rule_id: id })
+  if (error) throw error
+  return data as PricingRule
+}
+
+export async function removePricingRule(id: string) {
+  const { error } = await supabase.rpc('delete_pricing_rule', { p_rule_id: id })
+  if (error) throw error
 }
 
 export async function insertItemCategory(category: Omit<ItemCategory, 'id' | 'created_at'>): Promise<ItemCategory> {
@@ -1031,7 +1077,7 @@ function voucherRequestFingerprint(
   const header = [voucher.company_id, voucher.type, voucher.date_bs, voucher.invoice_no, voucher.supplier_invoice_no, voucher.party_account_id, voucher.settlement_account_id, voucher.total, voucher.credit_days, voucher.discount, voucher.vat_rate, voucher.narration, voucher.status].join('|')
   const ledger = lines.map(line => `${line.account_id}:${line.debit}:${line.credit}`).join(',')
   const stock = (stockLines || []).map(line => `${line.item_id}:${line.direction}:${line.qty}:${line.rate}:${line.stock_condition || 'saleable'}`).join(',')
-  const items = (invoiceItems || []).map(item => `${item.item_id}:${item.qty}:${item.rate}:${item.source_invoice_item_id || ''}`).join(',')
+  const items = (invoiceItems || []).map(item => `${item.item_id}:${item.qty}:${item.rate}:${item.source_invoice_item_id || ''}:${item.pricing_rule_id || ''}:${item.pricing_slab_id || ''}:${item.price_overridden ? 1 : 0}`).join(',')
   const allocations = (settlements || []).map(row => `${row.invoice_voucher_id}:${row.party_account_id}:${row.amount}`).join(',')
   return `${header}|${ledger}|${stock}|${items}|${allocations}`
 }

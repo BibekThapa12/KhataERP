@@ -1,5 +1,5 @@
 import { create } from 'zustand'
-import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput } from '@/types'
+import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput, PricingRule } from '@/types'
 import {
   fetchAccounts, fetchParties, fetchItems, fetchVouchers,
   insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, createPartyWithLedgerAtomic, insertItem,
@@ -8,8 +8,9 @@ import {
   fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertAccountCategories, insertItemCategory,
   updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, updateItemsByIds, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
-  fetchCompanyModules, fetchChequePermissions, fetchChequeBanks, fetchCheques,
+  fetchCompanyModules, fetchChequePermissions, fetchCompanyPermissions, fetchChequeBanks, fetchCheques,
   fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin, logAppEvent,
+  fetchPricingRules, savePricingRule, setPricingRuleActive, duplicatePricingRule, removePricingRule,
 } from '@/lib/supabase'
 import {
   applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
@@ -55,10 +56,12 @@ const blankCompanyData = {
   parties: [],
   items: [],
   itemCategories: [],
+  pricingRules: [],
   stock: [],
   vouchers: [],
   companyModules: [],
   chequePermissions: [],
+  companyPermissions: [],
   chequeBanks: [],
   cheques: [],
   dataReady: false,
@@ -114,10 +117,12 @@ interface AppState {
   parties: Party[]
   items: Item[]
   itemCategories: ItemCategory[]
+  pricingRules: PricingRule[]
   stock: StockEntry[]
   vouchers: Voucher[]
   companyModules: CompanyModule[]
   chequePermissions: ChequePermission[]
+  companyPermissions: string[]
   chequeBanks: ChequeBank[]
   cheques: Cheque[]
   loading: boolean
@@ -141,6 +146,10 @@ interface AppState {
   addCompanyAdmin: (email: string) => Promise<void>
   saveCompany: (updates: Partial<Company>) => Promise<void>
   refreshChequeData: () => Promise<void>
+  savePricingRule: (rule: Partial<PricingRule> & Pick<PricingRule, 'company_id' | 'name' | 'scope' | 'quantity_unit' | 'effective_from_bs' | 'priority' | 'is_active'>) => Promise<PricingRule>
+  activatePricingRule: (id: string, active: boolean) => Promise<void>
+  duplicatePricingRule: (id: string) => Promise<void>
+  deletePricingRule: (id: string) => Promise<void>
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
   addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number | null; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean; is_service?: boolean }) => Promise<Item>
@@ -465,10 +474,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   parties: [],
   items: [],
   itemCategories: [],
+  pricingRules: [],
   stock: [],
   vouchers: [],
   companyModules: [],
   chequePermissions: [],
+  companyPermissions: [],
   chequeBanks: [],
   cheques: [],
   loading: false,
@@ -562,13 +573,14 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeCompanyId: company.id,
         companyCreationLicense: response.license,
       })
-      const [rawAccounts, accountCategories, fetchedParties, items, itemCategories, vouchers] = await Promise.all([
+      const [rawAccounts, accountCategories, fetchedParties, items, itemCategories, vouchers, pricingRules] = await Promise.all([
         fetchAccounts(company.id),
         fetchAccountCategories(company.id),
         fetchParties(company.id),
         fetchItems(company.id),
         fetchItemCategories(company.id),
         fetchVouchers(company.id),
+        fetchPricingRules(company.id),
       ])
       const parties = [...new Map(fetchedParties.map(party => [party.account_id, party])).values()]
 
@@ -713,11 +725,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Core accounting data is complete at this point. Render it immediately;
       // optional paid-module data must not hold the dashboard loading state.
       if (loadVersion !== companyDataLoadVersion) return
-      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, stock, vouchers, userId, loading: false, dataReady: true })
+      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, pricingRules, stock, vouchers, userId, loading: false, dataReady: true })
 
-      let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
+      let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], companyPermissions: string[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
       try {
-        companyModules = await fetchCompanyModules(company.id)
+        ;[companyModules, companyPermissions] = await Promise.all([fetchCompanyModules(company.id), fetchCompanyPermissions(company.id)])
         const entitlement = companyModules.find(entry => entry.module?.key === 'cheque_management')
         if (chequeEntitlement(entitlement).canRead) {
           const loaded = await Promise.all([fetchChequePermissions(company.id), fetchChequeBanks(company.id), fetchCheques(company.id)])
@@ -725,7 +737,7 @@ export const useAppStore = create<AppState>((set, get) => ({
           chequeBanks = loaded[1]; cheques = loaded[2]
         }
         // Ignore a late response when the authenticated company changed.
-        if (loadVersion === companyDataLoadVersion && get().company?.id === company.id) set({ companyModules, chequePermissions, chequeBanks, cheques })
+        if (loadVersion === companyDataLoadVersion && get().company?.id === company.id) set({ companyModules, companyPermissions, chequePermissions, chequeBanks, cheques })
       } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
     } catch (e: unknown) {
       set({ error: publicErrorMessage(e, 'loading company data'), loading: false })
@@ -742,6 +754,24 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // ─── Recompute after mutation ────────────────────────────────────────────────
+  savePricingRule: async (rule) => {
+    const saved = await savePricingRule(rule)
+    set({ pricingRules: [...get().pricingRules.filter(entry => entry.id !== saved.id), saved].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name)) })
+    return saved
+  },
+  activatePricingRule: async (id, active) => {
+    await setPricingRuleActive(id, active)
+    set({ pricingRules: get().pricingRules.map(rule => rule.id === id ? { ...rule, is_active: active } : rule) })
+  },
+  duplicatePricingRule: async (id) => {
+    await duplicatePricingRule(id)
+    const company = get().company
+    if (company) set({ pricingRules: await fetchPricingRules(company.id) })
+  },
+  deletePricingRule: async (id) => {
+    await removePricingRule(id)
+    set({ pricingRules: get().pricingRules.filter(rule => rule.id !== id) })
+  },
   saveCompany: async (updates) => {
     const { company } = get()
     if (!company) return
@@ -1089,12 +1119,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!company) throw new Error('No company')
     const voucherPayload = blankDraftVoucher(company, params)
+    const draftPricingOverrideCount = params.type === 'Sales' && Array.isArray(params.draft_payload.lines)
+      ? (params.draft_payload.lines as Array<Record<string, unknown>>).filter(line => line.price_overridden).length
+      : 0
     if (params.id) {
       const existing = get().vouchers.find(voucher => voucher.id === params.id)
       if (!existing) throw new Error('Voucher not found')
       if (existing.status !== 'Draft') throw new Error('Only draft vouchers can be updated as draft')
       const updated = await updateDraftVoucher(params.id, voucherPayload)
       set({ vouchers: replaceVoucherInState(get().vouchers, { ...existing, ...updated }) })
+      if (draftPricingOverrideCount) await logAppEvent('sales_pricing_override_saved', company.id, { draft: true, overridden_line_count: draftPricingOverrideCount })
       notifySuccess('Draft voucher updated', updated.draft_no || updated.invoice_no)
       return updated
     }
@@ -1114,6 +1148,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     if (!newVoucher) throw new Error('Could not allocate a unique draft voucher number')
     set({ vouchers: [newVoucher, ...get().vouchers] })
+    if (draftPricingOverrideCount) await logAppEvent('sales_pricing_override_saved', company.id, { draft: true, overridden_line_count: draftPricingOverrideCount })
     notifySuccess('Draft voucher saved', newVoucher.draft_no || newVoucher.invoice_no)
     return newVoucher
   },
@@ -1137,6 +1172,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
       numbering: voucherNumberingScope(company, 'Sales', effectiveParams.date_bs),
+      audit: effectiveParams.items.some(item => item.price_overridden) ? { eventType: 'sales_pricing_override_saved', metadata: { overridden_line_count: effectiveParams.items.filter(item => item.price_overridden).length } } : undefined,
       trace,
     })
     const nextState = trace.sync('client_balance_and_stock_recompute', () => {
@@ -1369,6 +1405,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
+      audit: effectiveParams.items.some(item => item.price_overridden) ? { eventType: 'sales_pricing_override_saved', metadata: { overridden_line_count: effectiveParams.items.filter(item => item.price_overridden).length } } : undefined,
       trace,
     })
     const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })

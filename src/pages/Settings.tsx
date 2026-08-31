@@ -234,7 +234,7 @@ function RestoreProgressBox({ progress }: { progress: RestoreProgress }) {
 
 export function SettingsPage() {
   const {
-    company, saveCompany, accounts, rawAccounts, accountCategories, vouchers, parties, items, itemCategories, companyModules, chequeBanks, cheques, loadAll, userId, error: loadError,
+    company, saveCompany, accounts, rawAccounts, accountCategories, vouchers, parties, items, itemCategories, pricingRules, companyModules, chequeBanks, cheques, loadAll, userId, error: loadError,
     addCompanyAdmin, addAccountCategory, addAccount, addParty, addItemCategory, addItem, saveDraftVoucher,
   } = useAppStore()
   const storedFiscalYearStartBs = company?.fiscal_year_start ? adToBs(company.fiscal_year_start) : DEFAULT_FISCAL_YEAR_START_BS
@@ -442,6 +442,7 @@ export function SettingsPage() {
       parties,
       items,
       vouchers,
+      pricingRules,
       companyModules,
       chequeBanks,
       cheques,
@@ -547,6 +548,7 @@ export function SettingsPage() {
       const sourceParties = Array.isArray(backup.parties) ? backup.parties : []
       const sourceItems = Array.isArray(backup.items) ? backup.items : []
       const sourceVouchers = Array.isArray(backup.vouchers) ? backup.vouchers : []
+      const sourcePricingRules = Array.isArray(backup.pricingRules) ? backup.pricingRules : []
       const sourceCompanyModules = Array.isArray(backup.companyModules) ? backup.companyModules as (CompanyModule & { module_key?: string })[] : []
       const sourceChequeBanks = Array.isArray(backup.chequeBanks) ? backup.chequeBanks : []
       const sourceCheques = Array.isArray(backup.cheques) ? backup.cheques : []
@@ -565,11 +567,12 @@ export function SettingsPage() {
         { label: 'Voucher lines', value: sourceVoucherLineCount },
         { label: 'Stock lines', value: sourceStockLineCount },
         { label: 'Invoice items', value: sourceInvoiceItemCount },
+        { label: 'Pricing rules', value: sourcePricingRules.length },
         { label: 'Settlements', value: orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.settlements?.length || 0), 0) },
         { label: 'Cheque banks', value: sourceChequeBanks.length },
         { label: 'Cheques', value: sourceCheques.length },
       ]
-      totalStages = 19
+      totalStages = 20
       finishRestoreStage('Backup read', 'Preparing fresh IDs for the active company.')
       showRestoreProgress('Updating company settings', 'Applying fiscal-year and company settings before importing vouchers.')
       const companyUpdates = cleanCompanyBackup(backup.company)
@@ -737,6 +740,30 @@ export function SettingsPage() {
       }
       finishRestoreStage('Items imported', `${itemRows.length} new item(s) created.`)
 
+      showRestoreProgress('Importing slab pricing', 'Restoring item and category pricing rules with remapped targets.')
+      for (const sourceRule of sourcePricingRules) {
+        const nextRuleId = crypto.randomUUID()
+        idMap.set(sourceRule.id, nextRuleId)
+        const ruleRow = withoutMeta(sourceRule as unknown as Record<string, unknown>, ['slabs', 'created_by', 'updated_by'])
+        const { error: ruleError } = await supabase.from('pricing_rules').insert({
+          ...ruleRow,
+          id: nextRuleId,
+          company_id: company.id,
+          item_id: sourceRule.item_id ? idMap.get(sourceRule.item_id) || null : null,
+          category_id: sourceRule.category_id ? idMap.get(sourceRule.category_id) || null : null,
+          created_by: null,
+          updated_by: null,
+        })
+        if (ruleError) throw ruleError
+        const slabRows = (sourceRule.slabs || []).map(slab => {
+          const nextSlabId = crypto.randomUUID()
+          idMap.set(slab.id, nextSlabId)
+          return { id: nextSlabId, pricing_rule_id: nextRuleId, min_quantity: slab.min_quantity, rate: slab.rate }
+        })
+        if (slabRows.length) { const { error: slabError } = await supabase.from('pricing_rule_slabs').insert(slabRows); if (slabError) throw slabError }
+      }
+      finishRestoreStage('Slab pricing imported', `${sourcePricingRules.length} pricing rule(s) restored.`)
+
       showRestoreProgress('Importing parties', 'Creating customers and suppliers with remapped ledgers.')
       const partyRows = sourceParties.filter(party => !idMap.has(party.id)).flatMap(party => {
         const partyKey = portableScopedKey(party.type, party.name)
@@ -836,6 +863,9 @@ export function SettingsPage() {
           conversion_factor: conversionFactor,
           base_qty: baseQty,
           source_invoice_item_id: null,
+          pricing_rule_id: item.pricing_rule_id ? idMap.get(item.pricing_rule_id) || null : null,
+          pricing_slab_id: item.pricing_slab_id ? idMap.get(item.pricing_slab_id) || null : null,
+          pricing_snapshot: item.pricing_snapshot ? mapDeepIds(item.pricing_snapshot, idMap) : null,
         }
         return { voucher, item, lineIndex, row }
       }))

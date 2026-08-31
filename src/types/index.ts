@@ -108,6 +108,57 @@ export interface InvoiceItem {
   taxable_amount?: number
   vat_amount?: number
   cost_rate?: number
+  pricing_rule_id?: string | null
+  pricing_slab_id?: string | null
+  calculated_rate?: number | null
+  price_overridden?: boolean
+  pricing_snapshot?: PricingSnapshot | null
+}
+
+export type PricingRuleScope = 'ITEM' | 'CATEGORY'
+
+export interface PricingRuleSlab {
+  id: string
+  pricing_rule_id: string
+  min_quantity: number
+  rate: number
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PricingRule {
+  id: string
+  company_id: string
+  name: string
+  scope: PricingRuleScope
+  item_id?: string | null
+  category_id?: string | null
+  quantity_unit: string
+  effective_from_bs: string
+  effective_from_bs_key: number
+  effective_until_bs?: string | null
+  effective_until_bs_key?: number | null
+  priority: number
+  is_active: boolean
+  slabs: PricingRuleSlab[]
+  created_by?: string | null
+  updated_by?: string | null
+  created_at?: string
+  updated_at?: string
+}
+
+export interface PricingSnapshot {
+  version: 1
+  rule_id: string
+  slab_id: string
+  rule_name: string
+  scope: PricingRuleScope
+  quantity_unit: string
+  qualifying_quantity: number
+  min_quantity: number
+  rule_rate: number
+  calculated_entry_rate: number
+  price_overridden: boolean
 }
 
 export interface VoucherSettlement {

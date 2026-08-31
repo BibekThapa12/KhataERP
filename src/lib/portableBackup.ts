@@ -1,4 +1,4 @@
-import type { Account, AccountCategory, Cheque, ChequeBank, ChequeEvent, Company, CompanyModule, Item, ItemCategory, Party, Voucher } from '@/types'
+import type { Account, AccountCategory, Cheque, ChequeBank, ChequeEvent, Company, CompanyModule, Item, ItemCategory, Party, PricingRule, Voucher } from '@/types'
 
 export const PORTABLE_BACKUP_FORMAT = 'khataerp-portable-company-v1' as const
 
@@ -20,6 +20,7 @@ export interface PortableCompanyBackup {
   parties: Party[]
   items: Item[]
   vouchers: Voucher[]
+  pricingRules?: PricingRule[]
   chequeBanks?: ChequeBank[]
   cheques?: Cheque[]
   chequeEvents?: ChequeEvent[]
@@ -111,6 +112,8 @@ export function portableBackupCounts(snapshot: PortableBackupSnapshot): Portable
     voucher_lines: vouchers.reduce((sum, voucher) => sum + (voucher.lines?.length || 0), 0),
     stock_lines: vouchers.reduce((sum, voucher) => sum + (voucher.stock_lines?.length || 0), 0),
     invoice_items: vouchers.reduce((sum, voucher) => sum + (voucher.invoice_items?.length || 0), 0),
+    pricing_rules: rows(snapshot.pricingRules).length,
+    pricing_rule_slabs: rows(snapshot.pricingRules).reduce((sum, rule) => sum + (rule.slabs?.length || 0), 0),
     settlements: vouchers.reduce((sum, voucher) => sum + (voucher.settlements?.length || 0), 0),
     cheque_banks: rows(snapshot.chequeBanks).length,
     cheques: rows(snapshot.cheques).length,
@@ -136,6 +139,7 @@ export function buildPortableCompanyBackup(snapshot: PortableBackupSnapshot, met
     accountCategories: rows(cleanSnapshot.accountCategories || cleanSnapshot.account_categories),
     itemCategories: rows(cleanSnapshot.itemCategories || cleanSnapshot.item_categories),
     accounts: rows(cleanSnapshot.accounts), parties: rows(cleanSnapshot.parties), items: rows(cleanSnapshot.items), vouchers: rows(cleanSnapshot.vouchers),
+    pricingRules: rows(cleanSnapshot.pricingRules),
     chequeBanks: rows(cleanSnapshot.chequeBanks), cheques: rows(cleanSnapshot.cheques), chequeEvents: rows(cleanSnapshot.chequeEvents),
     companyModules: rows(cleanSnapshot.companyModules), masterChangeLogs: rows(cleanSnapshot.masterChangeLogs), appEvents: rows(cleanSnapshot.appEvents),
   }
