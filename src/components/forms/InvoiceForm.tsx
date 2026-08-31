@@ -44,8 +44,7 @@ interface InvoiceFormProps {
 
 export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) {
   const isSales = type === 'Sales'
-  const { company, companyMemberships, companyPermissions, accounts, items, itemCategories, pricingRules, parties, vouchers, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
-  const canOverridePricing = !!company && (companyMemberships.some(membership => membership.company_id === company.id && membership.role === 'Admin') || companyPermissions.includes('pricing.override'))
+  const { company, accounts, items, itemCategories, pricingRules, parties, vouchers, getStockEntry, saveSalesVoucher, savePurchaseVoucher, updateSalesVoucher, updatePurchaseVoucher, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
   const vatEnabled = company?.vat_enabled ?? true
 
   const [dateBs, setDateBs] = useState(() => selectedFiscalYearEndBs(company))
@@ -196,7 +195,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       }
     })
     if (JSON.stringify(next) !== JSON.stringify(lines)) setLines(next)
-  }, [dateBs, isSales, itemCategories, items, lines, open, pricingRules, voucher?.status])
+  }, [dateBs, isSales, itemCategories, items, lines, open, pricingRules, type, voucher?.id, voucher?.status])
 
   const selectParty = (accountId: string) => {
     setPartyAccountId(accountId)
@@ -223,7 +222,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         if (item?.sell_rate) next[idx].rate = formatRateInput(item.sell_rate)
       }
     } else if (field === 'rate') {
-      next[idx] = { ...next[idx], rate: value, amount_input: undefined, price_overridden: isSales && !!next[idx].pricing_rule_id, pricing_snapshot: next[idx].pricing_snapshot ? { ...next[idx].pricing_snapshot!, price_overridden: true } : undefined }
+      next[idx] = { ...next[idx], rate: value, amount_input: undefined, price_overridden: isSales, pricing_snapshot: next[idx].pricing_snapshot ? { ...next[idx].pricing_snapshot!, price_overridden: true } : undefined }
     } else if (field === 'qty') {
       const qty = Number(value)
       const enteredAmount = next[idx].amount_input
@@ -246,7 +245,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!line) return
     if (value === '') {
       const next = [...lines]
-      next[idx] = { ...line, amount_input: '', rate: '', price_overridden: isSales && !!line.pricing_rule_id, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
+      next[idx] = { ...line, amount_input: '', rate: '', price_overridden: isSales, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
       setLines(next)
       return
     }
@@ -257,7 +256,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       return
     }
     const next = [...lines]
-    next[idx] = { ...line, amount_input: value, rate: String(invoiceRateFromAmount(amount, line.qty) ?? 0), price_overridden: isSales && !!line.pricing_rule_id, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
+    next[idx] = { ...line, amount_input: value, rate: String(invoiceRateFromAmount(amount, line.qty) ?? 0), price_overridden: isSales, pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, price_overridden: true } : undefined }
     setLines(next)
     setError('')
   }
@@ -514,8 +513,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           ? <SearchableSelect tabIndex={-1} className="invoice-entry-value h-8 px-2" value={line.unit_mode} onValueChange={value => updateUnit(idx, value as UnitMode)} options={[{ value: 'main', label: item.unit }, { value: 'alternate', label: item.alternate_unit }]} />
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
-                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><div className="relative"><Input type="number" min="0" step="any" disabled={!!line.pricing_rule_id && !canOverridePricing} value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className={`invoice-entry-value h-8 px-2 ${line.pricing_rule_id ? 'pr-7' : ''}`} />{line.pricing_rule_id && <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-primary" title={line.price_overridden ? `${line.pricing_snapshot?.rule_name || 'Slab rate'} calculated ${formatRateInput(line.calculated_rate || 0)}; manually overridden` : `${line.pricing_snapshot?.rule_name || 'Slab pricing'}: threshold ${line.pricing_snapshot?.min_quantity} ${line.pricing_snapshot?.quantity_unit}`}><Tag className="h-3.5 w-3.5"/></span>}</div>{line.pricing_warning && <p className="text-[10px] text-amber-700">{line.pricing_warning}</p>}</div>
-                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" disabled={!!line.pricing_rule_id && !canOverridePricing} value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
+                      <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><div className="relative"><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className={`invoice-entry-value h-8 px-2 ${line.pricing_rule_id ? 'pr-7' : ''}`} />{line.pricing_rule_id && <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-primary" title={line.price_overridden ? `${line.pricing_snapshot?.rule_name || 'Slab rate'} calculated ${formatRateInput(line.calculated_rate || 0)}; manually overridden` : `${line.pricing_snapshot?.rule_name || 'Slab pricing'}: threshold ${line.pricing_snapshot?.min_quantity} ${line.pricing_snapshot?.quantity_unit}`}><Tag className="h-3.5 w-3.5"/></span>}</div>{line.pricing_warning && <p className="text-[10px] text-amber-700">{line.pricing_warning}</p>}</div>
+                      <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>

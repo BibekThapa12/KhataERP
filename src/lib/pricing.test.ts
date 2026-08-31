@@ -56,6 +56,13 @@ describe('Sales slab pricing', () => {
     expect(result[0].pricing_snapshot?.price_overridden).toBe(true)
   })
 
+  it('keeps a manual Sales rate when no slab rule matches', () => {
+    const result = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 1, rate: 777, price_overridden: true }], items, categories, rules: [], dateBs: '2083-05-01' })
+    expect(result[0].rate).toBe(777)
+    expect(result[0].price_overridden).toBe(true)
+    expect(result[0].pricing_rule_id).toBeUndefined()
+  })
+
   it('excludes services and prefers item rules over category qualification', () => {
     const itemRule = rule({ id: 'item-rule', scope: 'ITEM', item_id: 'a', category_id: null, quantity_unit: 'CS', slabs: [{ id: 's100', pricing_rule_id: 'item-rule', min_quantity: 100, rate: 1 }] })
     const result = repriceSalesLines({ lines: [

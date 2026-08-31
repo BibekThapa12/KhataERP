@@ -2474,9 +2474,6 @@ begin
   if new.calculated_rate is not null and new.calculated_rate < 0 then
     raise exception 'Calculated selling rate cannot be negative';
   end if;
-  if new.price_overridden and not public.has_company_permission(voucher_company, 'pricing.override') then
-    raise exception 'Manual selling-rate override permission is required' using errcode = '42501';
-  end if;
   return new;
 end;
 $$;
@@ -2767,6 +2764,59 @@ $extend_backup_exports$;
 revoke all on function public.save_pricing_rule_atomic(jsonb,jsonb), public.set_pricing_rule_active(uuid,boolean), public.duplicate_pricing_rule(uuid), public.delete_pricing_rule(uuid) from public, anon;
 grant execute on function public.save_pricing_rule_atomic(jsonb,jsonb), public.set_pricing_rule_active(uuid,boolean), public.duplicate_pricing_rule(uuid), public.delete_pricing_rule(uuid) to authenticated;
 grant select on public.pricing_rules, public.pricing_rule_slabs to authenticated;
+
+-- Repair the JSON record declaration when pg_get_functiondef() formatting
+-- prevented the slab-pricing migration's original replacement from matching.
+do $repair_atomic_pricing_record$
+declare
+  function_sql text;
+  old_record_fields text := 'vat_amount numeric, cost_rate numeric';
+  new_record_fields text := 'vat_amount numeric, cost_rate numeric, pricing_rule_id uuid, pricing_slab_id uuid, calculated_rate numeric, price_overridden boolean, pricing_snapshot jsonb';
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into function_sql;
+  if position('item.pricing_rule_id' in function_sql) = 0 then
+    raise exception 'The atomic voucher writer does not contain the pricing INSERT fields';
+  end if;
+  if position('pricing_rule_id uuid' in function_sql) = 0 then
+    function_sql := replace(function_sql, old_record_fields, new_record_fields);
+  end if;
+  if position('pricing_rule_id uuid' in function_sql) = 0 then
+    raise exception 'Could not extend the atomic voucher pricing record declaration';
+  end if;
+  execute function_sql;
+end;
+$repair_atomic_pricing_record$;
+
+notify pgrst, 'reload schema';
+
+-- Repair the target-column list when the original whitespace-sensitive patch
+-- extended the SELECT expressions but not the invoice_items INSERT columns.
+do $repair_atomic_pricing_columns$
+declare
+  function_sql text;
+  old_target_fields text := 'vat_amount, cost_rate';
+  new_target_fields text := 'vat_amount, cost_rate, pricing_rule_id, pricing_slab_id, calculated_rate, price_overridden, pricing_snapshot';
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into function_sql;
+  if position('item.pricing_rule_id' in function_sql) = 0
+     or position('pricing_rule_id uuid' in function_sql) = 0 then
+    raise exception 'Apply the atomic voucher pricing record repair before this migration';
+  end if;
+  if position(new_target_fields in function_sql) = 0 then
+    function_sql := replace(function_sql, old_target_fields, new_target_fields);
+  end if;
+  if position(new_target_fields in function_sql) = 0 then
+    raise exception 'Could not extend the atomic voucher pricing target columns';
+  end if;
+  execute function_sql;
+end;
+$repair_atomic_pricing_columns$;
+
+notify pgrst, 'reload schema';
 
 commit;
 notify pgrst, 'reload schema';

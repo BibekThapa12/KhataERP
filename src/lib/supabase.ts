@@ -853,7 +853,7 @@ export async function savePricingRule(rule: Partial<PricingRule> & Pick<PricingR
 }
 
 export async function setPricingRuleActive(id: string, active: boolean) {
-  const { data, error } = await supabase.rpc('set_pricing_rule_active', { p_rule_id: id, p_active: active })
+  const { data, error } = await supabase.rpc('set_pricing_rule_active', { p_rule_id: id, p_is_active: active })
   if (error) throw error
   return data as PricingRule
 }

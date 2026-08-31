@@ -10311,9 +10311,6 @@ begin
   if new.calculated_rate is not null and new.calculated_rate < 0 then
     raise exception 'Calculated selling rate cannot be negative';
   end if;
-  if new.price_overridden and not public.has_company_permission(voucher_company, 'pricing.override') then
-    raise exception 'Manual selling-rate override permission is required' using errcode = '42501';
-  end if;
   return new;
 end;
 $$;
@@ -10605,6 +10602,115 @@ revoke all on function public.save_pricing_rule_atomic(jsonb,jsonb), public.set_
 grant execute on function public.save_pricing_rule_atomic(jsonb,jsonb), public.set_pricing_rule_active(uuid,boolean), public.duplicate_pricing_rule(uuid), public.delete_pricing_rule(uuid) to authenticated;
 grant select on public.pricing_rules, public.pricing_rule_slabs to authenticated;
 
+-- Repair the JSON record declaration when pg_get_functiondef() formatting
+-- prevented the slab-pricing migration's original replacement from matching.
+do $repair_atomic_pricing_record$
+declare
+  function_sql text;
+  old_record_fields text := 'vat_amount numeric, cost_rate numeric';
+  new_record_fields text := 'vat_amount numeric, cost_rate numeric, pricing_rule_id uuid, pricing_slab_id uuid, calculated_rate numeric, price_overridden boolean, pricing_snapshot jsonb';
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into function_sql;
+  if position('item.pricing_rule_id' in function_sql) = 0 then
+    raise exception 'The atomic voucher writer does not contain the pricing INSERT fields';
+  end if;
+  if position('pricing_rule_id uuid' in function_sql) = 0 then
+    function_sql := replace(function_sql, old_record_fields, new_record_fields);
+  end if;
+  if position('pricing_rule_id uuid' in function_sql) = 0 then
+    raise exception 'Could not extend the atomic voucher pricing record declaration';
+  end if;
+  execute function_sql;
+end;
+$repair_atomic_pricing_record$;
+
+notify pgrst, 'reload schema';
+
+-- Repair the target-column list when the original whitespace-sensitive patch
+-- extended the SELECT expressions but not the invoice_items INSERT columns.
+do $repair_atomic_pricing_columns$
+declare
+  function_sql text;
+  old_target_fields text := 'vat_amount, cost_rate';
+  new_target_fields text := 'vat_amount, cost_rate, pricing_rule_id, pricing_slab_id, calculated_rate, price_overridden, pricing_snapshot';
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into function_sql;
+  if position('item.pricing_rule_id' in function_sql) = 0
+     or position('pricing_rule_id uuid' in function_sql) = 0 then
+    raise exception 'Apply the atomic voucher pricing record repair before this migration';
+  end if;
+  if position(new_target_fields in function_sql) = 0 then
+    function_sql := replace(function_sql, old_target_fields, new_target_fields);
+  end if;
+  if position(new_target_fields in function_sql) = 0 then
+    raise exception 'Could not extend the atomic voucher pricing target columns';
+  end if;
+  execute function_sql;
+end;
+$repair_atomic_pricing_columns$;
+
+notify pgrst, 'reload schema';
+
 commit;
 notify pgrst, 'reload schema';
 -- END SYNCED MIGRATION: 202608310001_slab_pricing.sql
+
+-- BEGIN SYNCED MIGRATION: 202608310002_sales_pricing_manual_override.sql
+-- Sales staff may always replace an automatically selected slab rate.
+-- The calculated rule/slab snapshot remains validated and the final manual
+-- rate is retained through the existing price_overridden flag.
+begin;
+
+create or replace function public.validate_invoice_item_pricing_snapshot()
+returns trigger
+language plpgsql
+set search_path = public
+as $$
+declare
+  voucher_company uuid;
+  voucher_type text;
+  selected_rule public.pricing_rules%rowtype;
+  selected_slab public.pricing_rule_slabs%rowtype;
+begin
+  select voucher.company_id, voucher.type into voucher_company, voucher_type
+  from public.vouchers voucher where voucher.id = new.voucher_id;
+  if new.pricing_rule_id is null then
+    if new.pricing_slab_id is not null or new.calculated_rate is not null or new.pricing_snapshot is not null then
+      raise exception 'Pricing metadata requires a pricing rule';
+    end if;
+  else
+    if voucher_type <> 'Sales' then raise exception 'Slab pricing metadata is supported only on Sales invoices'; end if;
+    select * into selected_rule from public.pricing_rules rule where rule.id = new.pricing_rule_id and rule.company_id = voucher_company;
+    if not found then raise exception 'Pricing rule must belong to the voucher company'; end if;
+    select * into selected_slab from public.pricing_rule_slabs slab where slab.id = new.pricing_slab_id and slab.pricing_rule_id = new.pricing_rule_id;
+    if not found then raise exception 'Pricing slab does not belong to the selected pricing rule'; end if;
+    if new.pricing_slab_id is null or new.calculated_rate is null or new.pricing_snapshot is null
+      or new.pricing_snapshot->>'rule_id' is distinct from new.pricing_rule_id::text
+      or new.pricing_snapshot->>'slab_id' is distinct from new.pricing_slab_id::text
+      or coalesce((new.pricing_snapshot->>'price_overridden')::boolean, false) is distinct from new.price_overridden
+      or new.pricing_snapshot->>'rule_name' is distinct from selected_rule.name
+      or new.pricing_snapshot->>'scope' is distinct from selected_rule.scope
+      or lower(btrim(new.pricing_snapshot->>'quantity_unit')) is distinct from lower(btrim(selected_rule.quantity_unit))
+      or abs(coalesce((new.pricing_snapshot->>'min_quantity')::numeric, -1) - selected_slab.min_quantity) > 0.000001
+      or abs(coalesce((new.pricing_snapshot->>'rule_rate')::numeric, -1) - selected_slab.rate) > 0.000001
+      or abs(coalesce((new.pricing_snapshot->>'calculated_entry_rate')::numeric, -1) - new.calculated_rate) > 0.000001 then
+      raise exception 'Sales pricing snapshot is incomplete or inconsistent';
+    end if;
+    if not new.price_overridden and abs(new.rate - new.calculated_rate) > 0.000001 then
+      raise exception 'Sales rate does not match the selected pricing slab';
+    end if;
+  end if;
+  if new.calculated_rate is not null and new.calculated_rate < 0 then
+    raise exception 'Calculated selling rate cannot be negative';
+  end if;
+  return new;
+end;
+$$;
+
+commit;
+notify pgrst, 'reload schema';
+-- END SYNCED MIGRATION: 202608310002_sales_pricing_manual_override.sql
