@@ -18,7 +18,7 @@ type SlabDraft = { id?: string; min_quantity: string; rate: string }
 type StatusFilter = 'all' | 'active' | 'inactive'
 const selectClass = 'mt-1 h-9 w-full rounded-md border border-input bg-background px-3 text-sm shadow-sm outline-none focus:ring-1 focus:ring-ring'
 
-export function SlabPricingPage() {
+export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {}) {
   const store = useAppStore()
   const { company, companyMemberships, companyPermissions, items, itemCategories, pricingRules } = store
   const canManage = !!company && (companyMemberships.some(member => member.company_id === company.id && member.role === 'Admin') || companyPermissions.includes('pricing.manage'))
@@ -74,13 +74,14 @@ export function SlabPricingPage() {
   }
 
   return <div>
-    <PageHeader title="Slab Pricing" description="Automatic item and category quantity pricing for Sales invoices" action={canManage ? <Button onClick={() => open()}><Plus className="mr-1.5 h-4 w-4" />New Rule</Button> : undefined} />
-    <PageContent>
+    {!embedded && <PageHeader title="Slab Pricing" description="Automatic item and category quantity pricing for Sales invoices" action={canManage ? <Button onClick={() => open()}><Plus className="mr-1.5 h-4 w-4" />New Rule</Button> : undefined} />}
+    <PageContent className={embedded ? "p-0 sm:p-0 md:p-0" : undefined}>
       {editing === undefined && error && <p className="form-error mb-3">{error}</p>}
       <Card className="overflow-hidden p-3 sm:p-4">
         <div className="mb-4 flex flex-col gap-2 sm:flex-row">
           <div className="relative flex-1"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input className="pl-9" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search rules, items, categories, units..." /></div>
           <select className="h-9 rounded-md border border-input bg-background px-3 text-sm shadow-sm sm:w-40" value={status} onChange={event => setStatus(event.target.value as StatusFilter)}><option value="all">All status</option><option value="active">Active</option><option value="inactive">Inactive</option></select>
+          {embedded && canManage && <Button className="shrink-0" onClick={() => open()}><Plus className="mr-1.5 h-4 w-4" />New Rule</Button>}
         </div>
         {visibleRules.length ? <div className="overflow-x-auto rounded-md border"><table className="w-full min-w-[980px] border-collapse text-sm">
           <thead><tr className="bg-[#f4f0e5]">{['Rule', 'Scope', 'Target', 'Unit', 'Effective period', 'Priority', 'Slabs', 'Status', 'Actions'].map(label => <th key={label} className={`report-th text-[#675c49] ${['Priority', 'Slabs'].includes(label) ? 'text-center' : label === 'Actions' ? 'text-right' : 'text-left'}`}>{label}</th>)}</tr></thead>
