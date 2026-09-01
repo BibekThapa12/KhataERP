@@ -172,11 +172,14 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
   }, [open, initializationKey, initialCategoryId, account, party, defaultCategoryId, fixedPartyType, fixedPartyCategory?.account_type, partyMode, activeCategories])
 
   useEffect(() => {
-    if (!open || partyMode || categoryId) return
+    // The edit initialization above sets the persisted category. On the first
+    // open after mount, categoryId is still blank in this render, so this
+    // new-ledger fallback must not overwrite the queued edit value.
+    if (!open || partyMode || account || categoryId) return
     const category = activeCategories.find(candidate => candidate.id === defaultCategoryId) || activeCategories[0]
     if (!category) return
     setCategoryId(category.id)
-    if (!account) setBalanceType(normalSide(category.account_type) === 'debit' ? 'Dr' : 'Cr')
+    setBalanceType(normalSide(category.account_type) === 'debit' ? 'Dr' : 'Cr')
   }, [open, partyMode, categoryId, activeCategories, defaultCategoryId, account])
 
   useEffect(() => {
