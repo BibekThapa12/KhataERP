@@ -20,7 +20,7 @@ const selectClass = 'mt-1 h-9 w-full rounded-md border border-input bg-backgroun
 
 export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {}) {
   const store = useAppStore()
-  const { company, companyMemberships, companyPermissions, items, itemCategories, pricingRules } = store
+  const { company, companyMemberships, companyPermissions, items, itemCategories, pricingRules, vouchers } = store
   const canManage = !!company && (companyMemberships.some(member => member.company_id === company.id && member.role === 'Admin') || companyPermissions.includes('pricing.manage'))
   const [editing, setEditing] = useState<PricingRule | null | undefined>()
   const [name, setName] = useState('')
@@ -37,6 +37,13 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [historyRule, setHistoryRule] = useState<PricingRule | null>(null)
+  const usedRuleIds = useMemo(() => new Set(vouchers.flatMap(voucher => {
+    const completed = (voucher.invoice_items || []).flatMap(line => line.pricing_rule_id ? [line.pricing_rule_id] : [])
+    const draftLines = voucher.status === 'Draft' && voucher.draft_payload && Array.isArray((voucher.draft_payload as { lines?: unknown[] }).lines)
+      ? ((voucher.draft_payload as { lines: Array<{ pricing_rule_id?: string }> }).lines || []).flatMap(line => line.pricing_rule_id ? [line.pricing_rule_id] : [])
+      : []
+    return [...completed, ...draftLines]
+  })), [vouchers])
 
   const descendants = useMemo(() => {
     if (scope !== 'CATEGORY' || !targetId) return []
@@ -110,7 +117,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
         {error && <p className="form-error">{error}</p>}
       </div><DialogFooter><Button variant="outline" onClick={() => setEditing(undefined)}>Cancel</Button><Button disabled={saving} onClick={submit}>{saving ? 'Saving…' : 'Save Rule'}</Button></DialogFooter>
     </DialogContent></Dialog>
-    <Dialog open={!!deleting} onOpenChange={value => { if (!value) setDeleting(null) }}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>Delete pricing rule?</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">Delete <strong>{deleting?.name}</strong>? Used rules must be deactivated instead.</p><DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Keep Rule</Button><Button variant="destructive" onClick={() => { const id = deleting?.id; setDeleting(null); if (id) void act(() => store.deletePricingRule(id)) }}>Delete Rule</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!deleting} onOpenChange={value => { if (!value) setDeleting(null) }}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>{deleting && usedRuleIds.has(deleting.id) ? 'Deactivate pricing rule?' : 'Delete pricing rule?'}</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">{deleting && usedRuleIds.has(deleting.id) ? <><strong>{deleting.name}</strong> is used by an invoice or draft and cannot be deleted. Deactivate it to stop applying it to new invoices.</> : <>Delete <strong>{deleting?.name}</strong> and all of its unused slabs?</>}</p><DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Cancel</Button><Button variant={deleting && usedRuleIds.has(deleting.id) ? 'default' : 'destructive'} onClick={() => { const rule = deleting; setDeleting(null); if (rule) void act(() => usedRuleIds.has(rule.id) ? store.activatePricingRule(rule.id, false) : store.deletePricingRule(rule.id)) }}>{deleting && usedRuleIds.has(deleting.id) ? 'Deactivate Rule' : 'Delete Rule'}</Button></DialogFooter></DialogContent></Dialog>
     <Dialog open={!!historyRule} onOpenChange={value => { if (!value) setHistoryRule(null) }}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{historyRule?.name} — Version History</DialogTitle></DialogHeader><div className="max-h-[60vh] overflow-auto rounded-md border"><table className="w-full text-sm"><thead><tr className="bg-muted"><th className="report-th text-left">Version</th><th className="report-th text-left">Effective period</th><th className="report-th text-center">Slabs</th><th className="report-th text-left">State</th></tr></thead><tbody>{ruleHistory.map(rule => <tr className="border-t" key={rule.id}><td className="report-td">v{rule.version_number}</td><td className="report-td">{rule.effective_from_bs} – {rule.effective_until_bs || 'No end date'}</td><td className="report-td text-center">{rule.slabs.length}</td><td className="report-td">{rule.is_current ? (rule.is_active ? 'Current · Active' : 'Current · Inactive') : 'Superseded'}</td></tr>)}</tbody></table></div><DialogFooter><Button variant="outline" onClick={() => setHistoryRule(null)}>Close</Button></DialogFooter></DialogContent></Dialog>
   </div>
 }
