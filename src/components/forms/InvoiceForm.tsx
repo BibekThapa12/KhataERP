@@ -30,7 +30,7 @@ import type { PricingSnapshot } from '@/types'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
-interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string; pricing_rule_id?: string; pricing_slab_id?: string; calculated_rate?: number; price_overridden?: boolean; pricing_snapshot?: PricingSnapshot; pricing_warning?: string }
+interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string; pricing_rule_id?: string; pricing_slab_id?: string; calculated_rate?: number; price_overridden?: boolean; pricing_snapshot?: PricingSnapshot; pricing_warning?: string; pricing_locked?: boolean }
 type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000 }
@@ -139,7 +139,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       const voucherParty = parties.find(party => party.account_id === voucher.party_account_id)
       setCreditDays(draft?.creditDays ?? (voucher.is_cash ? 0 : (voucher.credit_days ?? voucherParty?.default_credit_days ?? 0)))
       setSupplierInvoiceNo(draft?.supplierInvoiceNo ?? voucher.supplier_invoice_no ?? '')
-      setLines(draft?.lines?.length ? draft.lines : (voucher.invoice_items || []).map(i => {
+      setLines(draft?.lines?.length ? draft.lines.map(line => ({
+        ...line,
+        pricing_locked: !!line.pricing_snapshot,
+        pricing_snapshot: line.pricing_snapshot ? { ...line.pricing_snapshot, locked_from_draft: true } : undefined,
+      })) : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
         return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined }
@@ -174,16 +178,20 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       pricingReadyFormRef.current = formIdentity
       return
     }
-    const input = lines.map((line, index) => {
+    const unlocked = lines.map((line, index) => ({ line, index })).filter(({ line }) => !line.pricing_locked)
+    if (!unlocked.length) return
+    const input = unlocked.map(({ line, index }) => {
       const item = items.find(entry => entry.id === line.item_id)
       const factor = line.conversion_factor || unitFactor(item, line.unit_mode)
       const automaticBase = item ? fromBaseRate(item.sell_rate || 0, factor) : rateInputNumber(line.rate)
       return { ...line, key: String(index), rate: line.price_overridden ? rateInputNumber(line.rate) : automaticBase }
     })
     const priced = repriceSalesLines({ lines: input, items, categories: itemCategories, rules: pricingRules, dateBs })
-    const next = priced.map((result, index): LineItem => {
+    const next = [...lines]
+    priced.forEach((result, pricedIndex) => {
+      const index = unlocked[pricedIndex].index
       const current = lines[index]
-      return {
+      next[index] = {
         ...current,
         rate: formatRateInput(result.rate),
         amount_input: current.price_overridden ? current.amount_input : undefined,
@@ -211,7 +219,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const next = [...lines]
     if (field === 'item_id') {
       const item = items.find(i => i.id === value)
-      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined, price_overridden: false, pricing_rule_id: undefined, pricing_slab_id: undefined, calculated_rate: undefined, pricing_snapshot: undefined, pricing_warning: undefined }
+      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined, price_overridden: false, pricing_rule_id: undefined, pricing_slab_id: undefined, calculated_rate: undefined, pricing_snapshot: undefined, pricing_warning: undefined, pricing_locked: false }
       if (!isSales) {
         const stock = getStockEntry(value as string)
         if (stock.avg_cost > 0) next[idx].rate = formatRateInput(stock.avg_cost)
@@ -268,7 +276,19 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const oldFactor = line.conversion_factor || unitFactor(item, line.unit_mode)
     const baseRate = toBaseRate(rateInputNumber(line.rate), oldFactor)
     const factor = unitFactor(item, mode)
-    next[idx] = { ...line, unit_mode: mode, entry_unit: unitName(item, mode), conversion_factor: factor, rate: formatRateInput(fromBaseRate(baseRate, factor)) }
+    const calculatedBaseRate = line.calculated_rate == null ? null : toBaseRate(line.calculated_rate, oldFactor)
+    const calculatedRate = calculatedBaseRate == null ? undefined : fromBaseRate(calculatedBaseRate, factor)
+    next[idx] = {
+      ...line,
+      unit_mode: mode,
+      entry_unit: unitName(item, mode),
+      conversion_factor: factor,
+      rate: formatRateInput(fromBaseRate(baseRate, factor)),
+      calculated_rate: calculatedRate,
+      pricing_snapshot: line.pricing_snapshot && calculatedRate != null
+        ? { ...line.pricing_snapshot, calculated_entry_rate: calculatedRate }
+        : line.pricing_snapshot,
+    }
     setLines(next)
   }
 

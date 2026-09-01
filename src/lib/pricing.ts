@@ -43,7 +43,7 @@ function categoryPath(categoryId: string | undefined, categories: ItemCategory[]
 }
 
 function isEffective(rule: PricingRule, dateKey: number) {
-  return rule.is_active && rule.effective_from_bs_key <= dateKey && (rule.effective_until_bs_key == null || rule.effective_until_bs_key >= dateKey)
+  return rule.is_current !== false && rule.is_active && rule.effective_from_bs_key <= dateKey && (rule.effective_until_bs_key == null || rule.effective_until_bs_key >= dateKey)
 }
 
 function compatibleFactor(item: Item, unit: string) {

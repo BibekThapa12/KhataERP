@@ -756,7 +756,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   // ─── Recompute after mutation ────────────────────────────────────────────────
   savePricingRule: async (rule) => {
     const saved = await savePricingRule(rule)
-    set({ pricingRules: [...get().pricingRules.filter(entry => entry.id !== saved.id), saved].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name)) })
+    const retained = get().pricingRules.map(entry => entry.id === saved.supersedes_rule_id ? { ...entry, is_active: false, is_current: false } : entry)
+    set({ pricingRules: [...retained.filter(entry => entry.id !== saved.id), saved].sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name)) })
     return saved
   },
   activatePricingRule: async (id, active) => {

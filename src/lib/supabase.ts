@@ -138,7 +138,7 @@ const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion
 const ACCOUNT_CATEGORY_FIELDS = 'id,company_id,name,account_type,parent_category_id,is_system,is_archived,created_at'
 const ITEM_CATEGORY_FIELDS = 'id,company_id,name,parent_category_id,is_archived,created_at'
 const PRICING_SLAB_FIELDS = 'id,pricing_rule_id,min_quantity,rate,created_at,updated_at'
-const PRICING_RULE_FIELDS = `id,company_id,name,scope,item_id,category_id,quantity_unit,effective_from_bs,effective_from_bs_key,effective_until_bs,effective_until_bs_key,priority,is_active,created_by,updated_by,created_at,updated_at,slabs:pricing_rule_slabs(${PRICING_SLAB_FIELDS})`
+const PRICING_RULE_FIELDS = `id,company_id,rule_family_id,version_number,is_current,supersedes_rule_id,name,scope,item_id,category_id,quantity_unit,effective_from_bs,effective_from_bs_key,effective_until_bs,effective_until_bs_key,priority,is_active,created_by,updated_by,created_at,updated_at,slabs:pricing_rule_slabs(${PRICING_SLAB_FIELDS})`
 const MODULE_FIELDS = 'id,key,name,description,default_price,is_active,created_at'
 const COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,price,payment_status,starts_at,expires_at,settings,internal_notes,enabled_by,created_at,updated_at,module:modules(${MODULE_FIELDS})`
 const CLIENT_COMPANY_MODULE_FIELDS = `id,company_id,module_id,is_enabled,status,billing_type,payment_status,starts_at,expires_at,settings,module:modules(${MODULE_FIELDS})`
@@ -856,6 +856,13 @@ export async function setPricingRuleActive(id: string, active: boolean) {
   const { data, error } = await supabase.rpc('set_pricing_rule_active', { p_rule_id: id, p_is_active: active })
   if (error) throw error
   return data as PricingRule
+}
+
+export async function fetchPricingRuleHistory(company_id: string, rule_family_id: string): Promise<PricingRule[]> {
+  const { data, error } = await supabase.from('pricing_rules').select(PRICING_RULE_FIELDS)
+    .eq('company_id', company_id).eq('rule_family_id', rule_family_id).order('version_number', { ascending: false })
+  if (error) throw error
+  return (data || []).map(rule => ({ ...rule, slabs: [...(rule.slabs || [])].sort((a, b) => Number(a.min_quantity) - Number(b.min_quantity)) })) as PricingRule[]
 }
 
 export async function duplicatePricingRule(id: string) {

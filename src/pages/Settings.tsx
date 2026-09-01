@@ -741,9 +741,10 @@ export function SettingsPage() {
       finishRestoreStage('Items imported', `${itemRows.length} new item(s) created.`)
 
       showRestoreProgress('Importing slab pricing', 'Restoring item and category pricing rules with remapped targets.')
-      for (const sourceRule of sourcePricingRules) {
-        const nextRuleId = crypto.randomUUID()
-        idMap.set(sourceRule.id, nextRuleId)
+      sourcePricingRules.forEach(sourceRule => idMap.set(sourceRule.id, crypto.randomUUID()))
+      const orderedPricingRules = [...sourcePricingRules].sort((a, b) => (a.version_number || 1) - (b.version_number || 1))
+      for (const sourceRule of orderedPricingRules) {
+        const nextRuleId = idMap.get(sourceRule.id)!
         const ruleRow = withoutMeta(sourceRule as unknown as Record<string, unknown>, ['slabs', 'created_by', 'updated_by'])
         const { error: ruleError } = await supabase.from('pricing_rules').insert({
           ...ruleRow,
@@ -751,6 +752,10 @@ export function SettingsPage() {
           company_id: company.id,
           item_id: sourceRule.item_id ? idMap.get(sourceRule.item_id) || null : null,
           category_id: sourceRule.category_id ? idMap.get(sourceRule.category_id) || null : null,
+          rule_family_id: sourceRule.rule_family_id ? idMap.get(sourceRule.rule_family_id) || nextRuleId : nextRuleId,
+          version_number: sourceRule.version_number || 1,
+          is_current: sourceRule.is_current ?? true,
+          supersedes_rule_id: sourceRule.supersedes_rule_id ? idMap.get(sourceRule.supersedes_rule_id) || null : null,
           created_by: null,
           updated_by: null,
         })

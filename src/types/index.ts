@@ -129,6 +129,10 @@ export interface PricingRuleSlab {
 export interface PricingRule {
   id: string
   company_id: string
+  rule_family_id: string
+  version_number: number
+  is_current: boolean
+  supersedes_rule_id?: string | null
   name: string
   scope: PricingRuleScope
   item_id?: string | null
@@ -159,6 +163,7 @@ export interface PricingSnapshot {
   rule_rate: number
   calculated_entry_rate: number
   price_overridden: boolean
+  locked_from_draft?: boolean
 }
 
 export interface VoucherSettlement {

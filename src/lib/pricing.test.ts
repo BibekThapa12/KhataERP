@@ -12,7 +12,7 @@ const items: Item[] = [
   { id: 'service', company_id: 'c', name: 'Delivery', unit: 'Job', sell_rate: 50, opening_qty: 0, opening_rate: 0, category_id: 'root', is_service: true },
 ]
 const rule = (partial: Partial<PricingRule>): PricingRule => ({
-  id: 'category-rule', company_id: 'c', name: 'Drinks deal', scope: 'CATEGORY', category_id: 'root', quantity_unit: 'PCS',
+  id: 'category-rule', company_id: 'c', rule_family_id: 'category-rule', version_number: 1, is_current: true, name: 'Drinks deal', scope: 'CATEGORY', category_id: 'root', quantity_unit: 'PCS',
   effective_from_bs: '2083-01-01', effective_from_bs_key: 20830101, effective_until_bs: null, effective_until_bs_key: null,
   priority: 0, is_active: true, slabs: [{ id: 's10', pricing_rule_id: 'category-rule', min_quantity: 10, rate: 8 }], ...partial,
 })
@@ -81,6 +81,14 @@ describe('Sales slab pricing', () => {
     const result = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 1, rate: 240 }], items, categories, rules: [closest, higher], dateBs: '2083-05-01' })
     expect(result[0].pricing_rule_id).toBe('higher')
     expect(result[0].rate).toBe(168)
+  })
+
+  it('ignores superseded rule versions for new invoices', () => {
+    const old = rule({ id: 'old', rule_family_id: 'family', version_number: 1, is_current: false, is_active: false, slabs: [{ id: 'old-slab', pricing_rule_id: 'old', min_quantity: 1, rate: 99 }] })
+    const current = rule({ id: 'current', rule_family_id: 'family', version_number: 2, is_current: true, slabs: [{ id: 'current-slab', pricing_rule_id: 'current', min_quantity: 1, rate: 8 }] })
+    const result = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 1, rate: 240 }], items, categories, rules: [old, current], dateBs: '2083-05-01' })
+    expect(result[0].pricing_rule_id).toBe('current')
+    expect(result[0].rate).toBe(192)
   })
 
   it('stays linear for a 100-line invoice and keeps six-decimal thresholds', () => {

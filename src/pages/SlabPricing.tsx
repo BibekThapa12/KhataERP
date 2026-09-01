@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Copy, Pencil, Plus, Power, Search, Trash2 } from 'lucide-react'
+import { Copy, History, Pencil, Plus, Power, Search, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import type { PricingRule, PricingRuleScope } from '@/types'
 import { PageContent, PageHeader } from '@/components/layout/PageHeader'
@@ -36,6 +36,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
   const [deleting, setDeleting] = useState<PricingRule | null>(null)
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<StatusFilter>('all')
+  const [historyRule, setHistoryRule] = useState<PricingRule | null>(null)
 
   const descendants = useMemo(() => {
     if (scope !== 'CATEGORY' || !targetId) return []
@@ -49,11 +50,14 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
   const compatible = descendants.filter(item => [item.unit, item.alternate_unit].some(value => value?.trim().toLowerCase() === unit.trim().toLowerCase())).length
   const visibleRules = useMemo(() => {
     const query = search.trim().toLowerCase()
-    return pricingRules.filter(rule => {
+    return pricingRules.filter(rule => rule.is_current !== false).filter(rule => {
       const target = rule.scope === 'ITEM' ? items.find(item => item.id === rule.item_id)?.name : itemCategories.find(category => category.id === rule.category_id)?.name
       return (status === 'all' || rule.is_active === (status === 'active')) && (!query || `${rule.name} ${rule.scope} ${target || ''} ${rule.quantity_unit}`.toLowerCase().includes(query))
     })
   }, [itemCategories, items, pricingRules, search, status])
+  const ruleHistory = historyRule
+    ? pricingRules.filter(rule => (rule.rule_family_id || rule.id) === (historyRule.rule_family_id || historyRule.id)).sort((a, b) => b.version_number - a.version_number)
+    : []
 
   function open(rule?: PricingRule) {
     setEditing(rule || null); setName(rule?.name || ''); setScope(rule?.scope || 'ITEM'); setTargetId(rule?.item_id || rule?.category_id || '')
@@ -90,7 +94,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
             <td className="report-td">{rule.scope === 'ITEM' ? items.find(item => item.id === rule.item_id)?.name : itemCategories.find(category => category.id === rule.category_id)?.name}</td>
             <td className="report-td">{rule.quantity_unit}</td><td className="report-td whitespace-nowrap">{rule.effective_from_bs} – {rule.effective_until_bs || 'No end date'}</td>
             <td className="report-td text-center">{rule.priority}</td><td className="report-td text-center">{rule.slabs.length}</td><td className="report-td"><Badge variant={rule.is_active ? 'sales' : 'secondary'}>{rule.is_active ? 'Active' : 'Inactive'}</Badge></td>
-            <td className="report-td"><div className="flex justify-end gap-1">{canManage && <><Button variant="ghost" size="icon" title="Edit" onClick={() => open(rule)}><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="Duplicate" onClick={() => void act(() => store.duplicatePricingRule(rule.id))}><Copy className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title={rule.is_active ? 'Deactivate' : 'Activate'} onClick={() => void act(() => store.activatePricingRule(rule.id, !rule.is_active))}><Power className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" title="Delete" onClick={() => setDeleting(rule)}><Trash2 className="h-4 w-4" /></Button></>}</div></td>
+            <td className="report-td"><div className="flex justify-end gap-1"><Button variant="ghost" size="icon" title="Version history" onClick={() => setHistoryRule(rule)}><History className="h-4 w-4" /></Button>{canManage && <><Button variant="ghost" size="icon" title="Edit" onClick={() => open(rule)}><Pencil className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title="Duplicate" onClick={() => void act(() => store.duplicatePricingRule(rule.id))}><Copy className="h-4 w-4" /></Button><Button variant="ghost" size="icon" title={rule.is_active ? 'Deactivate' : 'Activate'} onClick={() => void act(() => store.activatePricingRule(rule.id, !rule.is_active))}><Power className="h-4 w-4" /></Button><Button variant="ghost" size="icon" className="text-destructive" title="Delete" onClick={() => setDeleting(rule)}><Trash2 className="h-4 w-4" /></Button></>}</div></td>
           </tr>)}</tbody>
         </table></div> : <div className="rounded-md border py-16 text-center"><p className="text-sm font-medium">{pricingRules.length ? 'No matching pricing rules' : 'No slab pricing rules yet'}</p><p className="mt-1 text-xs text-muted-foreground">{pricingRules.length ? 'Try changing the search or status filter.' : canManage ? 'Create a rule to apply quantity-based Sales rates.' : 'Pricing rules created for this company will appear here.'}</p>{!pricingRules.length && canManage && <Button className="mt-4" size="sm" onClick={() => open()}><Plus className="mr-1 h-4 w-4" />New Rule</Button>}</div>}
       </Card>
@@ -107,5 +111,6 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
       </div><DialogFooter><Button variant="outline" onClick={() => setEditing(undefined)}>Cancel</Button><Button disabled={saving} onClick={submit}>{saving ? 'Saving…' : 'Save Rule'}</Button></DialogFooter>
     </DialogContent></Dialog>
     <Dialog open={!!deleting} onOpenChange={value => { if (!value) setDeleting(null) }}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>Delete pricing rule?</DialogTitle></DialogHeader><p className="text-sm text-muted-foreground">Delete <strong>{deleting?.name}</strong>? Used rules must be deactivated instead.</p><DialogFooter><Button variant="outline" onClick={() => setDeleting(null)}>Keep Rule</Button><Button variant="destructive" onClick={() => { const id = deleting?.id; setDeleting(null); if (id) void act(() => store.deletePricingRule(id)) }}>Delete Rule</Button></DialogFooter></DialogContent></Dialog>
+    <Dialog open={!!historyRule} onOpenChange={value => { if (!value) setHistoryRule(null) }}><DialogContent className="max-w-2xl"><DialogHeader><DialogTitle>{historyRule?.name} — Version History</DialogTitle></DialogHeader><div className="max-h-[60vh] overflow-auto rounded-md border"><table className="w-full text-sm"><thead><tr className="bg-muted"><th className="report-th text-left">Version</th><th className="report-th text-left">Effective period</th><th className="report-th text-center">Slabs</th><th className="report-th text-left">State</th></tr></thead><tbody>{ruleHistory.map(rule => <tr className="border-t" key={rule.id}><td className="report-td">v{rule.version_number}</td><td className="report-td">{rule.effective_from_bs} – {rule.effective_until_bs || 'No end date'}</td><td className="report-td text-center">{rule.slabs.length}</td><td className="report-td">{rule.is_current ? (rule.is_active ? 'Current · Active' : 'Current · Inactive') : 'Superseded'}</td></tr>)}</tbody></table></div><DialogFooter><Button variant="outline" onClick={() => setHistoryRule(null)}>Close</Button></DialogFooter></DialogContent></Dialog>
   </div>
 }
