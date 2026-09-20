@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, Database, Download, FileSpreadsheet, ImagePlus, ReceiptText, Trash2, Upload, Users } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
+import { AccountingIntegrityPanel } from '@/components/AccountingIntegrityPanel'
 import { logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
 import { downloadImportTemplate, executeImport, importModuleOptions, previewImportWorkbook, templateFor, type ImportModule, type ImportPreview } from '@/lib/importData'
 import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, makeBsKey, parseBsDate } from '@/lib/nepaliDate'
@@ -1119,6 +1120,7 @@ export function SettingsPage() {
           ))}
         </div>
         <div className="mx-auto max-w-5xl space-y-5" style={{ overflowAnchor: 'none' }}>
+        {settingsSection === 'admins' && <AccountingIntegrityPanel />}
         <Card className={settingsSection === 'admins' ? '' : 'hidden'}>
           <CardHeader><CardTitle className="text-base">Account Diagnostic</CardTitle></CardHeader>
           <CardContent className="space-y-1 text-xs text-muted-foreground">

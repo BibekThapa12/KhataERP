@@ -73,6 +73,8 @@ type PublicErrorRule = { pattern: RegExp; message: string }
 // Database errors are intentionally translated through an allowlist. This
 // keeps SQL/schema details private while giving users a concrete correction.
 const PUBLIC_ERROR_RULES: PublicErrorRule[] = [
+  { pattern: /company data read timed out/i, message: 'Company data took too long to load. Check your connection and retry loading. No records were changed.' },
+  { pattern: /canceling statement due to statement timeout|\b57014\b/i, message: 'The database took too long to load company data. Retry after refreshing the app. No records were changed.' },
   { pattern: /invoice totals do not match server-calculated values/i, message: 'The invoice total could not be verified. Check the item quantities, rates, discount, and VAT, then save again.' },
   { pattern: /invoice items require positive quantities and non-negative rates/i, message: 'Every invoice row must have a valid item, a quantity greater than zero, and a rate of zero or more.' },
   { pattern: /invoice discount is outside the valid range/i, message: 'The discount cannot be negative or greater than the invoice subtotal.' },

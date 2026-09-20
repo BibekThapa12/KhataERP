@@ -145,7 +145,7 @@ begin
   values(source.company_id,auth.uid(),'pricing_rule',source.id::text,'delete',to_jsonb(source),'{}'::jsonb);
 end; $$;
 
-+-- Frozen draft snapshots retain their saved slab while new draft lines use the current version.
+-- Frozen draft snapshots retain their saved slab while new draft lines use the current version.
 create or replace function public.validate_voucher_pricing_integrity()
 returns trigger language plpgsql set search_path=public as $$
 declare

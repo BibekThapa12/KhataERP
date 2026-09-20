@@ -1,19 +1,21 @@
 import { create } from 'zustand'
+import { fetchCompanySnapshot } from '@/lib/companySnapshot'
+import { ReconciliationQueue } from '@/lib/reconciliationQueue'
+import { withReadDeadline } from '@/lib/readDeadline'
 import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput, PricingRule } from '@/types'
 import {
-  fetchAccounts, fetchParties, fetchItems, fetchVouchers,
-  insertAccount, insertAccounts, upsertAccounts, insertParty, insertParties, createPartyWithLedgerAtomic, insertItem,
+  insertAccount, insertParty, createPartyWithLedgerAtomic, insertItem,
   insertVoucher, insertDraftVoucher, cancelVoucher, deleteVoucher, updateCompany,
   updateVoucher, updateDraftVoucher, getOrCreateCompany,
-  fetchAccountCategories, fetchItemCategories, insertAccountCategory, insertAccountCategories, insertItemCategory,
-  updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, updateItemsByIds, logMasterChange,
+  insertAccountCategory, insertItemCategory,
+  updateAccountCategory, updateItemCategory, updateAccount, updateParty, updateItem, logMasterChange,
   deleteAccount as removeAccount, deleteAccountCategory as removeAccountCategory,
   fetchCompanyModules, fetchChequePermissions, fetchCompanyPermissions, fetchChequeBanks, fetchCheques,
   fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin, logAppEvent,
   fetchPricingRules, savePricingRule, setPricingRuleActive, duplicatePricingRule, removePricingRule,
 } from '@/lib/supabase'
 import {
-  applyVoucherBalanceDelta, defaultChartOfAccounts, recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
+  recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
   buildSalesVoucherData, buildPurchaseVoucherData, buildReceiptData, buildPaymentData,
   buildReturnVoucherData, invoiceSubtotal, resolveSystemAccountId, round2, stockConditionQuantity, validateBalanced, type InvoiceEntryInput, type ReturnItemInput, type SystemAccountKey, type TransactionAllocation,
 } from '@/lib/engine'
@@ -25,7 +27,6 @@ import { toBaseQty, toBaseRate, unitFactor } from '@/lib/units'
 import { canonicalItemUnit, validateItemUnits } from '@/lib/itemUnits'
 import { previewNextDraftNumber, voucherNumberingPeriod, voucherNumberingScope } from '@/lib/voucherNumbers'
 import { validateVoucherDateForNumbering } from '@/lib/voucherDateValidation'
-import { SYSTEM_ACCOUNT_DESTINATIONS, systemAccountGroupLevels } from '@/lib/systemAccountGroups'
 import { accountCategoryDeletionBlockReason, ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { assertDateInSelectedFiscalYear, selectedFiscalYearStartBs } from '@/lib/reports'
 import { ALL_CHEQUE_PERMISSIONS, chequeEntitlement } from '@/lib/cheques'
@@ -39,7 +40,6 @@ import { buildContraLines, resolveBankChargesAccountId, type ContraSaveParams } 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
-const COMPANY_DATA_REPAIR_VERSION = 1
 const nextVoucherNumberText = (value: string) => value.replace(/(\d+)$/, match => String(Number(match) + 1).padStart(match.length, '0'))
 
 // Auth initialization, token events, and realtime notifications can arrive
@@ -47,6 +47,9 @@ const nextVoucherNumberText = (value: string) => value.replace(/(\d+)$/, match =
 // full hydration more than once concurrently.
 const companyDataLoadPromises = new Map<string, Promise<void>>()
 let companyDataLoadVersion = 0
+let companyIdentityVersion = 0
+const reconciliationQueue = new ReconciliationQueue()
+const pendingCommittedRefreshes = new Set<string>()
 
 const blankCompanyData = {
   company: null,
@@ -65,6 +68,7 @@ const blankCompanyData = {
   chequeBanks: [],
   cheques: [],
   dataReady: false,
+  dataStale: false,
 }
 
 const activeCompanyStorageKey = (userId: string) => `khataerp:active-company:${userId}`
@@ -87,6 +91,17 @@ async function measuredWrite<T>(context: WriteTraceContext, task: (trace: WriteP
     trace.finish(false, error)
     throw error
   }
+}
+
+function savedCompanyRefresh(companyId: string) {
+  const identity = companyIdentityVersion
+  const userId = useAppStore.getState().userId
+  const current = () => identity === companyIdentityVersion && useAppStore.getState().userId === userId && useAppStore.getState().company?.id === companyId
+  return Object.assign(async () => {
+    const state = useAppStore.getState()
+    if (!current()) return
+    await state.reconcileCompany(companyId, true)
+  }, { assertCurrent: () => { if (!current()) throw new Error('The active company or session changed. Reopen this voucher before saving.') } })
 }
 
 interface InvoiceSaveParams {
@@ -127,6 +142,8 @@ interface AppState {
   cheques: Cheque[]
   loading: boolean
   dataReady: boolean
+  dataStale: boolean
+  reconcileCompany: (companyId: string, saved?: boolean) => Promise<void>
   error: string | null
 
   // Derived helpers
@@ -284,10 +301,6 @@ async function enforceVoucherDateOrder(state: AppState, params: { type: Voucher[
   })
 }
 
-function replaceVoucherInState(vouchers: Voucher[], nextVoucher: Voucher) {
-  return vouchers.map(v => v.id === nextVoucher.id ? nextVoucher : v)
-}
-
 function blankDraftVoucher(company: Company, params: { type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string | null; contra_charge_amount?: number; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) {
   const dateFields = voucherDateFields(params.date_bs, company)
   return {
@@ -307,26 +320,6 @@ function blankDraftVoucher(company: Company, params: { type: Voucher['type']; da
     cancelled: false,
     status: 'Draft' as const,
     draft_payload: params.draft_payload,
-  }
-}
-
-function affectedItemIds(...vouchers: Array<Voucher | undefined>) {
-  return new Set(vouchers.flatMap(voucher => [
-    ...(voucher?.stock_lines || []).map(line => line.item_id),
-    ...(voucher?.invoice_items || []).map(item => item.item_id),
-  ]))
-}
-
-function recomputeVoucherEffects(
-  state: Pick<AppState, 'accounts' | 'items' | 'stock'>,
-  vouchers: Voucher[],
-  company: Company,
-  previousVoucher: Voucher | undefined,
-  nextVoucher: Voucher,
-) {
-  return {
-    accounts: applyVoucherBalanceDelta(state.accounts, previousVoucher, nextVoucher),
-    stock: recomputeAffectedStock(state.items, state.stock, vouchers, affectedItemIds(previousVoucher, nextVoucher), valuationMethod(company)),
   }
 }
 
@@ -395,12 +388,6 @@ function settlementRows(allocations: TransactionAllocation[]) {
   })))
 }
 
-function systemAccountKeyFromId(companyId: string, accountId: string): SystemAccountKey | null {
-  const keys: SystemAccountKey[] = ['cash', 'bank', 'inventory', 'vat_payable', 'vat_receivable', 'sales', 'purchase', 'sales_return', 'purchase_return', 'capital', 'retained_earnings', 'discount_allowed', 'rent', 'salary', 'electricity']
-  const key = accountId.startsWith(`${companyId}:`) ? accountId.slice(companyId.length + 1) : accountId
-  return keys.includes(key as SystemAccountKey) ? key as SystemAccountKey : null
-}
-
 function validateReturnRequest(company: Company, parties: Party[], items: Item[], vouchers: Voucher[], params: ReturnSaveParams, editingId?: string) {
   const original = params.original_voucher_id ? vouchers.find(voucher => voucher.id === params.original_voucher_id) : undefined
   const expectedType = params.type === 'Sales Return' ? 'Sales' : 'Purchase'
@@ -456,14 +443,20 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
 
 export const useAppStore = create<AppState>((set, get) => ({
   userId: null,
-  setUserId: (id) => set(state => state.userId === id ? state : {
+  setUserId: (id) => {
+    if (get().userId === id) return
+    companyIdentityVersion++
+    companyDataLoadVersion++
+    companyDataLoadPromises.clear()
+    set({
     userId: id,
     ...blankCompanyData,
     companyMemberships: [],
     activeCompanyId: null,
     companyCreationLicense: null,
     error: null,
-  }),
+    })
+  },
   company: null,
   companyMemberships: [],
   activeCompanyId: null,
@@ -484,6 +477,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   cheques: [],
   loading: false,
   dataReady: false,
+  dataStale: false,
   error: null,
 
   // ─── Derived ────────────────────────────────────────────────────────────────
@@ -522,7 +516,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!userId) throw new Error('No user')
     if (companyId === get().company?.id && get().dataReady) return
     companyDataLoadVersion += 1
+    const identity = ++companyIdentityVersion
+    companyDataLoadPromises.clear()
     const active = await setActiveCompanyRemote(companyId)
+    if (identity !== companyIdentityVersion || get().userId !== userId) return
     rememberActiveCompany(userId, active.id)
     const memberships = get().companyMemberships.map(entry => entry.company_id === active.id ? { ...entry, company: active } : entry)
     set({ ...blankCompanyData, company: active, companyMemberships: memberships, activeCompanyId: active.id, loading: true, error: null })
@@ -545,7 +542,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     notifySuccess('Company admin added', email)
   },
   loadAll: (userId) => {
-    const pendingKey = `${userId}:${get().activeCompanyId || ''}`
+    if (get().userId !== userId) return Promise.resolve()
+    // Company metadata is discovered during hydration; do not change the key
+    // halfway through the first load when activeCompanyId becomes available.
+    const pendingKey = `${companyIdentityVersion}:${userId}`
     const pending = companyDataLoadPromises.get(pendingKey)
     if (pending) return pending
 
@@ -557,14 +557,16 @@ export const useAppStore = create<AppState>((set, get) => ({
       let company = response.memberships.find(entry => entry.company_id === response.active_company_id)?.company || null
       const remembered = rememberedActiveCompany(userId)
       if (remembered && remembered !== response.active_company_id && response.memberships.some(entry => entry.company_id === remembered)) {
-        company = await setActiveCompanyRemote(remembered)
-        response = await fetchMyCompanies()
+        company = response.memberships.find(entry => entry.company_id === remembered)?.company || null
       }
       if (!company) {
+        // Preserve first-account onboarding; never repair existing companies.
+        if (response.memberships.length) throw new Error('Select an accessible company to continue.')
+        if (loadVersion !== companyDataLoadVersion || get().userId !== userId) return
         company = await getOrCreateCompany(userId)
         response = await fetchMyCompanies()
       }
-      if (loadVersion !== companyDataLoadVersion) return
+      if (loadVersion !== companyDataLoadVersion || get().userId !== userId) return
       rememberActiveCompany(userId, company.id)
       set({
         company,
@@ -573,160 +575,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeCompanyId: company.id,
         companyCreationLicense: response.license,
       })
-      const [rawAccounts, accountCategories, fetchedParties, items, itemCategories, vouchers, pricingRules] = await Promise.all([
-        fetchAccounts(company.id),
-        fetchAccountCategories(company.id),
-        fetchParties(company.id),
-        fetchItems(company.id),
-        fetchItemCategories(company.id),
-        fetchVouchers(company.id),
-        fetchPricingRules(company.id),
-      ])
-      const parties = [...new Map(fetchedParties.map(party => [party.account_id, party])).values()]
-
-      if ((company.bootstrap_version ?? 0) < COMPANY_DATA_REPAIR_VERSION) {
-      const defaults = defaultChartOfAccounts(company.id) as Account[]
-      const existingDefaultKeys = new Set(
-        rawAccounts
-          .map(account => systemAccountKeyFromId(company.id, account.id))
-          .filter((key): key is SystemAccountKey => !!key)
-      )
-      const missingDefaults = defaults.filter(account => {
-        const key = systemAccountKeyFromId(company.id, account.id)
-        if (key === 'bank_charges' && rawAccounts.some(existing => existing.company_id === company.id && existing.type === 'Expense' && existing.name.trim().toLowerCase() === 'bank charges')) return false
-        return key ? !existingDefaultKeys.has(key) : false
-      })
-
-      if (missingDefaults.length) {
-        await insertAccounts(missingDefaults)
-        rawAccounts.push(...missingDefaults.map(a => ({ ...a, balance: 0 })))
-      }
-
-      const groupByKey = new Map<string, AccountCategory>()
-      for (const ready of systemAccountGroupLevels()) {
-        const changed = ready.filter(spec => {
-          const parentId = spec.parent_key ? groupByKey.get(spec.parent_key)?.id || null : null
-          const existing = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
-          return !existing || existing.parent_category_id !== parentId || !existing.is_system || existing.is_archived
-        })
-        const saved = changed.length ? await insertAccountCategories(changed.map(spec => ({
-          company_id: company.id,
-          name: spec.name,
-          account_type: spec.account_type,
-          parent_category_id: spec.parent_key ? groupByKey.get(spec.parent_key)?.id || null : null,
-          is_system: true,
-          is_archived: false,
-        }))) : []
-        for (const category of saved) {
-          const existingIndex = accountCategories.findIndex(entry => entry.id === category.id)
-          if (existingIndex >= 0) accountCategories[existingIndex] = category
-          else accountCategories.push(category)
-        }
-        for (const spec of ready) {
-          const category = accountCategories.find(entry => entry.name === spec.name && entry.account_type === spec.account_type)
-          if (!category) throw new Error(`Could not initialize system account group ${spec.name}`)
-          groupByKey.set(spec.key, category)
-        }
-      }
-
-      const dirtyAccountIds = new Set<string>()
-      const applyAccountRepairs = (account: Account, updates: Partial<Account>) => {
-        if (!Object.keys(updates).length) return
-        Object.assign(account, updates)
-        dirtyAccountIds.add(account.id)
-      }
-
-      const legacyBank = accountCategories.find(category => category.name === 'Bank' && category.account_type === 'Asset')
-      const bankCategory = groupByKey.get('bank-accounts')!
-      if (legacyBank && legacyBank.id !== bankCategory.id) {
-        const affected = rawAccounts.filter(entry => entry.category_id === legacyBank.id)
-        for (const account of affected) applyAccountRepairs(account, { category_id: bankCategory.id, group: bankCategory.name })
-      }
-
-      const legacyIncome = accountCategories.find(category => category.name === 'Income' && category.account_type === 'Income')
-      const incomesCategory = groupByKey.get('incomes')!
-      if (legacyIncome && legacyIncome.id !== incomesCategory.id) {
-        const affected = rawAccounts.filter(entry => entry.category_id === legacyIncome.id)
-        for (const account of affected) applyAccountRepairs(account, { category_id: incomesCategory.id, group: incomesCategory.name })
-      }
-
-      const legacyTax = accountCategories.find(category => category.name === 'Duties & Taxes (Liabilities)' && category.account_type === 'Liability')
-      const taxCategory = groupByKey.get('duties-taxes')!
-      if (legacyTax && legacyTax.id !== taxCategory.id) {
-        const affected = rawAccounts.filter(entry => entry.category_id === legacyTax.id)
-        for (const account of affected) applyAccountRepairs(account, { category_id: taxCategory.id, group: taxCategory.name })
-      }
-
-      for (const account of rawAccounts) {
-        const key = systemAccountKeyFromId(company.id, account.id)
-        if (!key) continue
-        const destination = groupByKey.get(SYSTEM_ACCOUNT_DESTINATIONS[key])
-        if (!destination) continue
-        const nextType = key === 'vat_receivable' ? 'Liability' as const : account.type
-        const repairs: Partial<Account> = {}
-        if (account.category_id !== destination.id) repairs.category_id = destination.id
-        if (account.group !== destination.name) repairs.group = destination.name
-        if (account.type !== nextType) {
-          repairs.type = nextType
-          if (key === 'vat_receivable') repairs.opening_balance = -(account.opening_balance || 0)
-        }
-        if (!Object.keys(repairs).length) continue
-        applyAccountRepairs(account, repairs)
-      }
-
-      const missingLegacyGroups = [...new Map(rawAccounts
-        .filter(account => !account.category_id && account.group && !accountCategories.some(category => category.name === account.group && category.account_type === account.type))
-        .map(account => [`${account.type}:${account.group}`, { company_id: company.id, name: account.group, account_type: account.type, parent_category_id: null, is_system: false, is_archived: false }])).values()]
-      const createdLegacyGroups = missingLegacyGroups.length ? await insertAccountCategories(missingLegacyGroups) : []
-      accountCategories.push(...createdLegacyGroups.filter(category => !accountCategories.some(existing => existing.id === category.id)))
-
-      for (const account of rawAccounts) {
-        if (account.category_id) continue
-        const category = accountCategories.find(item => item.name === account.group && item.account_type === account.type)
-        if (!category) continue
-        applyAccountRepairs(account, { category_id: category.id })
-      }
-
-      const missingPartyRows = rawAccounts.flatMap(account => {
-        if (parties.some(party => party.account_id === account.id)) return []
-        const category = accountCategories.find(entry => entry.id === account.category_id)
-        const partyType = partyTypeForCategory(category)
-        if (partyType && !account.is_party) applyAccountRepairs(account, { is_party: true })
-        return partyType ? [{ company_id: company.id, name: account.name, type: partyType, account_id: account.id, is_archived: !!account.is_archived }] : []
-      })
-
-      for (const party of parties) {
-        const account = rawAccounts.find(entry => entry.id === party.account_id)
-        const terminology = partyTerminology(party.type)
-        const category = accountCategories.find(entry => entry.name === terminology.category && entry.account_type === terminology.accountType)
-        if (!account || !category) continue
-        if (account.category_id === category.id && account.group === terminology.category && account.type === terminology.accountType && account.is_party) continue
-        const repairs = { category_id: category.id, group: terminology.category, type: terminology.accountType, is_party: true }
-        applyAccountRepairs(account, repairs)
-      }
-      const repairedAccounts = rawAccounts.filter(account => dirtyAccountIds.has(account.id))
-      if (repairedAccounts.length) await upsertAccounts(repairedAccounts)
-      if (missingPartyRows.length) parties.push(...await insertParties(missingPartyRows))
-
-      let generalItemCategory = itemCategories.find(category => category.name === 'General')
-      if (!generalItemCategory) {
-        generalItemCategory = await insertItemCategory({ company_id: company.id, name: 'General', is_archived: false })
-        itemCategories.push(generalItemCategory)
-      }
-      const uncategorizedItems = items.filter(item => !item.category_id)
-      if (uncategorizedItems.length) await updateItemsByIds(uncategorizedItems.map(item => item.id), { category_id: generalItemCategory.id })
-      for (const item of uncategorizedItems) item.category_id = generalItemCategory.id
-      await updateCompany(company.id, { bootstrap_version: COMPANY_DATA_REPAIR_VERSION })
-      company = { ...company, bootstrap_version: COMPANY_DATA_REPAIR_VERSION }
-      }
-
-      const accounts = recomputeAllBalances(rawAccounts, vouchers)
-      const stock = recomputeStock(items, vouchers, valuationMethod(company))
-      // Core accounting data is complete at this point. Render it immediately;
-      // optional paid-module data must not hold the dashboard loading state.
-      if (loadVersion !== companyDataLoadVersion) return
-      set({ company, rawAccounts, accountCategories, accounts, parties, items, itemCategories, pricingRules, stock, vouchers, userId, loading: false, dataReady: true })
-
+      const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
+      if (loadVersion !== companyDataLoadVersion || get().userId !== userId || get().company?.id !== company.id) return
+      set({ company, ...snapshot, loading: false, dataReady: true, dataStale: false, error: null })
       let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], companyPermissions: string[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
       try {
         ;[companyModules, companyPermissions] = await Promise.all([fetchCompanyModules(company.id), fetchCompanyPermissions(company.id)])
@@ -740,7 +591,9 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (loadVersion === companyDataLoadVersion && get().company?.id === company.id) set({ companyModules, companyPermissions, chequePermissions, chequeBanks, cheques })
       } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
     } catch (e: unknown) {
-      set({ error: publicErrorMessage(e, 'loading company data'), loading: false })
+      if (loadVersion === companyDataLoadVersion && get().userId === userId) {
+        set({ error: publicErrorMessage(e, 'loading company data'), loading: false, dataStale: true })
+      }
     }
     })()
 
@@ -751,6 +604,45 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     companyDataLoadPromises.set(pendingKey, trackedRequest)
     return trackedRequest
+  },
+
+  reconcileCompany: (companyId, saved = false) => {
+    const { company, userId } = get()
+    if (!company || company.id !== companyId || !userId) return Promise.resolve()
+    const identity = companyIdentityVersion
+    const key = `${identity}:${userId}:${companyId}`
+    if (!saved) {
+      // Focus/reconnect must not invalidate the initial load or restart an
+      // already-running background read. A committed save still invalidates it.
+      const initial = companyDataLoadPromises.get(`${identity}:${userId}`)
+      if (initial && !get().dataReady) return initial
+      const pending = reconciliationQueue.pendingRequest(key)
+      if (pending) return pending
+    }
+    if (saved) pendingCommittedRefreshes.add(key)
+    let readVersion = companyDataLoadVersion
+    const matches = () => identity === companyIdentityVersion && get().userId === userId && get().company?.id === companyId
+    // Invalidate pre-commit company loads. Never reuse an earlier load after a save.
+    companyDataLoadVersion++
+    companyDataLoadPromises.clear()
+    set({ dataStale: true })
+    return reconciliationQueue.request(key, async () => {
+      const version = readVersion = companyDataLoadVersion
+      const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
+      return () => {
+        if (matches() && version === companyDataLoadVersion) {
+          pendingCommittedRefreshes.delete(key)
+          set({ ...snapshot, dataReady: true, dataStale: false, loading: false, error: null })
+        }
+      }
+    }, error => {
+      if (!matches() || readVersion !== companyDataLoadVersion) return
+      const message = pendingCommittedRefreshes.has(key) ? 'Saved, refresh pending. Do not save again; retry the refresh.' : publicErrorMessage(error, 'refreshing company data')
+      set({ dataStale: true, loading: false, error: message })
+      // One bounded automatic read-only retry. Further attempts come from the
+      // visible Retry button, reconnect, focus, or realtime notification.
+      if (saved) setTimeout(() => { if (matches()) void get().reconcileCompany(companyId) }, 2000)
+    })
   },
 
   // ─── Recompute after mutation ────────────────────────────────────────────────
@@ -1119,6 +1011,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveDraftVoucher: async (params) => {
     const company = get().company
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     const voucherPayload = blankDraftVoucher(company, params)
     const draftPricingOverrideCount = params.type === 'Sales' && Array.isArray(params.draft_payload.lines)
       ? (params.draft_payload.lines as Array<Record<string, unknown>>).filter(line => line.price_overridden).length
@@ -1128,7 +1021,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (!existing) throw new Error('Voucher not found')
       if (existing.status !== 'Draft') throw new Error('Only draft vouchers can be updated as draft')
       const updated = await updateDraftVoucher(params.id, voucherPayload)
-      set({ vouchers: replaceVoucherInState(get().vouchers, { ...existing, ...updated }) })
+      await reconcile()
       if (draftPricingOverrideCount) await logAppEvent('sales_pricing_override_saved', company.id, { draft: true, overridden_line_count: draftPricingOverrideCount })
       notifySuccess('Draft voucher updated', updated.draft_no || updated.invoice_no)
       return updated
@@ -1148,7 +1041,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       }
     }
     if (!newVoucher) throw new Error('Could not allocate a unique draft voucher number')
-    set({ vouchers: [newVoucher, ...get().vouchers] })
+    await reconcile()
     if (draftPricingOverrideCount) await logAppEvent('sales_pricing_override_saved', company.id, { draft: true, overridden_line_count: draftPricingOverrideCount })
     notifySuccess('Draft voucher saved', newVoucher.draft_no || newVoucher.invoice_no)
     return newVoucher
@@ -1157,6 +1050,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveSalesVoucher: async (params, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_sales_invoice', companyId: company.id, recordType: 'Sales', lineItems: params.items.length }, async trace => {
     const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
       const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
@@ -1166,6 +1060,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Sales', date_bs: effectiveParams.date_bs, status })
+    reconcile.assertCurrent()
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
@@ -1176,11 +1071,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       audit: effectiveParams.items.some(item => item.price_overridden) ? { eventType: 'sales_pricing_override_saved', metadata: { overridden_line_count: effectiveParams.items.filter(item => item.price_overridden).length } } : undefined,
       trace,
     })
-    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Sales draft saved' : 'Sales invoice completed', newVoucher.invoice_no)
     })
   },
@@ -1189,6 +1080,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   savePurchaseVoucher: async (params, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_purchase_invoice', companyId: company.id, recordType: 'Purchase', lineItems: params.items.length }, async trace => {
     const { effectiveParams, data } = trace.sync('validation_and_payload', () => {
       const effectiveParams = { ...params, items: markServiceInvoiceItems(params.items, get().items), vat_rate: company.vat_enabled === false ? 0 : params.vat_rate, system_accounts: systemAccountsFor(company, get().rawAccounts) }
@@ -1196,6 +1088,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Purchase', date_bs: effectiveParams.date_bs, status })
+    reconcile.assertCurrent()
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Purchase', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, supplier_invoice_no: effectiveParams.supplier_invoice_no?.trim() || null, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
@@ -1205,11 +1098,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       numbering: voucherNumberingScope(company, 'Purchase', effectiveParams.date_bs),
       trace,
     })
-    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, ...recomputeVoucherEffects(get(), vouchers, company, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Purchase draft saved' : 'Purchase bill completed', newVoucher.invoice_no)
     })
   },
@@ -1218,6 +1107,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveReceipt: async ({ allocations, deposit_to_account_id, narration, date_bs }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_receipt', companyId: company.id, recordType: 'Receipt', lineItems: allocations.length }, async trace => {
     const { isCash, validAllocations, data } = trace.sync('validation_and_payload', () => {
       const { isCash } = validateMoneyAccount(deposit_to_account_id, company, get().rawAccounts, get().accountCategories)
@@ -1228,6 +1118,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const dateFields = voucherDateFields(date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Receipt', date_bs, status })
+    reconcile.assertCurrent()
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Receipt', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
       lines: data.lines,
@@ -1235,11 +1126,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       numbering: voucherNumberingScope(company, 'Receipt', date_bs),
       trace,
     })
-    const nextState = trace.sync('client_balance_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Receipt draft saved' : 'Receipt completed', newVoucher.invoice_no)
     return newVoucher
     })
@@ -1249,6 +1136,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   savePayment: async ({ allocations, paid_from_account_id, narration, date_bs }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_payment', companyId: company.id, recordType: 'Payment', lineItems: allocations.length }, async trace => {
     const { isCash, validAllocations, data } = trace.sync('validation_and_payload', () => {
       const { isCash } = validateMoneyAccount(paid_from_account_id, company, get().rawAccounts, get().accountCategories)
@@ -1259,6 +1147,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const dateFields = voucherDateFields(date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Payment', date_bs, status })
+    reconcile.assertCurrent()
     const newVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Payment', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
       lines: data.lines,
@@ -1266,11 +1155,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       numbering: voucherNumberingScope(company, 'Payment', date_bs),
       trace,
     })
-    const nextState = trace.sync('client_balance_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Payment draft saved' : 'Payment completed', newVoucher.invoice_no)
     return newVoucher
     })
@@ -1280,6 +1165,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveJournal: async ({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_journal', companyId: company.id, recordType: 'Journal', lineItems: lines.length }, async trace => {
     const total = trace.sync('validation_and_payload', () => {
       if (!validateBalanced(lines as VoucherLine[]).valid) throw new Error('Journal lines do not balance')
@@ -1289,6 +1175,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, invoice_no: manualInvoiceNumber })
+    reconcile.assertCurrent()
     const savedVoucher = await insertVoucher({
       voucher: { company_id: company.id, type: 'Journal', numbering_period: voucherNumberingPeriod(company, date_bs), ...dateFields, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload, is_cash: false, total, cancelled: false, status },
       lines,
@@ -1296,11 +1183,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const newVoucher = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, contra_entry: contra_entry || savedVoucher.contra_entry, contra_destination_account_id: contra_destination_account_id || savedVoucher.contra_destination_account_id, contra_charge_amount: contra_charge_amount ?? savedVoucher.contra_charge_amount, draft_payload: draft_payload || savedVoucher.draft_payload }
-    const nextState = trace.sync('client_balance_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, accounts: applyVoucherBalanceDelta(get().accounts, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Journal draft saved' : 'Journal voucher completed', newVoucher.invoice_no)
     })
   },
@@ -1342,6 +1225,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveReturnVoucher: async (params, status = 'Completed') => {
     const { company, vouchers } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: params.type === 'Sales Return' ? 'create_credit_note' : 'create_debit_note', companyId: company.id, recordType: params.type, lineItems: params.items.length }, async trace => {
     const { original, partyAccountId, data } = trace.sync('validation_and_payload', () => {
     const original = validateReturnRequest(company, get().parties, get().items, vouchers, params)
@@ -1356,6 +1240,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     const dateFields = voucherDateFields(params.date_bs, company)
     await enforceVoucherDateOrder(get(), { type: params.type, date_bs: params.date_bs, status })
+    reconcile.assertCurrent()
     const newVoucher = await insertVoucher({
       voucher: {
         company_id: company.id, type: params.type, numbering_period: voucherNumberingPeriod(company, params.date_bs), ...dateFields,
@@ -1372,11 +1257,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       audit: { eventType: 'return_created', metadata: { type: params.type, original_voucher_id: original?.id || null } },
       trace,
     })
-    const nextState = trace.sync('client_balance_and_stock_recompute', () => {
-      const nextVouchers = [newVoucher, ...vouchers]
-      return { vouchers: nextVouchers, ...recomputeVoucherEffects(get(), nextVouchers, company, undefined, newVoucher) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? `${params.type} draft saved` : `${params.type} completed`, newVoucher.invoice_no)
     })
   },
@@ -1387,6 +1268,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().saveSalesVoucher({ ...params, date_bs: todayBs() }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1399,6 +1281,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Lines do not balance')
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Sales', date_bs: effectiveParams.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
+    reconcile.assertCurrent()
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
@@ -1409,9 +1292,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       audit: effectiveParams.items.some(item => item.price_overridden) ? { eventType: 'sales_pricing_override_saved', metadata: { overridden_line_count: effectiveParams.items.filter(item => item.price_overridden).length } } : undefined,
       trace,
     })
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
-    set({ vouchers, accounts, stock })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Sales draft updated' : 'Sales invoice completed', updated.invoice_no)
     })
   },
@@ -1421,6 +1302,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().savePurchaseVoucher({ ...params, date_bs: todayBs() }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1432,6 +1314,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildPurchaseVoucherData(effectiveParams)
     const dateFields = voucherDateFields(effectiveParams.date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Purchase', date_bs: effectiveParams.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
+    reconcile.assertCurrent()
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const updated = await updateVoucher({
       id,
@@ -1441,9 +1324,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, false),
       trace,
     })
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const { accounts, stock } = recomputeVoucherEffects(get(), vouchers, company, existing, updated)
-    set({ vouchers, accounts, stock })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Purchase draft updated' : 'Purchase bill completed', updated.invoice_no)
     })
   },
@@ -1453,6 +1334,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().saveReceipt({ allocations, deposit_to_account_id, narration, date_bs: todayBs() }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1465,6 +1347,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Receipt', date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
+    reconcile.assertCurrent()
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: deposit_to_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
@@ -1472,9 +1355,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       settlements: settlementRows(validAllocations),
       trace,
     })
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
-    set({ vouchers, accounts })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Receipt draft updated' : 'Receipt completed', updated.invoice_no)
     })
   },
@@ -1482,6 +1363,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs, stock_condition, transfer_to }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'create_stock_adjustment', companyId: company.id, recordType: 'Stock Adjustment', lineItems: transfer_to ? 2 : 1 }, async trace => {
     trace.sync('validation_and_payload', () => {
     if (!item_id) throw new Error('Select an item')
@@ -1508,11 +1390,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       audit: { eventType: 'stock_adjustment', metadata: { item_id, qty_delta, rate, stock_condition, transfer_to } },
       trace,
     })
-    const nextState = trace.sync('client_stock_recompute', () => {
-      const vouchers = [newVoucher, ...get().vouchers]
-      return { vouchers, stock: recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(newVoucher), valuationMethod(company)) }
-    }, { category: 'cache' })
-    trace.sync('zustand_state_update', () => set(nextState), { category: 'cache' })
+    await reconcile()
     notifySuccess(status === 'Draft' ? (transfer_to ? 'Stock transfer draft saved' : 'Stock adjustment draft saved') : (transfer_to ? 'Stock transferred' : 'Stock adjustment completed'), newVoucher.invoice_no)
     })
   },
@@ -1522,6 +1400,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().savePayment({ allocations, paid_from_account_id, narration, date_bs: todayBs() }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1534,6 +1413,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
     await enforceVoucherDateOrder(get(), { type: 'Payment', date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
+    reconcile.assertCurrent()
     const updated = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), narration, party_account_id: singlePartyAccountId(validAllocations, get().parties), settlement_account_id: paid_from_account_id, is_cash: isCash, total: data.total, cancelled: false, status },
@@ -1541,9 +1421,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       settlements: settlementRows(validAllocations),
       trace,
     })
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
-    set({ vouchers, accounts })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Payment draft updated' : 'Payment completed', updated.invoice_no)
     })
   },
@@ -1553,6 +1431,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!existing) throw new Error('Voucher not found')
     const company = get().company
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().saveJournal({ lines, narration, date_bs, invoice_no, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1565,6 +1444,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const manualInvoiceNumber = invoice_no?.trim()
     if (company.journal_numbering_mode === 'manual' && !manualInvoiceNumber) throw new Error('Enter the Journal voucher number')
     await enforceVoucherDateOrder(get(), { type: 'Journal', date_bs, status, currentVoucherId: id, invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : existing.invoice_no })
+    reconcile.assertCurrent()
     const savedVoucher = await updateVoucher({
       id,
       voucher: { ...dateFields, numbering_period: voucherNumberingPeriod(company, date_bs), invoice_no: company.journal_numbering_mode === 'manual' ? manualInvoiceNumber : undefined, narration, settlement_account_id, simple_entry_type, contra_entry, contra_destination_account_id, contra_charge_amount, draft_payload, is_cash: false, total, cancelled: false, status },
@@ -1572,9 +1452,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       trace,
     })
     const updated = { ...savedVoucher, settlement_account_id: settlement_account_id || savedVoucher.settlement_account_id, simple_entry_type: simple_entry_type || savedVoucher.simple_entry_type, contra_entry: contra_entry || savedVoucher.contra_entry, contra_destination_account_id: contra_destination_account_id || savedVoucher.contra_destination_account_id, contra_charge_amount: contra_charge_amount ?? savedVoucher.contra_charge_amount, draft_payload: draft_payload || savedVoucher.draft_payload }
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    const accounts = applyVoucherBalanceDelta(get().accounts, existing, updated)
-    set({ vouchers, accounts })
+    await reconcile()
     notifySuccess(status === 'Draft' ? 'Journal draft updated' : 'Journal voucher completed', updated.invoice_no)
     })
   },
@@ -1618,6 +1496,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const company = get().company
     if (!existing || (existing.type !== 'Sales Return' && existing.type !== 'Purchase Return')) throw new Error('Return voucher not found')
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
       await get().saveReturnVoucher({ ...params, date_bs: todayBs() }, 'Completed')
       await get().deleteDraftVoucher(id)
@@ -1633,6 +1512,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     const data = buildReturnVoucherData({ ...params, items: markServiceInvoiceItems(params.items, get().items), original, party_account_id: partyAccountId, system_accounts: systemAccountsFor(company, get().rawAccounts) })
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Return voucher lines do not balance')
     await enforceVoucherDateOrder(get(), { type: params.type, date_bs: params.date_bs, status, currentVoucherId: id, invoice_no: existing.invoice_no })
+    reconcile.assertCurrent()
     const updated = await updateVoucher({
       id,
       voucher: {
@@ -1647,8 +1527,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
       trace,
     })
-    const vouchers = replaceVoucherInState(get().vouchers, { ...existing, ...updated })
-    set({ vouchers, ...recomputeVoucherEffects(get(), vouchers, company, existing, updated) })
+    await reconcile()
     notifySuccess(status === 'Draft' ? `${params.type} draft updated` : `${params.type} completed`, updated.invoice_no)
     })
   },
@@ -1763,8 +1642,9 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().vouchers.find(voucher => voucher.id === id)
     if (!existing) throw new Error('Voucher not found')
     if (existing.status !== 'Draft') throw new Error('Only draft vouchers can be deleted')
+    const reconcile = savedCompanyRefresh(existing.company_id)
     await deleteVoucher(id)
-    set({ vouchers: get().vouchers.filter(voucher => voucher.id !== id) })
+    await reconcile()
     notifySuccess('Draft voucher deleted', existing.draft_no || existing.invoice_no)
   },
 
@@ -1774,15 +1654,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (get().vouchers.some(voucher => !voucher.cancelled && voucher.original_voucher_id === id)) throw new Error('Cancel linked return vouchers before cancelling the original invoice')
     const company = get().company
     if (!company) throw new Error('No company')
+    const reconcile = savedCompanyRefresh(company.id)
     return measuredWrite({ operation: 'cancel_voucher', companyId: company.id, recordType: 'Voucher', lineItems: 0 }, async trace => {
     await cancelVoucher(id, trace)
-    const existing = get().vouchers.find(voucher => voucher.id === id)
-    const cancelled = existing ? { ...existing, cancelled: true } : undefined
-    const vouchers = get().vouchers.map(v => v.id === id ? cancelled! : v)
-    const accounts = applyVoucherBalanceDelta(get().accounts, existing, cancelled)
-    const stock = recomputeAffectedStock(get().items, get().stock, vouchers, affectedItemIds(existing), valuationMethod(company))
-    set({ vouchers, accounts, stock })
-    notifySuccess('Voucher cancelled', existing?.invoice_no)
+    await reconcile()
+    notifySuccess('Voucher cancelled', target?.invoice_no)
     })
   },
 

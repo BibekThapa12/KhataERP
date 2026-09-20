@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
+import { AccountingSyncStatus } from '@/components/AccountingSyncStatus'
 import { isDeveloperAdmin, signOut } from '@/lib/supabase'
 import { cn } from '@/lib/utils'
 import {
@@ -569,6 +570,7 @@ export function AppShell() {
         </div>
         <div className="app-workspace-scroll min-h-0 flex-1 overflow-y-auto">
           {planInactive && !developerAdmin && <div role="status" className="border-b border-amber-300 bg-amber-50 px-4 py-2 text-sm text-amber-900"><strong>Read-only:</strong> This company trial or paid plan has expired. You can view, print, and export existing data, but changes are disabled until KhataERP support renews the plan.</div>}
+          <AccountingSyncStatus />
           <Outlet />
         </div>
       </main>

@@ -104,7 +104,7 @@ function ProtectedRoute({ children, authReady }: { children: React.ReactNode; au
   const loadError = useAppStore(s => s.error)
   if (!authReady) return <FullPageStatus message="Checking session..." />
   if (!userId) return <Navigate to="/login" replace />
-  if (!dataReady && !loadError) return <FullPageStatus message="Loading company data..." />
+  if (!dataReady) return <div><FullPageStatus message={loadError || 'Loading company data...'} />{loadError && <button className="fixed bottom-8 left-1/2" onClick={() => void useAppStore.getState().loadAll(userId)}>Retry loading company data</button>}</div>
   return <>{children}</>
 }
 
@@ -158,6 +158,15 @@ export default function App() {
       }, 500)
     }
 
+    const resume = () => {
+      if (document.visibilityState === 'hidden') return
+      const state = useAppStore.getState()
+      if (state.userId === userId && state.company) void state.reconcileCompany(state.company.id)
+    }
+    window.addEventListener('online', resume)
+    window.addEventListener('focus', resume)
+    document.addEventListener('visibilitychange', resume)
+
     const channel = supabase
       .channel(`company-sync-${userId}`)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'vouchers' }, scheduleRefresh)
@@ -177,6 +186,9 @@ export default function App() {
       .subscribe()
 
     return () => {
+      window.removeEventListener('online', resume)
+      window.removeEventListener('focus', resume)
+      document.removeEventListener('visibilitychange', resume)
       if (refreshTimer.current) {
         window.clearTimeout(refreshTimer.current)
         refreshTimer.current = null

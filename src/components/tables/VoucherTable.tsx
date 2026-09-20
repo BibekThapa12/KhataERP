@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Edit2, Eye, Printer, XCircle } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
+import { voucherStatus as workflowStatus, isCompletedVoucher } from '@/lib/engine'
 import { logAppEvent } from '@/lib/supabase'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/misc'
@@ -314,7 +315,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
   const journalTable = vouchers.length > 0 && vouchers.every(voucher => voucher.type === 'Journal')
   const showFilterBar = alwaysShowFilters || vouchers.length > 1
   const filteredVouchers = vouchers.filter(voucher => {
-    const status = voucher.status === 'Draft' ? 'Draft' : 'Completed'
+    const status = workflowStatus(voucher)
     if (statusFilter !== 'all' && status !== statusFilter) return false
     if (!query.trim()) return true
     const settlementId = legacySettlementAccountId(voucher) || draftPayload<DraftReceiptPaymentPayload>(voucher)?.moneyAccountId
@@ -325,8 +326,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
   })
   const selectable = !!selectedIds && !!onSelectionChange && !!selectionStatus && statusFilter === selectionStatus
   const visibleIds = filteredVouchers.filter(voucher => {
-    const voucherStatus = voucher.status === 'Draft' ? 'Draft' : 'Completed'
-    return voucherStatus === selectionStatus && (selectionStatus !== 'Completed' || !voucher.cancelled)
+    return workflowStatus(voucher) === selectionStatus && (selectionStatus !== 'Completed' || isCompletedVoucher(voucher))
   }).map(voucher => voucher.id)
   const allVisibleSelected = visibleIds.length > 0 && visibleIds.every(id => selectedIds?.has(id))
   const someVisibleSelected = visibleIds.some(id => selectedIds?.has(id))

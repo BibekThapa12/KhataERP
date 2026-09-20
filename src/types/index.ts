@@ -98,6 +98,7 @@ export interface InvoiceItem {
   item_id: string
   qty: number
   rate: number
+  amount?: number
   source_invoice_item_id?: string
   item_name?: string
   unit?: string

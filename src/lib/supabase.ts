@@ -1,4 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
+import { completeFetch } from '@/lib/completeFetch'
+import { withReadDeadline } from '@/lib/readDeadline'
 import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense, PricingRule } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type WritePerformanceTrace } from '@/lib/writePerformance'
@@ -326,7 +328,7 @@ async function clearSignupCompanyMetadata(metadata: Record<string, unknown>) {
 }
 
 export async function fetchMyCompanies(): Promise<MyCompaniesResponse> {
-  const { data, error } = await supabase.rpc('get_my_companies')
+  const { data, error } = await withReadDeadline('company access', signal => supabase.rpc('get_my_companies').abortSignal(signal))
   if (error) throw error
   const response = (data || {}) as Partial<MyCompaniesResponse>
   return {
@@ -694,13 +696,12 @@ export async function logChequeEvent(company_id:string,action:string,cheque_id?:
 // ─── Accounts ────────────────────────────────────────────────────────────────
 
 export async function fetchAccounts(company_id: string): Promise<Account[]> {
-  const { data, error } = await supabase
+  const data = await completeFetch('Accounts', (from, to, signal) => supabase
     .from('accounts')
     .select(ACCOUNT_FIELDS)
     .eq('company_id', company_id)
-    .order('name')
-  if (error) throw error
-  return (data || []).map(a => ({ ...a, balance: 0 }))
+    .order('id').range(from, to).abortSignal(signal))
+  return data.map(a => ({ ...a, balance: 0 }))
 }
 
 export async function insertAccounts(accounts: Omit<Account, 'balance' | 'created_at'>[]) {
@@ -738,9 +739,7 @@ export async function deleteAccount(id: string) {
 }
 
 export async function fetchAccountCategories(company_id: string): Promise<AccountCategory[]> {
-  const { data, error } = await supabase.from('account_categories').select(ACCOUNT_CATEGORY_FIELDS).eq('company_id', company_id).order('name')
-  if (error) throw error
-  return data || []
+  return completeFetch('Account categories', (from, to, signal) => supabase.from('account_categories').select(ACCOUNT_CATEGORY_FIELDS).eq('company_id', company_id).order('name').order('id').range(from, to).abortSignal(signal))
 }
 
 export async function insertAccountCategory(category: Omit<AccountCategory, 'id' | 'created_at'>): Promise<AccountCategory> {
@@ -773,13 +772,11 @@ export async function deleteAccountCategory(id: string) {
 // ─── Parties ──────────────────────────────────────────────────────────────────
 
 export async function fetchParties(company_id: string): Promise<Party[]> {
-  const { data, error } = await supabase
+  return completeFetch('Parties', (from, to, signal) => supabase
     .from('parties')
     .select(PARTY_FIELDS)
     .eq('company_id', company_id)
-    .order('name')
-  if (error) throw error
-  return data || []
+    .order('name').order('id').range(from, to).abortSignal(signal))
 }
 
 export async function insertParty(party: Omit<Party, 'id' | 'created_at' | 'account'>) {
@@ -803,13 +800,11 @@ export async function updateParty(id: string, updates: Partial<Party>) {
 // ─── Items ────────────────────────────────────────────────────────────────────
 
 export async function fetchItems(company_id: string): Promise<Item[]> {
-  const { data, error } = await supabase
+  return completeFetch('Items', (from, to, signal) => supabase
     .from('items')
     .select(ITEM_FIELDS)
     .eq('company_id', company_id)
-    .order('name')
-  if (error) throw error
-  return data || []
+    .order('name').order('id').range(from, to).abortSignal(signal))
 }
 
 export async function insertItem(item: Omit<Item, 'id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'>) {
@@ -830,16 +825,28 @@ export async function updateItemsByIds(ids: string[], updates: Partial<Item>) {
 }
 
 export async function fetchItemCategories(company_id: string): Promise<ItemCategory[]> {
-  const { data, error } = await supabase.from('item_categories').select(ITEM_CATEGORY_FIELDS).eq('company_id', company_id).order('name')
-  if (error) throw error
-  return data || []
+  return completeFetch('Item categories', (from, to, signal) => supabase.from('item_categories').select(ITEM_CATEGORY_FIELDS).eq('company_id', company_id).order('name').order('id').range(from, to).abortSignal(signal))
 }
 
 export async function fetchPricingRules(company_id: string): Promise<PricingRule[]> {
-  const { data, error } = await supabase.from('pricing_rules').select(PRICING_RULE_FIELDS).eq('company_id', company_id)
-    .order('priority', { ascending: false }).order('name')
-  if (error) throw error
-  return (data || []).map(rule => ({ ...rule, slabs: [...(rule.slabs || [])].sort((a, b) => Number(a.min_quantity) - Number(b.min_quantity)) })) as PricingRule[]
+  const [rules, slabs] = await Promise.all([
+    completeFetch('Pricing rules', async (from, to, signal) => {
+      const result = await supabase.from('pricing_rules').select(PRICING_RULE_FIELDS.split(',slabs:')[0]).eq('company_id', company_id).order('id').range(from, to).abortSignal(signal)
+      return { ...result, data: result.data as unknown as PricingRule[] | null }
+    }),
+    completeFetch('Pricing slabs', async (from, to, signal) => {
+      const result = await supabase.from('pricing_rule_slabs').select(`${PRICING_SLAB_FIELDS},owner:pricing_rules!inner(company_id)`).eq('owner.company_id', company_id).order('id').range(from, to).abortSignal(signal)
+      return { ...result, data: result.data as unknown as PricingRule['slabs'] | null }
+    }),
+  ])
+  const grouped = new Map<string, PricingRule['slabs']>()
+  for (const slab of slabs) {
+    const group = grouped.get(slab.pricing_rule_id) || []
+    group.push(slab)
+    grouped.set(slab.pricing_rule_id, group)
+  }
+  return rules.map(rule => ({ ...rule, slabs: (grouped.get(rule.id) || []).sort((a, b) => Number(a.min_quantity) - Number(b.min_quantity)) }))
+    .sort((a, b) => b.priority - a.priority || a.name.localeCompare(b.name) || a.id.localeCompare(b.id))
 }
 
 export async function savePricingRule(rule: Partial<PricingRule> & Pick<PricingRule, 'company_id' | 'name' | 'scope' | 'quantity_unit' | 'effective_from_bs' | 'priority' | 'is_active'>) {
@@ -910,48 +917,48 @@ export async function fetchMasterChangeLogs(company_id: string): Promise<MasterC
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
-  const settlementRequest = supabase
-    .from('voucher_settlements')
-    .select(VOUCHER_SETTLEMENT_FIELDS)
-    .eq('company_id', company_id)
-  const voucherRequest = supabase
-    .from('vouchers')
-    .select(VOUCHER_WITH_CHILDREN_FIELDS)
-    .eq('company_id', company_id)
-    .order('date_bs_key', { ascending: false })
-    .order('seq', { ascending: false })
-  const [
-    { data: settlementData, error: settlementError },
-    { data, error },
-  ] = await Promise.all([settlementRequest, voucherRequest])
-  const settlements = settlementError && /does not exist|schema cache/i.test(settlementError.message)
-    ? []
-    : settlementError
-      ? (() => { throw settlementError })()
-      : (settlementData || []) as VoucherSettlement[]
-  const byVoucher = new Map<string, VoucherSettlement[]>()
-  for (const settlement of settlements) {
-    const rows = byVoucher.get(settlement.settlement_voucher_id) || []
-    rows.push(settlement)
-    byVoucher.set(settlement.settlement_voucher_id, rows)
+  // Fetch children as top-level rows: embedded arrays have independent API caps.
+  // The parent join scopes children without requiring optional children to exist.
+  const children = <T extends { id: string }>(table: string, fields: string) =>
+    completeFetch<T>(table, async (from, to, signal) => {
+      const result = await supabase.from(table)
+        .select(`${fields},owner:vouchers!inner(company_id)`)
+        .eq('owner.company_id', company_id).order('id').range(from, to).abortSignal(signal)
+      return { ...result, data: result.data as unknown as T[] | null }
+    })
+  const headers = await completeFetch('Vouchers', (from, to, signal) => supabase.from('vouchers').select(VOUCHER_FIELDS).eq('company_id', company_id).order('id').range(from, to).abortSignal(signal))
+  const [lines, stockLines, invoiceItems, settlements] = await Promise.all([
+    children<VoucherLine & { id: string; voucher_id: string }>('voucher_lines', VOUCHER_LINE_FIELDS),
+    children<StockLine & { id: string; voucher_id: string }>('stock_lines', STOCK_LINE_FIELDS),
+    children<InvoiceItem & { id: string; voucher_id: string }>('invoice_items', INVOICE_ITEM_FIELDS),
+    completeFetch('Settlements', (from, to, signal) => supabase.from('voucher_settlements').select(VOUCHER_SETTLEMENT_FIELDS).eq('company_id', company_id).order('id').range(from, to).abortSignal(signal)),
+  ])
+  const after = await completeFetch('Voucher revisions', (from, to, signal) => supabase.from('vouchers').select('id,updated_at').eq('company_id', company_id).order('id').range(from, to).abortSignal(signal))
+  if (headers.length !== after.length || headers.some((row, index) => row.id !== after[index].id || row.updated_at !== after[index].updated_at)) {
+    throw new Error('Vouchers changed while loading. Please refresh.')
   }
-  const attachSettlements = (voucher: Voucher) => ({ ...voucher, settlements: byVoucher.get(voucher.id) || [] })
-  if (!error) {
-    return (data || [])
-      .map(v => attachSettlements(normalizeVoucherDates(v) as Voucher))
-      .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
+  const headerIds = new Set(headers.map(row => row.id))
+  if ([...lines, ...stockLines, ...invoiceItems].some(row => !headerIds.has(row.voucher_id)) || settlements.some(row => !headerIds.has(row.settlement_voucher_id))) {
+    throw new Error('Voucher child records could not be matched to the loaded history. Please refresh and run the integrity check.')
   }
-
-  const { data: legacyData, error: legacyError } = await supabase
-    .from('vouchers')
-    .select(VOUCHER_WITH_CHILDREN_FIELDS)
-    .eq('company_id', company_id)
-    .order('date', { ascending: false })
-    .order('seq', { ascending: false })
-  if (legacyError) throw legacyError
-  return (legacyData || [])
-    .map(v => attachSettlements(normalizeVoucherDates(v) as Voucher))
-    .sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq)
+  function group<T>(rows: T[], key: (row: T) => string) {
+    const map = new Map<string, T[]>()
+    for (const row of rows) {
+      const id = key(row)
+      const group = map.get(id) || []
+      group.push(row)
+      map.set(id, group)
+    }
+    return map
+  }
+  const ledger = group(lines, row => row.voucher_id)
+  const stock = group(stockLines, row => row.voucher_id)
+  const invoices = group(invoiceItems, row => row.voucher_id)
+  const allocated = group(settlements, row => row.settlement_voucher_id)
+  return headers.map(header => normalizeVoucherDates({
+    ...header, lines: ledger.get(header.id) || [], stock_lines: stock.get(header.id) || [],
+    invoice_items: invoices.get(header.id) || [], settlements: allocated.get(header.id) || [],
+  }) as Voucher).sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq || b.id.localeCompare(a.id))
 }
 
 export async function createPartyWithLedgerAtomic(params: {

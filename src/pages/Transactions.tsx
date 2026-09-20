@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type Dispatch, type SetStateAction } from
 import { useSearchParams } from 'react-router-dom'
 import { CheckCircle2, ClipboardList, Loader2, Plus, Printer, Trash2, XCircle } from 'lucide-react'
 import { useAppStore, type BulkDraftCompletionResult } from '@/store/useAppStore'
+import { isCompletedVoucher } from '@/lib/engine'
 import { PageHeader, PageContent } from '@/components/layout/PageHeader'
 import { VoucherTable, voucherDisplayTotal } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
@@ -66,7 +67,7 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const [loadoutOpen, setLoadoutOpen] = useState(false)
   const drafts = useMemo(() => vouchers.filter(voucher => voucher.status === 'Draft'), [vouchers])
-  const completedVouchers = useMemo(() => vouchers.filter(voucher => voucher.status !== 'Draft' && !voucher.cancelled), [vouchers])
+  const completedVouchers = useMemo(() => vouchers.filter(isCompletedVoucher), [vouchers])
   const draftFilterActive = draftOnly || statusFilter === 'Draft'
   const completedFilterActive = !draftOnly && statusFilter === 'Completed'
   const selectedDrafts = useMemo(() => drafts.filter(voucher => selectedIds.has(voucher.id)), [drafts, selectedIds])
