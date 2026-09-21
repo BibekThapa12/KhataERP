@@ -3,7 +3,7 @@ import type { Company, Voucher } from '@/types'
 
 const mocks = vi.hoisted(() => ({
   fetchMyCompanies: vi.fn(), fetchCompanySnapshot: vi.fn(), setActiveCompanyRemote: vi.fn(),
-  insertDraftVoucher: vi.fn(), fetchCompanyModules: vi.fn(), fetchCompanyPermissions: vi.fn(),
+  insertDraftVoucher: vi.fn(), fetchCompanyModules: vi.fn(), fetchCompanyPermissions: vi.fn(), fetchVoucherBundles: vi.fn(),
 }))
 vi.mock('@/lib/supabase', () => ({ ...mocks }))
 vi.mock('@/lib/companySnapshot', () => ({ fetchCompanySnapshot: mocks.fetchCompanySnapshot }))
@@ -112,5 +112,12 @@ describe('company-scoped accounting publication', () => {
       expect(mocks.insertDraftVoucher).not.toHaveBeenCalled()
       expect(mocks.fetchCompanySnapshot).toHaveBeenCalledTimes(2)
     } finally { vi.useRealTimers() }
+  })
+  it('publishes a saved draft without blocking on a full-company snapshot', async () => {
+    const saved = { id: 'draft', company_id: 'A', type: 'Sales', date: '2026-08-18', date_ad: '2026-08-18', date_bs: '2083-05-01', date_bs_key: 20830501, is_cash: false, total: 0, cancelled: false, status: 'Draft', seq: 2, draft_no: 'DRAFT-0001', lines: [], stock_lines: [], invoice_items: [], settlements: [] } as Voucher
+    mocks.insertDraftVoucher.mockResolvedValueOnce(saved)
+    await useAppStore.getState().saveDraftVoucher({ type: 'Sales', date_bs: '2083-05-01', draft_payload: {} })
+    expect(useAppStore.getState().vouchers.some(voucher => voucher.id === saved.id)).toBe(true)
+    expect(mocks.fetchCompanySnapshot).not.toHaveBeenCalled()
   })
 })

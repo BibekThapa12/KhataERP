@@ -228,6 +228,21 @@ export interface Voucher {
   party?: Party
 }
 
+export interface CompanyAccountingSnapshotCounts {
+  vouchers: number
+  voucher_lines: number
+  stock_lines: number
+  invoice_items: number
+  settlements: number
+}
+
+export interface CompanyAccountingSnapshot {
+  company_id: string
+  generated_at: string
+  counts: CompanyAccountingSnapshotCounts
+  vouchers: Voucher[]
+}
+
 export interface Company {
   id: string
   user_id: string

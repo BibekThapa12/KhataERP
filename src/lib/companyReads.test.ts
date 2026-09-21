@@ -7,6 +7,20 @@ const fake = vi.hoisted(() => {
 })
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
+    rpc: (name: string, args: { p_company_id: string }) => ({ abortSignal: async (_signal: AbortSignal) => {
+      if (name !== 'get_company_accounting_snapshot') return { data: null, error: new Error('unknown rpc') }
+      if (fake.failTable) return { data: null, error: new Error('schema unavailable') }
+      fake.calls.push(name)
+      const vouchers = (fake.tables.vouchers || []).filter(row => row.company_id === args.p_company_id).map(row => ({
+        ...row,
+        lines: (fake.tables.voucher_lines || []).filter(line => line.voucher_id === row.id),
+        stock_lines: (fake.tables.stock_lines || []).filter(line => line.voucher_id === row.id),
+        invoice_items: (fake.tables.invoice_items || []).filter(line => line.voucher_id === row.id),
+        settlements: (fake.tables.voucher_settlements || []).filter(line => line.company_id === args.p_company_id && line.settlement_voucher_id === row.id),
+      }))
+      const count = (field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') => vouchers.reduce((sum, voucher) => sum + voucher[field].length, 0)
+      return { data: { company_id: args.p_company_id, generated_at: '2026-09-21T00:00:00Z', counts: { vouchers: vouchers.length, voucher_lines: count('lines'), stock_lines: count('stock_lines'), invoice_items: count('invoice_items'), settlements: count('settlements') }, vouchers }, error: null }
+    } }),
     from: (table: string) => {
       const filters: Array<[string, unknown]> = []
       const orders: string[] = []
@@ -53,6 +67,7 @@ describe('company accounting reads beyond API caps', () => {
     expect(first.stock_lines).toHaveLength(1551)
     expect(first.settlements).toHaveLength(1301)
     expect(vouchers.some(v => v.company_id !== 'A')).toBe(false)
+    expect(fake.calls).toEqual(['get_company_accounting_snapshot'])
   })
   it('does not replace settlement failures with an empty array', async () => {
     fake.failTable = 'voucher_settlements'

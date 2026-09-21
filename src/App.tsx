@@ -3,7 +3,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/react'
 import { logAppError, supabase } from '@/lib/supabase'
-import { useAppStore } from '@/store/useAppStore'
+import { useAppStore, type CompanyRefreshResource } from '@/store/useAppStore'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
@@ -112,6 +112,11 @@ export default function App() {
   const { userId, company, setUserId, loadAll } = useAppStore()
   const [authReady, setAuthReady] = useState(false)
   const refreshTimer = useRef<number | null>(null)
+  const resourceRefreshTimer = useRef<number | null>(null)
+  const resumeTimer = useRef<number | null>(null)
+  const pendingVoucherIds = useRef(new Set<string>())
+  const pendingResources = useRef(new Set<CompanyRefreshResource>())
+  const lastResumeRefresh = useRef(0)
 
   useEffect(() => {
     let active = true
@@ -148,41 +153,70 @@ export default function App() {
   }, [loadAll, setUserId])
 
   useEffect(() => {
-    if (!userId) return
+    if (!userId || !company?.id) return
+    const voucherIds = pendingVoucherIds.current
+    const resourcesToRefresh = pendingResources.current
 
-    const scheduleRefresh = () => {
+    const recordId = (payload: { new?: unknown; old?: unknown }, key: string) => {
+      const current = payload.new && typeof payload.new === 'object' ? (payload.new as Record<string, unknown>)[key] : undefined
+      const previous = payload.old && typeof payload.old === 'object' ? (payload.old as Record<string, unknown>)[key] : undefined
+      return typeof current === 'string' ? current : typeof previous === 'string' ? previous : null
+    }
+    const scheduleVoucherRefresh = (voucherId: string | null) => {
+      if (!voucherId) return
+      voucherIds.add(voucherId)
       if (refreshTimer.current) window.clearTimeout(refreshTimer.current)
       refreshTimer.current = window.setTimeout(() => {
-        loadAll(userId)
+        const ids = [...voucherIds]
+        voucherIds.clear()
+        void useAppStore.getState().refreshVouchers(ids)
         refreshTimer.current = null
-      }, 500)
+      }, 250)
+    }
+    const scheduleResourceRefresh = (resource: CompanyRefreshResource) => {
+      resourcesToRefresh.add(resource)
+      if (resourceRefreshTimer.current) window.clearTimeout(resourceRefreshTimer.current)
+      resourceRefreshTimer.current = window.setTimeout(() => {
+        const resources = [...resourcesToRefresh]
+        resourcesToRefresh.clear()
+        void useAppStore.getState().refreshCompanyResources(resources)
+        resourceRefreshTimer.current = null
+      }, 250)
     }
 
     const resume = () => {
       if (document.visibilityState === 'hidden') return
-      const state = useAppStore.getState()
-      if (state.userId === userId && state.company) void state.reconcileCompany(state.company.id)
+      if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
+      resumeTimer.current = window.setTimeout(() => {
+        resumeTimer.current = null
+        if (Date.now() - lastResumeRefresh.current < 15_000) return
+        lastResumeRefresh.current = Date.now()
+        const state = useAppStore.getState()
+        if (state.userId === userId && state.company?.id === company.id) void state.reconcileCompany(company.id)
+      }, 250)
     }
     window.addEventListener('online', resume)
     window.addEventListener('focus', resume)
     document.addEventListener('visibilitychange', resume)
 
     const channel = supabase
-      .channel(`company-sync-${userId}`)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'vouchers' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_lines' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_lines' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_items' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_settlements' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'parties' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'items' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'account_categories' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'item_categories' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'companies' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'company_modules' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheque_banks' }, scheduleRefresh)
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheques' }, scheduleRefresh)
+      .channel(`company-sync-${company.id}`)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'vouchers', filter: `company_id=eq.${company.id}` }, payload => scheduleVoucherRefresh(recordId(payload, 'id')))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_lines' }, payload => scheduleVoucherRefresh(recordId(payload, 'voucher_id')))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'stock_lines' }, payload => scheduleVoucherRefresh(recordId(payload, 'voucher_id')))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'invoice_items' }, payload => scheduleVoucherRefresh(recordId(payload, 'voucher_id')))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'voucher_settlements', filter: `company_id=eq.${company.id}` }, payload => scheduleVoucherRefresh(recordId(payload, 'settlement_voucher_id')))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'parties', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('parties'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'items', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('items'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'accounts', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('accounts'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'account_categories', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('account_categories'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'item_categories', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('item_categories'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pricing_rules', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('pricing'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'pricing_rule_slabs' }, () => scheduleResourceRefresh('pricing'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'companies', filter: `id=eq.${company.id}` }, () => scheduleResourceRefresh('company'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'company_modules', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('modules'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheque_banks', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('cheques'))
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'cheques', filter: `company_id=eq.${company.id}` }, () => scheduleResourceRefresh('cheques'))
       .subscribe()
 
     return () => {
@@ -193,9 +227,13 @@ export default function App() {
         window.clearTimeout(refreshTimer.current)
         refreshTimer.current = null
       }
+      if (resourceRefreshTimer.current) window.clearTimeout(resourceRefreshTimer.current)
+      if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
+      voucherIds.clear()
+      resourcesToRefresh.clear()
       supabase.removeChannel(channel)
     }
-  }, [userId, loadAll])
+  }, [userId, company?.id])
 
   useEffect(() => {
     const handleError = (event: ErrorEvent) => {

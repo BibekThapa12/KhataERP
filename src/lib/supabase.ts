@@ -1,7 +1,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { completeFetch } from '@/lib/completeFetch'
 import { withReadDeadline } from '@/lib/readDeadline'
-import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense, PricingRule } from '@/types'
+import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, CompanyAccountingSnapshot, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense, PricingRule } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type WritePerformanceTrace } from '@/lib/writePerformance'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
@@ -917,48 +917,73 @@ export async function fetchMasterChangeLogs(company_id: string): Promise<MasterC
 // ─── Vouchers ─────────────────────────────────────────────────────────────────
 
 export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
-  // Fetch children as top-level rows: embedded arrays have independent API caps.
-  // The parent join scopes children without requiring optional children to exist.
-  const children = <T extends { id: string }>(table: string, fields: string) =>
-    completeFetch<T>(table, async (from, to, signal) => {
-      const result = await supabase.from(table)
-        .select(`${fields},owner:vouchers!inner(company_id)`)
-        .eq('owner.company_id', company_id).order('id').range(from, to).abortSignal(signal)
-      return { ...result, data: result.data as unknown as T[] | null }
-    })
-  const headers = await completeFetch('Vouchers', (from, to, signal) => supabase.from('vouchers').select(VOUCHER_FIELDS).eq('company_id', company_id).order('id').range(from, to).abortSignal(signal))
-  const [lines, stockLines, invoiceItems, settlements] = await Promise.all([
-    children<VoucherLine & { id: string; voucher_id: string }>('voucher_lines', VOUCHER_LINE_FIELDS),
-    children<StockLine & { id: string; voucher_id: string }>('stock_lines', STOCK_LINE_FIELDS),
-    children<InvoiceItem & { id: string; voucher_id: string }>('invoice_items', INVOICE_ITEM_FIELDS),
-    completeFetch('Settlements', (from, to, signal) => supabase.from('voucher_settlements').select(VOUCHER_SETTLEMENT_FIELDS).eq('company_id', company_id).order('id').range(from, to).abortSignal(signal)),
-  ])
-  const after = await completeFetch('Voucher revisions', (from, to, signal) => supabase.from('vouchers').select('id,updated_at').eq('company_id', company_id).order('id').range(from, to).abortSignal(signal))
-  if (headers.length !== after.length || headers.some((row, index) => row.id !== after[index].id || row.updated_at !== after[index].updated_at)) {
-    throw new Error('Vouchers changed while loading. Please refresh.')
+  return (await fetchCompanyAccountingSnapshot(company_id)).vouchers
+}
+
+function snapshotChildCount(vouchers: Voucher[], field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') {
+  return vouchers.reduce((total, voucher) => total + (voucher[field]?.length || 0), 0)
+}
+
+/** One statement-consistent accounting snapshot. The RPC returns scalar JSON,
+ * so neither voucher headers nor nested child arrays are subject to API row caps. */
+export async function fetchCompanyAccountingSnapshot(company_id: string): Promise<CompanyAccountingSnapshot> {
+  const { data, error } = await withReadDeadline('Accounting snapshot', signal =>
+    supabase.rpc('get_company_accounting_snapshot', { p_company_id: company_id }).abortSignal(signal),
+    120_000,
+  )
+  if (error) throw error
+  const raw = data as unknown as (CompanyAccountingSnapshot & { access_denied?: boolean }) | null
+  if (!raw || raw.access_denied) throw new Error('Company accounting data is unavailable or access was denied.')
+  if (raw.company_id !== company_id || !raw.counts || !Array.isArray(raw.vouchers)) {
+    throw new Error('Company accounting snapshot was malformed.')
   }
-  const headerIds = new Set(headers.map(row => row.id))
-  if ([...lines, ...stockLines, ...invoiceItems].some(row => !headerIds.has(row.voucher_id)) || settlements.some(row => !headerIds.has(row.settlement_voucher_id))) {
-    throw new Error('Voucher child records could not be matched to the loaded history. Please refresh and run the integrity check.')
+  const ids = new Set<string>()
+  const vouchers = raw.vouchers.map(value => {
+    const voucher = normalizeVoucherDates(value) as Voucher
+    if (!voucher.id || ids.has(voucher.id) || voucher.company_id !== company_id) throw new Error('Company accounting snapshot contains duplicate or cross-company vouchers.')
+    ids.add(voucher.id)
+    for (const line of voucher.lines || []) if (line.voucher_id !== voucher.id) throw new Error('Ledger line is attached to the wrong voucher.')
+    for (const line of voucher.stock_lines || []) if (line.voucher_id !== voucher.id) throw new Error('Stock line is attached to the wrong voucher.')
+    for (const line of voucher.invoice_items || []) if (line.voucher_id !== voucher.id) throw new Error('Invoice item is attached to the wrong voucher.')
+    for (const line of voucher.settlements || []) if (line.company_id !== company_id || line.settlement_voucher_id !== voucher.id) throw new Error('Settlement is attached to the wrong company or voucher.')
+    return voucher
+  })
+  const actual = {
+    vouchers: vouchers.length,
+    voucher_lines: snapshotChildCount(vouchers, 'lines'),
+    stock_lines: snapshotChildCount(vouchers, 'stock_lines'),
+    invoice_items: snapshotChildCount(vouchers, 'invoice_items'),
+    settlements: snapshotChildCount(vouchers, 'settlements'),
   }
-  function group<T>(rows: T[], key: (row: T) => string) {
-    const map = new Map<string, T[]>()
-    for (const row of rows) {
-      const id = key(row)
-      const group = map.get(id) || []
-      group.push(row)
-      map.set(id, group)
-    }
-    return map
+  for (const key of Object.keys(actual) as Array<keyof typeof actual>) {
+    if (Number(raw.counts[key]) !== actual[key]) throw new Error(`Company accounting snapshot count mismatch: ${key}.`)
   }
-  const ledger = group(lines, row => row.voucher_id)
-  const stock = group(stockLines, row => row.voucher_id)
-  const invoices = group(invoiceItems, row => row.voucher_id)
-  const allocated = group(settlements, row => row.settlement_voucher_id)
-  return headers.map(header => normalizeVoucherDates({
-    ...header, lines: ledger.get(header.id) || [], stock_lines: stock.get(header.id) || [],
-    invoice_items: invoices.get(header.id) || [], settlements: allocated.get(header.id) || [],
-  }) as Voucher).sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq || b.id.localeCompare(a.id))
+  return {
+    company_id,
+    generated_at: raw.generated_at,
+    counts: actual,
+    vouchers: vouchers.sort((a, b) => b.date_bs_key - a.date_bs_key || b.seq - a.seq || b.id.localeCompare(a.id)),
+  }
+}
+
+export async function fetchVoucherBundles(company_id: string, voucherIds: string[]): Promise<Voucher[]> {
+  const ids = [...new Set(voucherIds.filter(Boolean))]
+  if (!ids.length) return []
+  const { data, error } = await withReadDeadline('Changed vouchers', signal => supabase
+    .from('vouchers')
+    .select(VOUCHER_WITH_CHILDREN_FIELDS)
+    .eq('company_id', company_id)
+    .in('id', ids)
+    .order('date_bs_key', { ascending: false })
+    .order('seq', { ascending: false })
+    .order('id', { ascending: false })
+    .abortSignal(signal))
+  if (error) throw error
+  return (data || []).map(row => normalizeVoucherDates(row) as Voucher)
+}
+
+export async function fetchVoucherBundle(company_id: string, voucherId: string): Promise<Voucher | null> {
+  return (await fetchVoucherBundles(company_id, [voucherId]))[0] || null
 }
 
 export async function createPartyWithLedgerAtomic(params: {
@@ -1230,12 +1255,13 @@ export async function updateDraftVoucher(
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
-export async function cancelVoucher(id: string, trace?: WritePerformanceTrace) {
-  const request = () => supabase.from('vouchers').update({ cancelled: true }).eq('id', id)
-  const { error } = trace
+export async function cancelVoucher(id: string, trace?: WritePerformanceTrace): Promise<Voucher> {
+  const request = async () => await supabase.from('vouchers').update({ cancelled: true }).eq('id', id).select(VOUCHER_WITH_CHILDREN_FIELDS).single()
+  const { data, error } = trace
     ? await trace.measure('voucher_cancel_update', request, { category: 'network_database', query: true, dbFunction: 'postgrest:vouchers.update' })
     : await request()
   if (error) throw error
+  return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
 export async function deleteVoucher(id: string) {

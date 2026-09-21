@@ -3082,3 +3082,316 @@ grant execute on function public.accounting_integrity_manifest(uuid) to authenti
 comment on function public.accounting_integrity_manifest(uuid) is
   'Read-only administrator company-scoped counts and voucher IDs for completeness diagnostics. Never repairs data.';
 -- END SYNCED MIGRATION: 202609200001_accounting_integrity_manifest.sql
+
+-- BEGIN SYNCED MIGRATION: 202609210001_company_accounting_snapshot.sql
+begin;
+
+-- A complete company accounting read in one PostgreSQL statement. Returning a
+-- scalar JSON document avoids PostgREST row limits while the explicit company
+-- predicate and membership check preserve tenant isolation.
+create or replace function public.get_company_accounting_snapshot(p_company_id uuid)
+returns jsonb
+language sql
+stable
+security definer
+set search_path = pg_catalog, public
+as $$
+  with authorized as materialized (
+    select p_company_id as company_id
+    where auth.uid() is not null
+      and public.is_company_member(p_company_id)
+      and exists (select 1 from public.companies where id = p_company_id)
+  ), scoped_vouchers as materialized (
+    select voucher.*
+    from public.vouchers voucher
+    join authorized access on access.company_id = voucher.company_id
+  ), ledger_rows as materialized (
+    select line.voucher_id,
+      jsonb_agg(to_jsonb(line) order by line.id) as rows,
+      count(*)::integer as row_count
+    from public.voucher_lines line
+    join scoped_vouchers voucher on voucher.id = line.voucher_id
+    group by line.voucher_id
+  ), stock_rows as materialized (
+    select line.voucher_id,
+      jsonb_agg(to_jsonb(line) order by line.id) as rows,
+      count(*)::integer as row_count
+    from public.stock_lines line
+    join scoped_vouchers voucher on voucher.id = line.voucher_id
+    group by line.voucher_id
+  ), invoice_rows as materialized (
+    select line.voucher_id,
+      jsonb_agg(to_jsonb(line) order by line.id) as rows,
+      count(*)::integer as row_count
+    from public.invoice_items line
+    join scoped_vouchers voucher on voucher.id = line.voucher_id
+    group by line.voucher_id
+  ), settlement_rows as materialized (
+    select settlement.settlement_voucher_id as voucher_id,
+      jsonb_agg(to_jsonb(settlement) order by settlement.id) as rows,
+      count(*)::integer as row_count
+    from public.voucher_settlements settlement
+    join scoped_vouchers voucher on voucher.id = settlement.settlement_voucher_id
+    where settlement.company_id = p_company_id
+    group by settlement.settlement_voucher_id
+  ), bundles as materialized (
+    select voucher.id,
+      voucher.date_bs_key,
+      voucher.seq,
+      to_jsonb(voucher) || jsonb_build_object(
+        'lines', coalesce(ledger.rows, '[]'::jsonb),
+        'stock_lines', coalesce(stock.rows, '[]'::jsonb),
+        'invoice_items', coalesce(invoice.rows, '[]'::jsonb),
+        'settlements', coalesce(settlement.rows, '[]'::jsonb)
+      ) as payload,
+      coalesce(ledger.row_count, 0) as ledger_count,
+      coalesce(stock.row_count, 0) as stock_count,
+      coalesce(invoice.row_count, 0) as invoice_count,
+      coalesce(settlement.row_count, 0) as settlement_count
+    from scoped_vouchers voucher
+    left join ledger_rows ledger on ledger.voucher_id = voucher.id
+    left join stock_rows stock on stock.voucher_id = voucher.id
+    left join invoice_rows invoice on invoice.voucher_id = voucher.id
+    left join settlement_rows settlement on settlement.voucher_id = voucher.id
+  )
+  select case
+    when not exists (select 1 from authorized) then
+      jsonb_build_object('access_denied', true)
+    else jsonb_build_object(
+      'company_id', p_company_id,
+      'generated_at', statement_timestamp(),
+      'counts', jsonb_build_object(
+        'vouchers', (select count(*) from bundles),
+        'voucher_lines', coalesce((select sum(ledger_count) from bundles), 0),
+        'stock_lines', coalesce((select sum(stock_count) from bundles), 0),
+        'invoice_items', coalesce((select sum(invoice_count) from bundles), 0),
+        'settlements', coalesce((select sum(settlement_count) from bundles), 0)
+      ),
+      'vouchers', coalesce((
+        select jsonb_agg(payload order by date_bs_key desc, seq desc, id desc)
+        from bundles
+      ), '[]'::jsonb)
+    )
+  end;
+$$;
+
+revoke all on function public.get_company_accounting_snapshot(uuid) from public, anon;
+grant execute on function public.get_company_accounting_snapshot(uuid) to authenticated;
+comment on function public.get_company_accounting_snapshot(uuid) is
+  'Returns one statement-consistent, company-scoped accounting snapshot after one membership check.';
+
+-- FOR ALL policies also participate in SELECT as permissive OR branches. Keep
+-- the same administrator write authorization without adding it to read plans.
+drop policy if exists vouchers_admin_write on public.vouchers;
+drop policy if exists vouchers_admin_insert on public.vouchers;
+drop policy if exists vouchers_admin_update on public.vouchers;
+drop policy if exists vouchers_admin_delete on public.vouchers;
+create policy vouchers_admin_insert on public.vouchers for insert
+  with check (public.is_company_admin(company_id));
+create policy vouchers_admin_update on public.vouchers for update
+  using (public.is_company_admin(company_id))
+  with check (public.is_company_admin(company_id));
+create policy vouchers_admin_delete on public.vouchers for delete
+  using (public.is_company_admin(company_id));
+
+drop policy if exists voucher_settlements_admin_write on public.voucher_settlements;
+drop policy if exists voucher_settlements_admin_insert on public.voucher_settlements;
+drop policy if exists voucher_settlements_admin_update on public.voucher_settlements;
+drop policy if exists voucher_settlements_admin_delete on public.voucher_settlements;
+create policy voucher_settlements_admin_insert on public.voucher_settlements for insert
+  with check (public.is_company_admin(company_id));
+create policy voucher_settlements_admin_update on public.voucher_settlements for update
+  using (public.is_company_admin(company_id))
+  with check (public.is_company_admin(company_id));
+create policy voucher_settlements_admin_delete on public.voucher_settlements for delete
+  using (public.is_company_admin(company_id));
+
+do $$
+declare table_name text;
+begin
+  foreach table_name in array array['voucher_lines', 'stock_lines', 'invoice_items'] loop
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_write', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_insert', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_update', table_name);
+    execute format('drop policy if exists %I on public.%I', table_name || '_admin_delete', table_name);
+    execute format(
+      'create policy %I on public.%I for insert with check (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id)))',
+      table_name || '_admin_insert', table_name
+    );
+    execute format(
+      'create policy %I on public.%I for update using (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id))) with check (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id)))',
+      table_name || '_admin_update', table_name
+    );
+    execute format(
+      'create policy %I on public.%I for delete using (exists (select 1 from public.vouchers voucher where voucher.id = voucher_id and public.is_company_admin(voucher.company_id)))',
+      table_name || '_admin_delete', table_name
+    );
+  end loop;
+end;
+$$;
+
+notify pgrst, 'reload schema';
+commit;
+
+-- END SYNCED MIGRATION: 202609210001_company_accounting_snapshot.sql
+
+-- BEGIN SYNCED MIGRATION: 202609210002_fix_voucher_number_double_increment.sql
+-- Allocate automatic voucher numbers exactly once.
+--
+-- The counter allocator already returns the newly reserved number. The
+-- write-latency migration replaced the former MAX() lookup but left the
+-- writer's old "+ 1" formatting in place, causing 2, 4, 6... numbering.
+-- Manual Journal numbers bypass both allocation and counter synchronization.
+begin;
+
+do $migration$
+declare
+  atomic_sql text;
+  patched_atomic_sql text;
+  document_sql text;
+  patched_document_sql text;
+  old_allocation text := $old$
+    select public.next_voucher_number(
+      target_company, target_type,
+      case when p_reset_numbering then coalesce(nullif(p_voucher->>'numbering_period', ''), 'all') else 'all' end
+    ) into highest_number;
+    generated_number := p_invoice_prefix || lpad((highest_number + 1)::text, 4, '0');
+$old$;
+  new_allocation text := $new$
+    if target_type = 'Journal' and coalesce((
+      select company.journal_numbering_mode
+      from public.companies company
+      where company.id = target_company
+    ), 'auto') = 'manual' then
+      generated_number := nullif(btrim(p_voucher->>'invoice_no'), '');
+      if generated_number is null then
+        raise exception 'Enter the Journal voucher number';
+      end if;
+    else
+      select public.next_voucher_number(
+        target_company, target_type,
+        case when p_reset_numbering then coalesce(nullif(p_voucher->>'numbering_period', ''), 'all') else 'all' end
+      ) into highest_number;
+      generated_number := p_invoice_prefix || lpad(highest_number::text, 4, '0');
+    end if;
+$new$;
+  old_document_call text := $old$
+  result := public.save_voucher_atomic(
+    p_voucher, p_lines, p_stock_lines, p_invoice_items, p_settlements,
+$old$;
+  new_document_call text := $new$
+  result := public.save_voucher_atomic(
+    case
+      when nullif(p_voucher->>'type', '') = 'Journal' and normalized_manual_number is not null
+        then jsonb_set(p_voucher, '{invoice_no}', to_jsonb(normalized_manual_number), true)
+      else p_voucher
+    end,
+    p_lines, p_stock_lines, p_invoice_items, p_settlements,
+$new$;
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into atomic_sql;
+  if atomic_sql is null then
+    raise exception 'save_voucher_atomic() is missing';
+  end if;
+
+  patched_atomic_sql := atomic_sql;
+  if position(old_allocation in patched_atomic_sql) > 0 then
+    patched_atomic_sql := replace(patched_atomic_sql, old_allocation, new_allocation);
+  elsif position('generated_number := p_invoice_prefix || lpad(highest_number::text, 4, ''0'');' in patched_atomic_sql) = 0
+    or position('journal_numbering_mode' in patched_atomic_sql) = 0 then
+    raise exception 'The deployed atomic voucher writer has an unsupported numbering structure';
+  end if;
+  if patched_atomic_sql is distinct from atomic_sql then
+    execute patched_atomic_sql;
+  end if;
+
+  select pg_get_functiondef(
+    'public.save_voucher_with_document_metadata_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb,text,text)'::regprocedure
+  ) into document_sql;
+  if document_sql is null then
+    raise exception 'save_voucher_with_document_metadata_atomic() is missing';
+  end if;
+
+  patched_document_sql := document_sql;
+  if position(old_document_call in patched_document_sql) > 0 then
+    patched_document_sql := replace(patched_document_sql, old_document_call, new_document_call);
+  elsif position('jsonb_set(p_voucher, ''{invoice_no}'', to_jsonb(normalized_manual_number), true)' in patched_document_sql) = 0 then
+    raise exception 'The deployed voucher document wrapper has an unsupported structure';
+  end if;
+  if patched_document_sql is distinct from document_sql then
+    execute patched_document_sql;
+  end if;
+end;
+$migration$;
+
+create or replace function public.sync_voucher_number_counter()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare parsed_number bigint;
+begin
+  if new.invoice_no is null then return new; end if;
+  if new.type = 'Journal' and coalesce((
+    select company.journal_numbering_mode
+    from public.companies company
+    where company.id = new.company_id
+  ), 'auto') = 'manual' then
+    return new;
+  end if;
+  parsed_number := nullif(substring(new.invoice_no from '([0-9]+)$'), '')::bigint;
+  if parsed_number is null then return new; end if;
+  insert into public.voucher_number_counters(company_id, voucher_type, numbering_period, last_number)
+  values (new.company_id, new.type, coalesce(new.numbering_period, 'all'), parsed_number)
+  on conflict (company_id, voucher_type, numbering_period)
+  do update set last_number = greatest(public.voucher_number_counters.last_number, excluded.last_number), updated_at = now();
+  insert into public.voucher_number_counters(company_id, voucher_type, numbering_period, last_number)
+  values (new.company_id, new.type, 'all', parsed_number)
+  on conflict (company_id, voucher_type, numbering_period)
+  do update set last_number = greatest(public.voucher_number_counters.last_number, excluded.last_number), updated_at = now();
+  return new;
+end;
+$$;
+
+revoke all on function public.sync_voucher_number_counter() from public, anon, authenticated;
+
+do $verification$
+declare
+  atomic_sql text;
+  document_sql text;
+  counter_sql text;
+  allocator_calls integer;
+begin
+  select pg_get_functiondef(
+    'public.save_voucher_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb)'::regprocedure
+  ) into atomic_sql;
+  select pg_get_functiondef(
+    'public.save_voucher_with_document_metadata_atomic(jsonb,jsonb,jsonb,jsonb,jsonb,uuid,text,boolean,integer,integer,text,jsonb,text,text)'::regprocedure
+  ) into document_sql;
+  select pg_get_functiondef('public.sync_voucher_number_counter()'::regprocedure)
+    into counter_sql;
+
+  allocator_calls := (
+    length(atomic_sql) - length(replace(atomic_sql, 'next_voucher_number', ''))
+  ) / length('next_voucher_number');
+
+  if allocator_calls <> 1
+    or position('lpad((highest_number + 1)' in atomic_sql) > 0
+    or position('lpad(highest_number::text, 4, ''0'')' in atomic_sql) = 0 then
+    raise exception 'Voucher automatic numbering still allocates incorrectly';
+  end if;
+  if position('journal_numbering_mode' in atomic_sql) = 0
+    or position('jsonb_set(p_voucher, ''{invoice_no}'', to_jsonb(normalized_manual_number), true)' in document_sql) = 0
+    or position('journal_numbering_mode' in counter_sql) = 0 then
+    raise exception 'Manual Journal numbering still modifies the automatic sequence';
+  end if;
+end;
+$verification$;
+
+notify pgrst, 'reload schema';
+commit;
+
+-- END SYNCED MIGRATION: 202609210002_fix_voucher_number_double_increment.sql
