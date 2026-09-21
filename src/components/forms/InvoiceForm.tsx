@@ -27,6 +27,7 @@ import type { Voucher } from '@/types'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 import { repriceSalesLines } from '@/lib/pricing'
 import type { PricingSnapshot } from '@/types'
+import { applyInvoiceQuantityInput, releaseInvoicePricingLocks } from '@/lib/invoiceLineEditing'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -146,7 +147,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       })) : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
-        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined }
+        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined, pricing_locked: isSales }
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
@@ -162,14 +163,14 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (open) {
       window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     }
-  }, [open, voucher, vatEnabled, items, parties, company, type])
+  }, [open, voucher, vatEnabled, items, parties, company, type, isSales])
 
   useEffect(() => {
     if (!open) {
       pricingReadyFormRef.current = null
       return
     }
-    if (!isSales || voucher?.status === 'Completed') return
+    if (!isSales) return
     const formIdentity = `${type}:${voucher?.id || 'new'}`
     // Opening a draft queues its persisted lines in the hydration effect above.
     // Do not let this effect overwrite that queued state with the previous
@@ -232,12 +233,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     } else if (field === 'rate') {
       next[idx] = { ...next[idx], rate: value, amount_input: undefined, price_overridden: isSales, pricing_snapshot: next[idx].pricing_snapshot ? { ...next[idx].pricing_snapshot!, price_overridden: true } : undefined }
     } else if (field === 'qty') {
-      const qty = Number(value)
-      const enteredAmount = next[idx].amount_input
-      const derivedRate = enteredAmount !== undefined && enteredAmount !== ''
-        ? invoiceRateFromAmount(Number(enteredAmount), qty)
-        : null
-      next[idx] = { ...next[idx], qty, ...(derivedRate !== null ? { rate: String(derivedRate) } : {}) }
+      next[idx] = applyInvoiceQuantityInput(next[idx], value)
+      if (isSales) {
+        setLines(releaseInvoicePricingLocks(next))
+        return
+      }
     } else {
       next[idx] = { ...next[idx], [field]: Number(value) }
     }

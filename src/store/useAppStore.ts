@@ -427,7 +427,7 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
   if (!params.return_reason.trim()) throw new Error('Enter a return reason')
   const partyAccountId = original?.party_account_id || params.party_account_id
   if (params.settlement_mode === 'party' && !partyAccountId) throw new Error('A cash invoice cannot be adjusted through a party ledger')
-  if (!params.items.length || params.items.some(item => !item.item_id || !Number.isFinite(item.qty) || item.qty <= 0 || !Number.isFinite(item.rate) || item.rate < 0)) throw new Error('Enter at least one item with a positive quantity and a non-negative rate')
+  if (!params.items.length || params.items.some(item => !item.item_id || !Number.isFinite(item.qty) || item.qty <= 0 || !Number.isFinite(item.rate) || item.rate < 0 || (item.amount != null && (!Number.isFinite(item.amount) || item.amount < 0)))) throw new Error('Enter at least one item with a positive quantity and non-negative rate and amount')
 
   if (original) {
     for (const item of params.items) {
@@ -437,8 +437,10 @@ function validateReturnRequest(company: Company, parties: Party[], items: Item[]
         .filter(voucher => voucher.id !== editingId && !voucher.cancelled && voucher.type === params.type && voucher.original_voucher_id === original.id)
         .flatMap(voucher => voucher.invoice_items || [])
         .filter(line => line.source_invoice_item_id === item.source_invoice_item_id)
-        .reduce((sum, line) => sum + line.qty, 0)
-      if (item.qty + alreadyReturned > source.qty + 0.0001) throw new Error(`Return quantity for ${item.item_name || item.item_id} exceeds the remaining quantity`)
+        .reduce((sum, line) => sum + (line.base_qty ?? toBaseQty(line.qty, line.conversion_factor || 1)), 0)
+      const requestedBaseQty = toBaseQty(item.qty, item.conversion_factor || 1)
+      const sourceBaseQty = source.base_qty ?? toBaseQty(source.qty, source.conversion_factor || 1)
+      if (requestedBaseQty + alreadyReturned > sourceBaseQty + 0.0001) throw new Error(`Return quantity for ${item.item_name || item.item_id} exceeds the remaining quantity`)
     }
   }
 

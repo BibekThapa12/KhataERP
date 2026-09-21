@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator, SlidersHorizontal
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -64,12 +64,13 @@ const NAV_SECTIONS: {
       { to: '/transactions/income', label: 'Add Income', Icon: TrendingUp },
       { to: '/transactions/expenses', label: 'Add Expense', Icon: TrendingDown },
       {
-        kind: 'group', id: 'other-transactions', label: 'Other Transactions', Icon: Files,
+        kind: 'group', id: 'other-transactions', label: 'Other Vouchers', Icon: Files,
         children: [
           { to: '/transactions/contra', label: 'Contra', Icon: ArrowLeftRight },
           { to: '/journal', label: 'Journal Entries', Icon: BookOpen },
           { to: '/sales-returns', label: 'Sales Returns', Icon: Undo2 },
           { to: '/purchase-returns', label: 'Purchase Returns', Icon: Redo2 },
+          { to: '/transactions/stock-adjustments', label: 'Stock Adjustments', Icon: SlidersHorizontal },
         ],
       },
     ],

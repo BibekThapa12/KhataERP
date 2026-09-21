@@ -28,6 +28,7 @@ const ContraPage = lazy(() => import('@/pages/Contra').then(m => ({ default: m.C
 const DraftVouchersPage = lazy(() => import('@/pages/DraftVouchers').then(m => ({ default: m.DraftVouchersPage })))
 const PartiesPage = lazy(() => import('@/pages/Parties').then(m => ({ default: m.PartiesPage })))
 const ItemsPage = lazy(() => import('@/pages/Items').then(m => ({ default: m.ItemsPage })))
+const StockAdjustmentsPage = lazy(() => import('@/pages/StockAdjustments').then(m => ({ default: m.StockAdjustmentsPage })))
 const AccountsPage = lazy(() => import('@/pages/Accounts').then(m => ({ default: m.AccountsPage })))
 const MastersPage = lazy(() => import('@/pages/Masters').then(m => ({ default: m.MastersPage })))
 const SlabPricingPage = lazy(() => import('@/pages/SlabPricing').then(m => ({ default: m.SlabPricingPage })))
@@ -305,6 +306,7 @@ export default function App() {
             <Route path="transactions/income" element={<IncomeEntriesPage />} />
             <Route path="transactions/expenses" element={<ExpenseEntriesPage />} />
             <Route path="transactions/contra" element={<ContraPage />} />
+            <Route path="transactions/stock-adjustments" element={<StockAdjustmentsPage />} />
             <Route path="transactions/drafts" element={<DraftVouchersPage />} />
             <Route path="parties" element={<PartiesPage />} />
             <Route path="items" element={<ItemsPage />} />

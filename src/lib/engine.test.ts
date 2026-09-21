@@ -245,6 +245,43 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(result.lines as VoucherLine[]).valid).toBe(true)
   })
 
+  it('uses an explicitly entered return amount as the authoritative line value', () => {
+    const result = buildReturnVoucherData({
+      type: 'Purchase Return',
+      party_account_id: 'supplier',
+      vat_rate: 13,
+      items: [{ item_id: 'tea', item_name: 'Tea', qty: 2, rate: 175, amount: 350, cost_rate: 60, conversion_factor: 1 }],
+      settlement_mode: 'party',
+      restock_items: true,
+      stock_condition: 'saleable',
+      system_accounts: { purchase_return: 'purchase-return', vat_receivable: 'vat-receivable' },
+    })
+
+    expect(result).toMatchObject({ subtotal: 350, discount: 0, vat_rate: 13, vat_amount: 45.5, total: 395.5 })
+    expect(result.invoice_items[0]).toMatchObject({ amount: 350, taxable_amount: 350, vat_amount: 45.5 })
+    expect(validateBalanced(result.lines as VoucherLine[]).valid).toBe(true)
+  })
+
+  it('recognizes a full return when the selected unit differs from the original unit', () => {
+    const original = {
+      id: 'invoice-units', company_id: 'c', type: 'Sales', date_bs: '2083-04-01', date_bs_key: 20830401, seq: 1,
+      party_account_id: 'customer', is_cash: false, subtotal: 1_000, discount: 100, vat_rate: 0, total: 900, cancelled: false,
+      invoice_items: [{ id: 'source-units', voucher_id: 'invoice-units', item_id: 'tea', qty: 10, rate: 100, amount: 1_000, base_qty: 10, conversion_factor: 1 }],
+    } as Voucher
+    const result = buildReturnVoucherData({
+      type: 'Sales Return',
+      original,
+      items: [{ source_invoice_item_id: 'source-units', item_id: 'tea', qty: 240, rate: 4.166667, amount: 1_000, base_qty: 10, conversion_factor: 24, cost_rate: 60 }],
+      settlement_mode: 'party',
+      restock_items: true,
+      stock_condition: 'saleable',
+      system_accounts: { sales_return: 'sales-return' },
+    })
+
+    expect(result).toMatchObject({ subtotal: 1_000, discount: 100, total: 900 })
+    expect(result.stock_lines[0]).toMatchObject({ qty: 10, direction: 'in' })
+  })
+
   it('resets nominal accounts at fiscal year start and carries prior results into equity', () => {
     const chart = defaultChartOfAccounts('c').map(account => ({ ...account, balance: 0 })) as Account[]
     const cash = chart.find(account => account.id === 'c:cash')!

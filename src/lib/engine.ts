@@ -617,6 +617,7 @@ export interface ReturnItemInput {
   unit?: string
   qty: number
   rate: number
+  amount?: number
   cost_rate: number
   entry_unit?: string
   conversion_factor?: number
@@ -638,12 +639,12 @@ export interface ReturnVoucherParams {
 }
 
 export function buildReturnVoucherData(p: ReturnVoucherParams) {
-  const subtotal = round2(p.items.reduce((sum, item) => sum + item.qty * item.rate, 0))
+  const subtotal = invoiceSubtotal(p.items)
   const originalSubtotal = p.original?.subtotal || (p.original?.invoice_items || []).reduce((sum, item) => sum + (item.amount ?? item.qty * item.rate), 0) || subtotal
   const originalDiscount = p.original?.discount || 0
   const vatRate = p.original ? (p.original.vat_rate || 0) : (p.vat_rate || 0)
   let invoice_items = p.items.map(item => {
-    const gross = round2(item.qty * item.rate)
+    const gross = round6(item.amount ?? item.qty * item.rate)
     const discount_amount = originalSubtotal > 0 ? round2(originalDiscount * gross / originalSubtotal) : 0
     const taxable_amount = round2(gross - discount_amount)
     const vat_amount = round2(taxable_amount * vatRate / 100)
@@ -652,7 +653,9 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
   const fullOriginalReturn = !!p.original && (p.original.invoice_items || []).length === invoice_items.length &&
     (p.original.invoice_items || []).every(source => {
       const returned = invoice_items.find(item => item.source_invoice_item_id === source.id)
-      return returned && Math.abs(returned.qty - source.qty) < 0.0001
+      const sourceBaseQty = source.base_qty ?? toBaseQty(source.qty, source.conversion_factor || 1)
+      const returnedBaseQty = returned && (returned.base_qty ?? toBaseQty(returned.qty, returned.conversion_factor || 1))
+      return returned && Math.abs((returnedBaseQty || 0) - sourceBaseQty) < 0.0001
     })
   if (fullOriginalReturn && invoice_items.length) {
     const allocatedDiscount = round2(invoice_items.reduce((sum, item) => sum + item.discount_amount, 0))

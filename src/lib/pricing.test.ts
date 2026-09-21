@@ -32,6 +32,62 @@ describe('Sales slab pricing', () => {
     expect(dropped[0].rate).toBe(240)
   })
 
+  it('drops from the ten-unit slab to the lower slab when quantity becomes nine', () => {
+    const itemRule = rule({ id: 'item-rule', scope: 'ITEM', item_id: 'a', category_id: null, quantity_unit: 'CS', slabs: [
+      { id: 's1', pricing_rule_id: 'item-rule', min_quantity: 1, rate: 230 },
+      { id: 's10', pricing_rule_id: 'item-rule', min_quantity: 10, rate: 200 },
+    ] })
+    const atTen = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 10, rate: 240 }], items, categories, rules: [itemRule], dateBs: '2083-05-01' })
+    const atNine = repriceSalesLines({ lines: [{ ...atTen[0], key: '1', qty: 9 }], items, categories, rules: [itemRule], dateBs: '2083-05-01' })
+
+    expect(atTen[0].pricing_slab_id).toBe('s10')
+    expect(atTen[0].rate).toBe(200)
+    expect(atNine[0].pricing_slab_id).toBe('s1')
+    expect(atNine[0].rate).toBe(230)
+  })
+
+  it('restores the normal selling rate and clears stale slab metadata below the first threshold', () => {
+    const itemRule = rule({ id: 'item-rule', scope: 'ITEM', item_id: 'a', category_id: null, quantity_unit: 'CS', slabs: [
+      { id: 's10', pricing_rule_id: 'item-rule', min_quantity: 10, rate: 200 },
+    ] })
+    const result = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 9, rate: 240, pricing_rule_id: 'item-rule', pricing_slab_id: 's10', calculated_rate: 200 } as never], items, categories, rules: [itemRule], dateBs: '2083-05-01' })
+
+    expect(result[0].rate).toBe(240)
+    expect(result[0].pricing_rule_id).toBeUndefined()
+    expect(result[0].pricing_slab_id).toBeUndefined()
+    expect(result[0].calculated_rate).toBeUndefined()
+  })
+
+  it('recalculates category slabs downward across all participating lines', () => {
+    const categoryPricing = rule({ slabs: [
+      { id: 's1', pricing_rule_id: 'category-rule', min_quantity: 1, rate: 10 },
+      { id: 's100', pricing_rule_id: 'category-rule', min_quantity: 100, rate: 8 },
+    ] })
+    const result = repriceSalesLines({ lines: [
+      { key: '1', item_id: 'a', qty: 3, rate: 192 },
+      { key: '2', item_id: 'b', qty: 2, rate: 96 },
+    ], items, categories, rules: [categoryPricing], dateBs: '2083-05-01' })
+
+    expect(result[0].pricing_snapshot?.qualifying_quantity).toBe(96)
+    expect(result[0].pricing_slab_id).toBe('s1')
+    expect(result[0].rate).toBe(240)
+    expect(result[1].pricing_slab_id).toBe('s1')
+    expect(result[1].rate).toBe(120)
+  })
+
+  it('keeps a manual rate while refreshing its lower-slab metadata', () => {
+    const itemRule = rule({ id: 'item-rule', scope: 'ITEM', item_id: 'a', category_id: null, quantity_unit: 'CS', slabs: [
+      { id: 's1', pricing_rule_id: 'item-rule', min_quantity: 1, rate: 230 },
+      { id: 's10', pricing_rule_id: 'item-rule', min_quantity: 10, rate: 200 },
+    ] })
+    const result = repriceSalesLines({ lines: [{ key: '1', item_id: 'a', qty: 9, rate: 215, price_overridden: true }], items, categories, rules: [itemRule], dateBs: '2083-05-01' })
+
+    expect(result[0].rate).toBe(215)
+    expect(result[0].calculated_rate).toBe(230)
+    expect(result[0].pricing_slab_id).toBe('s1')
+    expect(result[0].pricing_snapshot?.price_overridden).toBe(true)
+  })
+
   it('combines compatible descendant items in the category rule unit', () => {
     const result = repriceSalesLines({ lines: [
       { key: '1', item_id: 'a', qty: 5, rate: 240 },
