@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 import {
-  Activity, AlertTriangle, ArrowLeft, Building2, CheckCircle2, ChevronDown, Database,
+  Activity, AlertTriangle, ArrowLeft, Building2, CheckCircle2, Database,
   Copy, Download, FileText, Grid2X2, HardDrive, KeyRound, ListChecks, Loader2, Mail, NotebookText, PackageCheck,
   RefreshCcw, ShieldCheck, Trash2, UserRound, Users,
 } from 'lucide-react'
@@ -9,6 +10,7 @@ import {
   clearDeveloperErrorLogs,
   deleteDeveloperCompany,
   fetchDeveloperDashboardData,
+  fetchDeveloperSystemOverview,
   fetchDeveloperSchemaStatus,
   fetchDeveloperUserCompanyLicenses,
   fetchDeveloperBackupStatus,
@@ -31,12 +33,12 @@ import {
   type DeveloperCompanyBackupStatus,
   type DeveloperBackupAgent,
   type DeveloperPerformanceSummary,
+  type DeveloperSystemOverview,
 } from '@/lib/supabase'
 import { getPerformanceIngestionStatus, subscribePerformanceIngestionStatus, type PerformanceIngestionStatus } from '@/lib/writePerformance'
 import { fmtDate } from '@/lib/utils'
-import { publicErrorMessage } from '@/lib/security'
-import { recomputeStock } from '@/lib/engine'
-import { PageContent, PageHeader } from '@/components/layout/PageHeader'
+import { publicErrorMessage, reportClientError, userFacingErrorMessage } from '@/lib/security'
+import { PageContent } from '@/components/layout/PageHeader'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -50,6 +52,7 @@ import { notifySuccess } from '@/lib/notifications'
 import { buildPortableCompanyBackup, serializePortableBackup, uniqueBackupNames } from '@/lib/portableBackup'
 import { downloadBackupZip, ensureDirectoryPermission, loadBackupDirectoryHandle, saveBackupDirectoryHandle, supportsDirectoryBackup, writeCompanyBackup, type DirectoryHandleLike } from '@/lib/developerBackupStorage'
 import { companyBillingStatus, companyBillingTooltip, companyPlanExpiryDateInput, companyRemainingDays } from '@/lib/billing'
+import { canonicalizeModuleEntitlements, dedupeModules, getBackupLocationLabel } from '@/lib/developerDashboard'
 
 type DeveloperEvent = {
   id: string
@@ -71,11 +74,14 @@ interface DeveloperData {
 }
 
 type SupabaseStatus = Awaited<ReturnType<typeof checkSupabaseConnectionStatus>>
-type DeveloperTab = 'overview' | 'license' | 'companies' | 'modules' | 'users' | 'billing' | 'logs' | 'notes' | 'performance' | 'system'
+type DeveloperView = 'overview' | 'users' | 'licenses' | 'backups' | 'diagnostics'
+type DeveloperTab = 'overview' | 'companies' | 'license-billing' | 'activity' | 'settings'
 type DeveloperUserFilter = 'all' | 'expiring' | 'errors' | 'suspended' | 'limit'
 
 const today = new Date()
 const PAGE_SIZE = 8
+
+const developerViews = new Set<DeveloperView>(['overview', 'users', 'licenses', 'backups', 'diagnostics'])
 
 const daysAgo = (date?: string) => {
   if (!date) return Infinity
@@ -244,7 +250,7 @@ function DeveloperUserList({
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
   const pageRows = filtered.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE)
 
-  useEffect(() => setPage(1), [query])
+  useEffect(() => setPage(1), [query, activeFilter])
 
   return (
     <Card className="h-fit lg:sticky lg:top-4">
@@ -258,6 +264,11 @@ function DeveloperUserList({
         <div className="relative">
           <Mail className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input value={query} onChange={event => setQuery(event.target.value)} placeholder="Search users by name, email..." className="pl-8" />
+        </div>
+        <div className="flex flex-wrap gap-1" aria-label="User status filters">
+          {(['all', 'expiring', 'errors', 'suspended', 'limit'] as DeveloperUserFilter[]).map(filter => (
+            <button key={filter} type="button" aria-pressed={activeFilter === filter} onClick={() => onFilterChange(filter)} className={`rounded-full border px-2.5 py-1 text-xs capitalize transition-colors ${activeFilter === filter ? 'border-primary bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted'}`}>{filter === 'limit' ? 'At limit' : filter}</button>
+          ))}
         </div>
       </CardHeader>
       <CardContent className="space-y-2 p-4 pt-0">
@@ -290,6 +301,8 @@ function DeveloperKpiStrip({
   events,
   activeFilter,
   systemLoaded,
+  systemLoading,
+  systemError,
   onFilter,
   onErrors,
 }: {
@@ -298,6 +311,8 @@ function DeveloperKpiStrip({
   events: DeveloperEvent[]
   activeFilter: DeveloperUserFilter
   systemLoaded: boolean
+  systemLoading: boolean
+  systemError: string
   onFilter: (filter: DeveloperUserFilter) => void
   onErrors: () => void
 }) {
@@ -327,8 +342,8 @@ function DeveloperKpiStrip({
     {
       key: 'errors',
       title: 'Recent Errors',
-      value: systemLoaded ? String(errorEvents.length) : 'Load',
-      detail: latestErrorCompany ? latestErrorCompany.name : systemLoaded ? 'no company errors' : 'open system diagnostics',
+      value: systemLoading ? 'Checking…' : systemError ? 'Unavailable' : systemLoaded ? String(errorEvents.length) : 'Not checked',
+      detail: latestErrorCompany ? latestErrorCompany.name : systemError ? 'select to retry diagnostics' : systemLoaded ? 'no errors recorded' : 'select to check diagnostics',
       Icon: AlertTriangle,
       onClick: onErrors,
     },
@@ -552,7 +567,7 @@ function CompanySupportEditor({ company, onSaved }: { company: Company; onSaved:
         <div className="space-y-1.5"><Label>Plan Type</Label><SearchableSelect value={plan} onValueChange={setPlan} options={[{ value: 'free', label: 'Free' }, { value: 'trial', label: 'Trial' }, { value: 'paid', label: 'Paid' }, { value: 'expired', label: 'Expired' }]} /></div>
         <div className="space-y-1.5"><Label>Support Level</Label><SearchableSelect value={support} onValueChange={setSupport} options={[{ value: 'normal', label: 'Normal' }, { value: 'needs_help', label: 'Needs help' }, { value: 'blocked', label: 'Blocked' }]} /></div>
         {(plan === 'trial' || plan === 'paid') && <div className="space-y-1.5"><Label>{plan === 'paid' ? 'Paid Until' : 'Trial Ends'}{plan === 'trial' && ' *'}</Label><Input type="date" value={planEndsAt} onChange={event => setPlanEndsAt(event.target.value)} /><p className="text-xs text-muted-foreground">{plan === 'paid' ? 'Leave blank for lifetime paid access.' : 'Required. Trial access becomes read-only after this deadline.'}</p></div>}
-        <div className="rounded-md border bg-muted/20 p-3 text-sm"><MetricLine label="Effective Status" value={<Badge variant={companyBillingStatus(company) === 'expired' ? 'destructive' : 'outline'} className="capitalize">{companyBillingStatus(company)}</Badge>} /><MetricLine label="Remaining" value={companyRemainingDays(company) === null ? 'No expiry' : `${Math.max(companyRemainingDays(company) || 0, 0)} days`} /><p className="mt-2 text-xs text-muted-foreground">{companyBillingTooltip(company)}</p></div>
+        <div className="rounded-md border bg-muted/20 p-3 text-sm"><MetricLine label="Company access status" value={<Badge variant={companyBillingStatus(company) === 'expired' ? 'destructive' : 'outline'} className="capitalize">{companyBillingStatus(company)}</Badge>} /><MetricLine label="Company access period" value={companyRemainingDays(company) === null ? 'Lifetime / no company expiry' : `${Math.max(companyRemainingDays(company) || 0, 0)} days remaining`} /><p className="mt-2 text-xs text-muted-foreground">This company access period is separate from the account-level license expiry. {companyBillingTooltip(company)}</p></div>
         <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={suspended} onChange={event => setSuspended(event.target.checked)} />Suspended</label>
       </div>
     </DashboardCard>
@@ -634,11 +649,14 @@ function CompanyDangerActions({ company, data, onSaved }: { company?: Company; d
   }
 
   return (
-    <div className="flex flex-wrap justify-between gap-3 rounded-lg border bg-background p-3">
-      <Button variant="outline" onClick={suspendCompany} disabled={company.suspended}>Suspend Company</Button>
+    <div className="rounded-lg border border-red-200 bg-red-50/50 p-5">
+      <div className="mb-4"><h3 className="font-semibold text-red-950">Danger zone — {company.name}</h3><p className="mt-1 text-sm text-red-800">These actions affect this company only. Export a backup before permanent deletion.</p></div>
+      <div className="flex flex-wrap justify-between gap-3">
+      <Button variant="outline" onClick={suspendCompany} disabled={company.suspended}>{company.suspended ? `${company.name} is suspended` : `Suspend ${company.name}`}</Button>
       <div className="flex flex-wrap gap-2">
-        <Button variant="outline" onClick={exportData}>Export Data</Button>
-        <Button variant="destructive" onClick={exportAndDelete} disabled={deleting}>{deleting ? 'Deleting...' : 'Delete Company'}</Button>
+        <Button variant="outline" onClick={exportData}>Export {company.name}</Button>
+        <Button variant="destructive" onClick={exportAndDelete} disabled={deleting}>{deleting ? 'Deleting...' : `Delete ${company.name}`}</Button>
+      </div>
       </div>
     </div>
   )
@@ -648,13 +666,13 @@ function CompanySelector({ companies, selectedCompanyId, onSelect }: { companies
   if (companies.length <= 1) return null
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Managed company</span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Selected company</span>
       <SearchableSelect className="w-full sm:w-72" value={selectedCompanyId || ''} onValueChange={onSelect} options={companies.map(company => ({ value: company.id, label: company.name, searchText: `${company.phone || ''} ${company.address || ''}` }))} />
     </div>
   )
 }
 
-function OverviewTab({ row, data, selectedCompany, onSaved, onTab }: { row: DeveloperUserCompanyLicense; data?: DeveloperData; selectedCompany?: Company; onSaved: () => void; onTab: (tab: DeveloperTab) => void }) {
+function OverviewTab({ row, data, selectedCompany, onTab }: { row: DeveloperUserCompanyLicense; data?: DeveloperData; selectedCompany?: Company; onTab: (tab: DeveloperTab) => void }) {
   const companies = data?.companies || []
   const vouchers = data?.vouchers || []
   const parties = data?.parties || []
@@ -665,21 +683,21 @@ function OverviewTab({ row, data, selectedCompany, onSaved, onTab }: { row: Deve
     const value = voucher.created_at || voucher.date
     return !latest || new Date(value).getTime() > new Date(latest).getTime() ? value : latest
   }, undefined)
-  const enabledModules = (data?.companyModules || []).filter(entry => entry.is_enabled)
+  const enabledModules = canonicalizeModuleEntitlements(data?.modules || [], data?.companyModules || []).filter(entry => entry.is_enabled)
 
   return (
     <div className="space-y-4">
-      <div className="grid gap-4 xl:grid-cols-3">
-        <DashboardCard title="License Information" Icon={ShieldCheck} action={<Button size="sm" variant="outline" onClick={() => onTab('license')}>Edit License</Button>}>
-          <MetricLine label="Current Plan" value={<Badge title={companyBillingTooltip(selectedCompany)} variant={statusVariant(companyBillingStatus(selectedCompany))} className="capitalize">{companyBillingStatus(selectedCompany)}</Badge>} />
-          <MetricLine label="Status" value={<Badge variant={statusVariant(license.license_status)}>{license.license_status}</Badge>} />
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <DashboardCard title="Account License" Icon={ShieldCheck} action={<Button size="sm" variant="outline" onClick={() => onTab('license-billing')}>Edit license</Button>}>
+          <MetricLine label="Account license status" value={<Badge variant={statusVariant(license.license_status)}>{license.license_status}</Badge>} />
           <MetricLine label="Maximum Companies" value={license.unlimited_companies ? 'Unlimited' : license.max_companies} />
           <MetricLine label="Companies Used" value={license.current_companies} />
           <MetricLine label="Remaining" value={license.unlimited_companies ? 'Unlimited' : license.remaining_companies ?? 0} />
           <MetricLine label="Company Creation" value={license.company_creation_enabled ? 'Enabled' : 'Disabled'} />
-          <MetricLine label="Expires On" value={license.expires_at ? fmtDate(license.expires_at) : 'No expiry'} />
+          <MetricLine label="Account license expires" value={license.expires_at ? fmtDate(license.expires_at) : 'No account expiry'} />
+          {selectedCompany && <div className="mt-2 rounded-md border bg-muted/20 p-3"><MetricLine label={`${selectedCompany.name} access`} value={<Badge title={companyBillingTooltip(selectedCompany)} variant={statusVariant(companyBillingStatus(selectedCompany))} className="capitalize">{companyBillingStatus(selectedCompany)}</Badge>} /><p className="mt-2 text-xs text-muted-foreground">Company billing access is managed separately from the account license above.</p></div>}
         </DashboardCard>
-        <DashboardCard title={`Companies (${companies.length})`} Icon={Building2} action={<Button size="sm" variant="outline" onClick={() => onTab('license')}>Add Company</Button>}>
+        <DashboardCard title={`Companies (${companies.length})`} Icon={Building2} action={<Button size="sm" variant="outline" onClick={() => onTab('companies')}>Manage companies</Button>}>
           {companies.slice(0, 4).map((company, index) => (
             <div key={company.id} className="flex items-center justify-between gap-3 rounded-md border px-3 py-2">
               <div className="min-w-0">
@@ -692,22 +710,20 @@ function OverviewTab({ row, data, selectedCompany, onSaved, onTab }: { row: Deve
           {!companies.length && <p className="text-sm text-muted-foreground">No companies loaded for this user.</p>}
           <Button size="sm" variant="link" className="px-0" onClick={() => onTab('companies')}>View All Companies</Button>
         </DashboardCard>
-        <DashboardCard title="Usage Summary" Icon={Activity} action={<Button size="sm" variant="link" className="px-0" onClick={() => onTab('logs')}>View Detailed Usage</Button>}>
+      </div>
+      <div className="grid items-start gap-4 xl:grid-cols-2">
+        <DashboardCard title="Usage Summary" Icon={Activity} action={<Button size="sm" variant="link" className="px-0" onClick={() => onTab('activity')}>View activity</Button>}>
           <MetricLine label="Total Vouchers" value={vouchers.length} />
           <MetricLine label="Total Parties" value={parties.length} />
           <MetricLine label="Total Items" value={items.length} />
           <MetricLine label="Last Activity" value={lastActivity ? fmtDate(lastActivity) : 'No activity'} />
           <MetricLine label="Event Logs" value={events.length} />
         </DashboardCard>
-      </div>
-      <div className="grid gap-4 xl:grid-cols-3">
-        <DashboardCard title="Modules" Icon={Grid2X2} action={<Button size="sm" variant="outline" onClick={() => onTab('modules')}>Configure</Button>}>
+        <DashboardCard title="Modules" Icon={Grid2X2} action={<Button size="sm" variant="outline" onClick={() => onTab('companies')}>Configure</Button>}>
           {enabledModules.slice(0, 6).map(entry => <div key={entry.id} className="flex items-center gap-2 text-sm"><CheckCircle2 className="h-4 w-4 text-emerald-600" />{entry.module?.name || entry.module_id}</div>)}
           {!enabledModules.length && <p className="text-sm text-muted-foreground">No enabled modules for these companies.</p>}
-          <Button size="sm" variant="link" className="px-0" onClick={() => onTab('modules')}>View All Modules</Button>
+          <Button size="sm" variant="link" className="px-0" onClick={() => onTab('companies')}>View all modules</Button>
         </DashboardCard>
-        {selectedCompany && <CompanySupportEditor company={selectedCompany} onSaved={onSaved} />}
-        <DeveloperNotesCard company={selectedCompany} onSaved={onSaved} />
       </div>
     </div>
   )
@@ -743,28 +759,29 @@ function CompaniesTab({ data, modules, onSaved }: { data?: DeveloperData; module
         </Card>
       ))}
       {!data?.companies.length && <Card><CardContent className="p-8 text-center text-sm text-muted-foreground">No companies found for this user.</CardContent></Card>}
-      {modulesCompany && <CompanyModulesDialog company={modulesCompany} modules={modules} entitlements={(data?.companyModules || []).filter(entry => entry.company_id === modulesCompany.id)} open={!!modulesCompany} onClose={() => setModulesCompany(null)} onSaved={onSaved} />}
+      {modulesCompany && <CompanyModulesDialog company={modulesCompany} modules={dedupeModules(modules)} entitlements={canonicalizeModuleEntitlements(modules, (data?.companyModules || []).filter(entry => entry.company_id === modulesCompany.id))} open={!!modulesCompany} onClose={() => setModulesCompany(null)} onSaved={onSaved} />}
     </div>
   )
 }
 
 function ModulesTab({ data, modules, onSaved }: { data?: DeveloperData; modules: AppModule[]; onSaved: () => void }) {
   const [modulesCompany, setModulesCompany] = useState<Company | null>(null)
+  const uniqueCatalogue = dedupeModules(modules)
   return (
     <div className="grid gap-4 xl:grid-cols-2">
       {(data?.companies || []).map(company => {
-        const entitlements = (data?.companyModules || []).filter(entry => entry.company_id === company.id)
+        const entitlements = canonicalizeModuleEntitlements(modules, (data?.companyModules || []).filter(entry => entry.company_id === company.id))
         return (
           <DashboardCard key={company.id} title={company.name} Icon={PackageCheck} action={<Button size="sm" variant="outline" onClick={() => setModulesCompany(company)}>Configure</Button>}>
-            {modules.map(module => {
+            {uniqueCatalogue.map(module => {
               const entitlement = entitlements.find(entry => entry.module_id === module.id)
               return <div key={module.id} className="flex items-center justify-between gap-3 text-sm"><span>{module.name}</span><Badge variant={entitlement?.is_enabled ? 'sales' : 'outline'}>{entitlement?.is_enabled ? entitlement.status : 'disabled'}</Badge></div>
             })}
-            {!modules.length && <p className="text-sm text-muted-foreground">No module catalogue loaded.</p>}
+            {!uniqueCatalogue.length && <p className="text-sm text-muted-foreground">No module catalogue loaded.</p>}
           </DashboardCard>
         )
       })}
-      {modulesCompany && <CompanyModulesDialog company={modulesCompany} modules={modules} entitlements={(data?.companyModules || []).filter(entry => entry.company_id === modulesCompany.id)} open={!!modulesCompany} onClose={() => setModulesCompany(null)} onSaved={onSaved} />}
+      {modulesCompany && <CompanyModulesDialog company={modulesCompany} modules={uniqueCatalogue} entitlements={canonicalizeModuleEntitlements(modules, (data?.companyModules || []).filter(entry => entry.company_id === modulesCompany.id))} open={!!modulesCompany} onClose={() => setModulesCompany(null)} onSaved={onSaved} />}
     </div>
   )
 }
@@ -821,7 +838,7 @@ function SystemTab({
   clearingErrors,
   onClearErrors,
 }: {
-  data?: DeveloperData
+  data?: DeveloperSystemOverview
   loading: boolean
   schemaStatus: { available: boolean; items: DeveloperSchemaStatusItem[]; error?: string } | null
   supabaseStatus: SupabaseStatus | null
@@ -831,33 +848,15 @@ function SystemTab({
 }) {
   const metrics = useMemo(() => {
     const companies = data?.companies || []
-    const vouchers = data?.vouchers || []
-    const parties = data?.parties || []
-    const items = data?.items || []
     const events = data?.events || []
-    const voucherByCompany = countBy(vouchers, v => v.company_id)
-    const partyByCompany = countBy(parties, p => p.company_id)
-    const itemByCompany = countBy(items, i => i.company_id)
     const eventByType = countBy(events, e => e.event_type)
-    const voucherByType = countBy(vouchers, v => v.type)
-    const stockWarnings: string[] = []
-    for (const company of companies) {
-      const stock = recomputeStock(items.filter(i => i.company_id === company.id), vouchers.filter(v => v.company_id === company.id))
-      if (stock.some(s => s.qty < 0)) stockWarnings.push(company.name)
-    }
     return {
       companies,
       events,
+      counts: data?.counts || { vouchers: null, parties: null, items: null },
       errorEvents: events.filter(event => event.event_type.toLowerCase().includes('error')),
       missingMigrations: schemaStatus?.items.filter(item => item.status === 'missing') || [],
-      voucherByCompany,
-      partyByCompany,
-      itemByCompany,
       eventByType,
-      voucherByType,
-      stockWarnings,
-      missingSetup: companies.filter(c => !partyByCompany[c.id] || !itemByCompany[c.id]),
-      inactiveCompanies: companies.filter(c => !voucherByCompany[c.id]),
     }
   }, [data, schemaStatus])
 
@@ -903,13 +902,13 @@ function SystemTab({
         <DashboardCard title="Feature Adoption" Icon={ShieldCheck}>
           <MetricLine label="VAT companies" value={metrics.companies.filter(c => c.vat_enabled !== false).length} />
           <MetricLine label="Internal bookkeeping" value={metrics.companies.filter(c => c.vat_enabled === false).length} />
-          <MetricLine label="Stock adjustments" value={metrics.voucherByType['Stock Adjustment'] || 0} />
           <MetricLine label="Invoice prints" value={metrics.eventByType.print_voucher || 0} />
         </DashboardCard>
-        <DashboardCard title="Data Health Checks" Icon={Activity}>
-          <MetricLine label="No activity after signup" value={metrics.inactiveCompanies.length} />
-          <MetricLine label="Missing setup" value={metrics.missingSetup.length} />
-          <MetricLine label="Negative stock companies" value={metrics.stockWarnings.length} />
+        <DashboardCard title="Accounting Data" Icon={Activity}>
+          <MetricLine label="Voucher records (estimated)" value={metrics.counts.vouchers ?? 'Unavailable'} />
+          <MetricLine label="Party records (estimated)" value={metrics.counts.parties ?? 'Unavailable'} />
+          <MetricLine label="Item records (estimated)" value={metrics.counts.items ?? 'Unavailable'} />
+          <p className="text-xs text-muted-foreground">Diagnostics use lightweight counts and never load complete accounting histories across all companies.</p>
         </DashboardCard>
         <DashboardCard title="App Diagnostics" Icon={FileText}>
           <MetricLine label="Last sync" value={lastSync || 'Not synced'} />
@@ -922,7 +921,7 @@ function SystemTab({
   )
 }
 
-function DeveloperUserHeader({ row, selectedCompany, onRefresh, onTab, mobileBack }: { row: DeveloperUserCompanyLicense; selectedCompany?: Company; onRefresh: () => void; onTab: (tab: DeveloperTab) => void; mobileBack: () => void }) {
+function DeveloperUserHeader({ row, selectedCompany, onRefresh, mobileBack }: { row: DeveloperUserCompanyLicense; selectedCompany?: Company; onRefresh: () => void; mobileBack: () => void }) {
   const name = displayNameFor(row)
   const status = selectedCompany?.suspended ? 'Suspended' : row.license.license_status
   return (
@@ -936,12 +935,7 @@ function DeveloperUserHeader({ row, selectedCompany, onRefresh, onTab, mobileBac
             <p className="truncate text-sm text-muted-foreground">{row.email || row.user_id} · Joined {row.companies[0]?.created_at ? fmtDate(row.companies[0].created_at) : 'Unknown'}</p>
           </div>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <Button variant="outline" onClick={onRefresh}><RefreshCcw className="mr-1.5 h-4 w-4" />Refresh</Button>
-          <Button variant="outline" onClick={() => onTab('license')}>License</Button>
-          <Button variant="outline" onClick={() => onTab('system')}>System</Button>
-          <Button onClick={() => onTab('logs')}>Actions <ChevronDown className="ml-1.5 h-4 w-4" /></Button>
-        </div>
+        <Button variant="outline" onClick={onRefresh}><RefreshCcw className="mr-1.5 h-4 w-4" />Refresh user</Button>
       </CardContent>
     </Card>
   )
@@ -958,13 +952,6 @@ function DeveloperUserManagementPanel({
   onTabChange,
   onRefresh,
   onMobileBack,
-  systemData,
-  systemLoading,
-  schemaStatus,
-  supabaseStatus,
-  lastSync,
-  clearingErrors,
-  onClearErrors,
 }: {
   row: DeveloperUserCompanyLicense
   data?: DeveloperData
@@ -976,53 +963,67 @@ function DeveloperUserManagementPanel({
   onTabChange: (tab: DeveloperTab) => void
   onRefresh: () => void
   onMobileBack: () => void
-  systemData?: DeveloperData
-  systemLoading: boolean
-  schemaStatus: { available: boolean; items: DeveloperSchemaStatusItem[]; error?: string } | null
-  supabaseStatus: SupabaseStatus | null
-  lastSync: string
-  clearingErrors: boolean
-  onClearErrors: () => void
 }) {
   const companies = data?.companies || []
   const selectedCompany = companies.find(company => company.id === selectedCompanyId) || companies[0]
   return (
     <div className="space-y-4">
-      <DeveloperUserHeader row={row} selectedCompany={selectedCompany} onRefresh={onRefresh} onTab={onTabChange} mobileBack={onMobileBack} />
+      <DeveloperUserHeader row={row} selectedCompany={selectedCompany} onRefresh={onRefresh} mobileBack={onMobileBack} />
       <CompanySelector companies={companies} selectedCompanyId={selectedCompany?.id} onSelect={onCompanyChange} />
       {loading && <Card><CardContent className="flex items-center gap-2 p-6 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Loading selected user data...</CardContent></Card>}
       <Tabs value={activeTab} onValueChange={value => onTabChange(value as DeveloperTab)}>
-        <div className="overflow-x-auto pb-1">
-          <TabsList className="w-max">
+        <div className="pb-1">
+          <TabsList className="h-auto w-full flex-wrap justify-start gap-1 p-1">
             <TabsTrigger value="overview"><UserRound className="mr-1.5 h-3.5 w-3.5" />Overview</TabsTrigger>
-            <TabsTrigger value="license">License</TabsTrigger>
             <TabsTrigger value="companies">Companies ({companies.length})</TabsTrigger>
-            <TabsTrigger value="modules">Modules</TabsTrigger>
-            <TabsTrigger value="users">Users</TabsTrigger>
-            <TabsTrigger value="billing">Billing</TabsTrigger>
-            <TabsTrigger value="logs">Logs</TabsTrigger>
-            <TabsTrigger value="notes">Notes</TabsTrigger>
-            <TabsTrigger value="performance">Performance</TabsTrigger>
-            <TabsTrigger value="system">System</TabsTrigger>
+            <TabsTrigger value="license-billing">License &amp; Billing</TabsTrigger>
+            <TabsTrigger value="activity">Activity</TabsTrigger>
+            <TabsTrigger value="settings">Settings</TabsTrigger>
           </TabsList>
         </div>
-        <TabsContent value="overview"><OverviewTab row={row} data={data} selectedCompany={selectedCompany} onSaved={onRefresh} onTab={onTabChange} /></TabsContent>
-        <TabsContent value="license"><LicenseEditor row={row} onSaved={onRefresh} /></TabsContent>
-        <TabsContent value="companies"><CompaniesTab data={data} modules={modules} onSaved={onRefresh} /></TabsContent>
-        <TabsContent value="modules"><ModulesTab data={data} modules={modules} onSaved={onRefresh} /></TabsContent>
-        <TabsContent value="users"><DashboardCard title="Users" Icon={Users}><p className="text-sm text-muted-foreground">Company member management is not available in the current developer data. Existing access and permissions are unchanged.</p></DashboardCard></TabsContent>
-        <TabsContent value="billing"><DashboardCard title="Billing" Icon={FileText}><MetricLine label="License Status" value={row.license.license_status} /><MetricLine label="Company Limit" value={row.license.unlimited_companies ? 'Unlimited' : row.license.max_companies} /><p className="text-sm text-muted-foreground">No separate billing backend is currently installed.</p></DashboardCard></TabsContent>
-        <TabsContent value="logs"><LogsTab data={data} companies={companies} /></TabsContent>
-        <TabsContent value="notes"><DeveloperNotesCard company={selectedCompany} onSaved={onRefresh} /></TabsContent>
-        <TabsContent value="performance"><PerformanceTab /></TabsContent>
-        <TabsContent value="system"><SystemTab data={systemData} loading={systemLoading} schemaStatus={schemaStatus} supabaseStatus={supabaseStatus} lastSync={lastSync} clearingErrors={clearingErrors} onClearErrors={onClearErrors} /></TabsContent>
+        <TabsContent value="overview"><OverviewTab row={row} data={data} selectedCompany={selectedCompany} onTab={onTabChange} /></TabsContent>
+        <TabsContent value="companies" className="space-y-5"><CompaniesTab data={data} modules={modules} onSaved={onRefresh} /><div><h3 className="mb-3 text-base font-semibold">Company modules</h3><ModulesTab data={data} modules={modules} onSaved={onRefresh} /></div></TabsContent>
+        <TabsContent value="license-billing"><div className="grid items-start gap-5 xl:grid-cols-2"><LicenseEditor row={row} onSaved={onRefresh} />{selectedCompany ? <CompanySupportEditor company={selectedCompany} onSaved={onRefresh} /> : <DashboardCard title="Company Billing" Icon={FileText}><p className="text-sm text-muted-foreground">Select a company to manage its billing access.</p></DashboardCard>}</div></TabsContent>
+        <TabsContent value="activity"><LogsTab data={data} companies={companies} /></TabsContent>
+        <TabsContent value="settings" className="space-y-5"><DashboardCard title="Team Users" Icon={Users}><p className="text-sm text-muted-foreground">Company member management is not available in the current developer data. Existing access and permissions are unchanged.</p></DashboardCard><DeveloperNotesCard company={selectedCompany} onSaved={onRefresh} /><CompanyDangerActions company={selectedCompany} data={data} onSaved={onRefresh} /></TabsContent>
       </Tabs>
-      <CompanyDangerActions company={selectedCompany} data={data} onSaved={onRefresh} />
     </div>
   )
 }
 
 type BackupResult = { companyId: string; companyName: string; userName: string; successful: boolean; error?: string }
+
+function agentFreshness(agent: DeveloperBackupAgent) {
+  if (agent.revoked_at) return { label: 'Revoked', className: 'text-muted-foreground' }
+  if (!agent.last_seen_at) return { label: 'Never connected', className: 'text-amber-700' }
+  const hours = (Date.now() - new Date(agent.last_seen_at).getTime()) / 3600000
+  return hours <= 6
+    ? { label: 'Synced recently', className: 'text-emerald-700' }
+    : { label: 'Sync needs attention', className: 'text-amber-700' }
+}
+
+function BackupOverview({ onView }: { onView: () => void }) {
+  const [runs, setRuns] = useState<DeveloperBackupRun[]>([])
+  const [agents, setAgents] = useState<DeveloperBackupAgent[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  useEffect(() => {
+    let active = true
+    Promise.all([fetchDeveloperBackupStatus(), listDeveloperBackupAgents()])
+      .then(([status, agentRows]) => { if (active) { setRuns(status.runs); setAgents(agentRows) } })
+      .catch(cause => { if (active) setError(publicErrorMessage(cause, 'loading backup status')) })
+      .finally(() => { if (active) setLoading(false) })
+    return () => { active = false }
+  }, [])
+  const lastRun = runs.find(run => run.status !== 'running')
+  const activeAgents = agents.filter(agent => !agent.revoked_at)
+  const staleAgents = activeAgents.filter(agent => agentFreshness(agent).label !== 'Synced recently')
+  return <DashboardCard title="Backup Summary" Icon={HardDrive} action={<Button size="sm" variant="outline" onClick={onView}>View backups</Button>}>
+    {loading && <p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Checking backup status…</p>}
+    {error && <p className="text-sm text-destructive">Backup status is unavailable. Open Backups to retry.</p>}
+    {!loading && !error && <div className="grid gap-3 sm:grid-cols-3"><MetricLine label="Last backup" value={lastRun?.completed_at ? new Date(lastRun.completed_at).toLocaleString() : 'Never'} /><MetricLine label="Last result" value={lastRun ? `${lastRun.successful_companies} successful / ${lastRun.failed_companies} failed` : 'Not run'} /><MetricLine label="Agent sync" value={!activeAgents.length ? 'No active agent' : staleAgents.length ? `${staleAgents.length} need attention` : 'All recently synced'} /></div>}
+  </DashboardCard>
+}
 
 function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
   const [directory, setDirectory] = useState<DirectoryHandleLike | null>(null)
@@ -1047,7 +1048,7 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
     try {
       const [status, agentRows] = await Promise.all([fetchDeveloperBackupStatus(), listDeveloperBackupAgents()])
       setRuns(status.runs); setCompanyStatuses(status.companies); setAgents(agentRows)
-    } catch { /* migrations may not be installed yet */ }
+    } catch (cause) { setError(publicErrorMessage(cause, 'loading backup status')) }
   }
 
   useEffect(() => {
@@ -1143,7 +1144,7 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
     <CardHeader className="pb-2"><div className="flex flex-wrap items-center justify-between gap-2"><div><CardTitle className="flex items-center gap-2 text-base"><HardDrive className="h-4 w-4" />Local Backup</CardTitle><p className="mt-1 text-xs text-muted-foreground">Portable company backups for every managed user and company.</p></div><Button variant="outline" size="sm" onClick={selectLocation} disabled={exporting}>{directory ? 'Change Location' : 'Select Backup Location'}</Button></div></CardHeader>
     <CardContent className="space-y-3">
       <div className="grid gap-2 text-xs sm:grid-cols-4">
-        <div className="rounded-md border p-2"><span className="text-muted-foreground">Backup Location</span><strong className="mt-1 block truncate">{directory?.name || (directorySupported ? 'Not selected' : 'ZIP download fallback')}</strong></div>
+        <div className="rounded-md border p-2"><span className="text-muted-foreground">Backup Location</span><strong className="mt-1 block truncate">{getBackupLocationLabel(directory, directorySupported)}</strong></div>
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Full Backup</span><strong className="mt-1 block">{lastFullRun?.completed_at ? new Date(lastFullRun.completed_at).toLocaleString() : 'Never'}</strong></div>
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Companies</span><strong className="mt-1 block num">{companyCount}</strong></div>
         <div className="rounded-md border p-2"><span className="text-muted-foreground">Last Result</span><strong className="mt-1 block">{lastRun ? `${lastRun.successful_companies} successful / ${lastRun.failed_companies} failed` : 'No backup yet'}</strong>{lastRun?.initiator_type && <span className="capitalize text-muted-foreground">{lastRun.initiator_type}</span>}</div>
@@ -1154,8 +1155,7 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
       <div className="rounded-md border p-3 text-xs">
         <div className="flex flex-wrap items-center justify-between gap-2"><div><p className="font-semibold">Windows Background Agent</p><p className="text-muted-foreground">Runs at logon and every two hours, even when KhataERP is closed.</p></div><Button size="sm" variant="outline" onClick={() => void createAgent()}><KeyRound className="mr-1.5 h-4 w-4" />Create Agent Token</Button></div>
         {newAgentToken && <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 p-2 text-amber-900"><strong>Copy this token now. It is shown only once.</strong><div className="mt-1 flex items-center gap-2"><code className="min-w-0 flex-1 break-all rounded bg-white p-1">{newAgentToken}</code><Button size="icon" variant="outline" aria-label="Copy agent token" onClick={() => void navigator.clipboard.writeText(newAgentToken)}><Copy className="h-4 w-4" /></Button></div><p className="mt-1">Project URL: <code>https://{supabaseProjectHost}</code></p><p className="mt-1">Run <code>windows-backup-agent/Install-KhataERPBackupAgent.ps1</code> on the backup computer.</p></div>}
-        {agents.length > 0 && <div className="mt-2 space-y-1">{agents.map(agent => <div key={agent.id} className="flex items-center justify-between gap-2 border-t pt-1"><span><strong>{agent.name}</strong><span className="ml-2 text-muted-foreground">{agent.revoked_at ? 'Revoked' : agent.last_seen_at ? `Last synced ${new Date(agent.last_seen_at).toLocaleString()}` : 'Never connected'}</span></span><span className="flex items-center gap-1">{!agent.revoked_at && <Button size="sm" variant="ghost" onClick={() => void revokeAgent(agent)}>Revoke</Button>}<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void deleteAgent(agent)}><Trash2 className="mr-1 h-3.5 w-3.5" />Delete</Button></span></div>)}</div>}
-        <p className="mt-2 text-muted-foreground">Delete removes the server token record. To remove the task from that computer too, run <code>windows-backup-agent/Uninstall-KhataERPBackupAgent.ps1</code> there.</p>
+        {agents.length > 0 && <div className="mt-2 space-y-2">{agents.map(agent => { const freshness = agentFreshness(agent); return <div key={agent.id} className="rounded-md border p-2"><div className="flex flex-wrap items-center justify-between gap-2"><span><strong>{agent.name}</strong><span className={`ml-2 ${freshness.className}`}>{freshness.label}</span>{agent.last_seen_at && <span className="ml-2 text-muted-foreground">{new Date(agent.last_seen_at).toLocaleString()}</span>}</span><span className="flex items-center gap-1">{!agent.revoked_at && <Button size="sm" variant="ghost" onClick={() => void revokeAgent(agent)}>Revoke</Button>}<Button size="sm" variant="ghost" className="text-destructive hover:text-destructive" onClick={() => void deleteAgent(agent)}><Trash2 className="mr-1 h-3.5 w-3.5" />Delete</Button></span></div><details className="mt-1 text-muted-foreground"><summary className="cursor-pointer font-medium">Agent removal help</summary><p className="mt-1">Deleting removes the server token only. To remove the scheduled task from that computer, run <code>windows-backup-agent/Uninstall-KhataERPBackupAgent.ps1</code> there.</p></details></div> })}</div>}
       </div>
       <div className="flex flex-wrap gap-2"><Button onClick={() => void runExport()} disabled={exporting || !companyCount}><Download className="mr-1.5 h-4 w-4" />{exporting ? 'Exporting...' : results.length ? 'Export Again' : 'Export All Company Data'}</Button>{failedIds.size > 0 && <Button variant="outline" onClick={() => void runExport(failedIds)} disabled={exporting}>Retry Failed</Button>}{companyCount > 0 && <Button variant="ghost" onClick={() => setDetails(value => !value)}>{results.length ? 'View Details' : 'Company Status'}</Button>}</div>
       {details && <div className="max-h-64 space-y-1 overflow-y-auto rounded-md border p-2 text-xs">{results.map(result => <div key={result.companyId} className="flex items-start justify-between gap-3 border-b py-1 last:border-0"><div><strong>{result.companyName}</strong><span className="block text-muted-foreground">{result.userName}{result.error ? ` · ${result.error}` : ''}</span></div><Badge variant={result.successful ? 'default' : 'destructive'}>{result.successful ? 'Successful' : 'Failed'}</Badge></div>)}{!results.length && targets.map(target => { const status = statusByCompany.get(target.company.id); return <div key={target.company.id}>{target.company.name}: {status?.last_export_status || 'Not exported'}</div> })}</div>}
@@ -1164,6 +1164,9 @@ function LocalBackupCard({ users }: { users: DeveloperUserCompanyLicense[] }) {
 }
 
 export function DeveloperDashboard() {
+  const [searchParams, setSearchParams] = useSearchParams()
+  const requestedView = searchParams.get('view') as DeveloperView | null
+  const activeView: DeveloperView = requestedView && developerViews.has(requestedView) ? requestedView : 'overview'
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [users, setUsers] = useState<DeveloperUserCompanyLicense[]>([])
   const [selectedUserId, setSelectedUserId] = useState('')
@@ -1171,11 +1174,13 @@ export function DeveloperDashboard() {
   const [activeTab, setActiveTab] = useState<DeveloperTab>('overview')
   const [activeUserFilter, setActiveUserFilter] = useState<DeveloperUserFilter>('all')
   const [selectedData, setSelectedData] = useState<DeveloperData | undefined>()
-  const [systemData, setSystemData] = useState<DeveloperData | undefined>()
+  const [systemData, setSystemData] = useState<DeveloperSystemOverview | undefined>()
   const [loadingUsers, setLoadingUsers] = useState(false)
   const [loadingSelected, setLoadingSelected] = useState(false)
   const [loadingSystem, setLoadingSystem] = useState(false)
+  const [systemChecked, setSystemChecked] = useState(false)
   const [error, setError] = useState('')
+  const [systemError, setSystemError] = useState('')
   const [lastSync, setLastSync] = useState('')
   const [clearingErrors, setClearingErrors] = useState(false)
   const [supabaseStatus, setSupabaseStatus] = useState<SupabaseStatus | null>(null)
@@ -1183,8 +1188,8 @@ export function DeveloperDashboard() {
   const [mobileDetail, setMobileDetail] = useState(false)
 
   const selectedUser = users.find(row => row.user_id === selectedUserId)
-  const companyById = useMemo(() => new Map((selectedData?.companies || systemData?.companies || []).map(company => [company.id, company])), [selectedData, systemData])
-  const modules = selectedData?.modules || systemData?.modules || []
+  const companyById = useMemo(() => new Map([...(systemData?.companies || []), ...(selectedData?.companies || [])].map(company => [company.id, company])), [selectedData, systemData])
+  const modules = dedupeModules(selectedData?.modules || systemData?.modules || [])
   const kpiEvents = systemData?.events || selectedData?.events || []
 
   const loadUsers = async () => {
@@ -1208,7 +1213,7 @@ export function DeveloperDashboard() {
     }
   }
 
-  const loadSelectedUser = async (row: DeveloperUserCompanyLicense) => {
+  const loadSelectedUser = useCallback(async (row: DeveloperUserCompanyLicense) => {
     setLoadingSelected(true)
     setSelectedData(undefined)
     setError('')
@@ -1222,27 +1227,38 @@ export function DeveloperDashboard() {
     } finally {
       setLoadingSelected(false)
     }
-  }
+  }, [])
 
-  const loadSystemData = async () => {
-    if (systemData || loadingSystem) return
+  const loadSystemData = useCallback(async (force = false) => {
+    if ((!force && systemChecked) || loadingSystem) return
+    setSystemChecked(true)
     setLoadingSystem(true)
+    setSystemError('')
     try {
-      const data = await fetchDeveloperDashboardData()
-      setSystemData(data as DeveloperData)
+      const data = await fetchDeveloperSystemOverview()
+      setSystemData(data)
       setLastSync(new Date().toLocaleString())
     } catch (e: unknown) {
-      setError(publicErrorMessage(e, 'loading system diagnostics'))
+      reportClientError(e, 'loading system diagnostics')
+      const code = typeof e === 'object' && e && 'code' in e ? String(e.code) : ''
+      setSystemError(code === '57014'
+        ? 'System diagnostics took too long to respond. The rest of the developer workspace remains available; retry diagnostics later.'
+        : userFacingErrorMessage(e) || 'System diagnostics are unavailable right now. The rest of the developer workspace remains available.')
     } finally {
       setLoadingSystem(false)
     }
-  }
+  }, [loadingSystem, systemChecked])
 
   const showErrorUsers = async () => {
     setActiveUserFilter('errors')
-    setActiveTab('system')
-    setMobileDetail(true)
+    setSearchParams({ view: 'diagnostics' })
     await loadSystemData()
+  }
+
+  const openFilteredUsers = (filter: DeveloperUserFilter) => {
+    setActiveUserFilter(filter)
+    setMobileDetail(false)
+    setSearchParams({ view: 'users' })
   }
 
   const refreshSelected = async () => {
@@ -1254,6 +1270,8 @@ export function DeveloperDashboard() {
       await loadSelectedUser(row)
     }
     setSystemData(undefined)
+    setSystemError('')
+    setSystemChecked(false)
   }
 
   const clearErrors = async () => {
@@ -1271,74 +1289,57 @@ export function DeveloperDashboard() {
   }
 
   useEffect(() => { loadUsers() }, [])
-  useEffect(() => { if (selectedUser) loadSelectedUser(selectedUser) }, [selectedUserId])
-  useEffect(() => { if (activeTab === 'system') loadSystemData() }, [activeTab])
+  useEffect(() => { if (selectedUser) void loadSelectedUser(selectedUser) }, [loadSelectedUser, selectedUser])
+  useEffect(() => {
+    if (activeView === 'licenses') setActiveTab('license-billing')
+    if (allowed && activeView === 'diagnostics') void loadSystemData()
+  }, [activeView, allowed, loadSystemData])
 
-  if (allowed === null) return <PageContent><p className="text-sm text-muted-foreground">Checking developer access...</p></PageContent>
+  if (allowed === null) return <PageContent className="developer-workspace min-h-full bg-slate-50 p-6"><p className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="h-4 w-4 animate-spin" />Checking developer access…</p></PageContent>
 
   if (!allowed) {
     return (
-      <div>
-        <PageHeader title="Developer Dashboard" description="Developer admin access required" />
-        <PageContent><Card><CardContent className="p-6 text-sm text-muted-foreground">Your account is not listed in `developer_admins`.</CardContent></Card></PageContent>
-      </div>
+      <PageContent className="developer-workspace min-h-full bg-slate-50 p-6"><Card><CardContent className="p-6"><h1 className="text-xl font-semibold">Developer access required</h1><p className="mt-2 text-sm text-muted-foreground">Your account is not listed in <code>developer_admins</code>.</p></CardContent></Card></PageContent>
     )
   }
 
+  const viewTitles: Record<DeveloperView, { title: string; description: string }> = {
+    overview: { title: 'Developer Overview', description: 'Monitor licensing, account issues, and backup health.' },
+    users: { title: 'Users & Companies', description: 'Find users and manage their account and company settings.' },
+    licenses: { title: 'Licenses', description: 'Manage account licenses and company billing access.' },
+    backups: { title: 'Backups', description: 'Configure, export, and monitor portable company backups.' },
+    diagnostics: { title: 'Diagnostics', description: 'Review system health, errors, migrations, and performance.' },
+  }
+
+  const userWorkspace = (
+    <div className="grid items-start gap-5 lg:grid-cols-[17rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)]">
+      <div className={mobileDetail ? 'hidden lg:block' : 'block'}>
+        <DeveloperUserList users={users} selectedUserId={selectedUserId} loading={loadingUsers} companyById={companyById} events={kpiEvents} activeFilter={activeUserFilter} onFilterChange={setActiveUserFilter} onSelect={userId => { setSelectedUserId(userId); setMobileDetail(true); if (activeView !== 'licenses') setActiveTab('overview') }} />
+      </div>
+      <div className={mobileDetail ? 'block min-w-0' : 'hidden min-w-0 lg:block'}>
+        {selectedUser ? <DeveloperUserManagementPanel row={selectedUser} data={selectedData} loading={loadingSelected} modules={modules} selectedCompanyId={selectedCompanyId} activeTab={activeTab} onCompanyChange={setSelectedCompanyId} onTabChange={setActiveTab} onRefresh={refreshSelected} onMobileBack={() => setMobileDetail(false)} /> : <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">Select a user to manage licensing, companies, modules, and support.</CardContent></Card>}
+      </div>
+    </div>
+  )
+
   return (
-    <div>
-      <PageHeader title="Developer Dashboard" description="User-centric management, licensing, support, modules, and diagnostics" action={<Button onClick={loadUsers}><RefreshCcw className="mr-1.5 h-4 w-4" />Refresh</Button>} />
-      <PageContent className="space-y-4">
-        {error && <Card><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>}
-        <DeveloperKpiStrip
-          users={users}
-          companyById={companyById}
-          events={kpiEvents}
-          activeFilter={activeUserFilter}
-          systemLoaded={!!systemData}
-          onFilter={setActiveUserFilter}
-          onErrors={showErrorUsers}
-        />
-        <LocalBackupCard users={users} />
-        <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[20rem_minmax(0,1fr)]">
-          <div className={mobileDetail ? 'hidden lg:block' : 'block'}>
-            <DeveloperUserList
-              users={users}
-              selectedUserId={selectedUserId}
-              loading={loadingUsers}
-              companyById={companyById}
-              events={kpiEvents}
-              activeFilter={activeUserFilter}
-              onFilterChange={setActiveUserFilter}
-              onSelect={userId => { setSelectedUserId(userId); setMobileDetail(true); setActiveTab('overview') }}
-            />
-          </div>
-          <div className={mobileDetail ? 'block' : 'hidden lg:block'}>
-            {selectedUser ? (
-              <DeveloperUserManagementPanel
-                row={selectedUser}
-                data={selectedData}
-                loading={loadingSelected}
-                modules={modules}
-                selectedCompanyId={selectedCompanyId}
-                activeTab={activeTab}
-                onCompanyChange={setSelectedCompanyId}
-                onTabChange={setActiveTab}
-                onRefresh={refreshSelected}
-                onMobileBack={() => setMobileDetail(false)}
-                systemData={systemData}
-                systemLoading={loadingSystem}
-                schemaStatus={schemaStatus}
-                supabaseStatus={supabaseStatus}
-                lastSync={lastSync}
-                clearingErrors={clearingErrors}
-                onClearErrors={clearErrors}
-              />
-            ) : (
-              <Card><CardContent className="p-10 text-center text-sm text-muted-foreground">Select a user to manage licensing, companies, modules, and support.</CardContent></Card>
-            )}
-          </div>
+    <div className="developer-workspace min-h-full bg-slate-50 font-sans">
+      <header className="border-b bg-white px-4 py-5 md:px-6 lg:px-8">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div><h1 className="text-2xl font-semibold tracking-tight text-slate-950">{viewTitles[activeView].title}</h1><p className="mt-1 text-sm text-slate-600">{viewTitles[activeView].description}</p></div>
+          <Button variant="outline" onClick={loadUsers} disabled={loadingUsers}><RefreshCcw className={`mr-1.5 h-4 w-4 ${loadingUsers ? 'animate-spin' : ''}`} />Refresh workspace</Button>
         </div>
+      </header>
+      <PageContent className="mx-auto max-w-[1600px] space-y-5 p-4 md:p-6 lg:p-8">
+        {error && <Card className="border-red-200 bg-red-50"><CardContent className="p-4 text-sm text-destructive">{error}</CardContent></Card>}
+        {activeView === 'overview' && <>
+          <DeveloperKpiStrip users={users} companyById={companyById} events={kpiEvents} activeFilter={activeUserFilter} systemLoaded={!!systemData} systemLoading={loadingSystem} systemError={systemError} onFilter={openFilteredUsers} onErrors={showErrorUsers} />
+          <BackupOverview onView={() => setSearchParams({ view: 'backups' })} />
+          <div><div className="mb-3 flex items-end justify-between gap-3"><div><h2 className="text-lg font-semibold">Users needing attention</h2><p className="text-sm text-muted-foreground">Select a user to review account and company details.</p></div><Button variant="link" onClick={() => setSearchParams({ view: 'users' })}>View all users</Button></div>{userWorkspace}</div>
+        </>}
+        {(activeView === 'users' || activeView === 'licenses') && <>{activeView === 'users' && <DeveloperKpiStrip users={users} companyById={companyById} events={kpiEvents} activeFilter={activeUserFilter} systemLoaded={!!systemData} systemLoading={loadingSystem} systemError={systemError} onFilter={openFilteredUsers} onErrors={showErrorUsers} />}{userWorkspace}</>}
+        {activeView === 'backups' && <LocalBackupCard users={users} />}
+        {activeView === 'diagnostics' && <div className="space-y-5">{systemError && <Card className="border-red-200 bg-red-50"><CardContent className="flex flex-wrap items-center justify-between gap-3 p-4"><p className="text-sm text-destructive">{systemError}</p><Button size="sm" variant="outline" onClick={() => { setSystemData(undefined); setSystemError(''); void loadSystemData(true) }}>Retry</Button></CardContent></Card>}<SystemTab data={systemData} loading={loadingSystem} schemaStatus={schemaStatus} supabaseStatus={supabaseStatus} lastSync={lastSync} clearingErrors={clearingErrors} onClearErrors={clearErrors} /><PerformanceTab /></div>}
       </PageContent>
     </div>
   )

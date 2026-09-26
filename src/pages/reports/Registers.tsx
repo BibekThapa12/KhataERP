@@ -55,7 +55,7 @@ export function RegistersPage() {
   const invoiceRows = invoiceReport?.rows.filter(row => {
     const query = normalizeSearch(search)
     if (!query) return true
-    return normalizeSearch(`${row.voucher.date_bs} ${row.voucher.invoice_no || row.voucher.seq} ${row.voucher.supplier_invoice_no || ''} ${row.voucher.type} ${row.party} ${row.voucher.narration || ''} ${row.subtotal} ${row.discount} ${row.taxable} ${row.vat} ${row.gross} ${row.net} ${row.voucher.cancelled ? 'cancelled' : 'active'}`).includes(query)
+    return normalizeSearch(`${row.voucher.date_bs} ${row.voucher.invoice_no || row.voucher.seq} ${row.voucher.supplier_invoice_no || ''} ${row.voucher.type} ${row.party} ${row.party_pan_vat} ${row.voucher.narration || ''} ${row.subtotal} ${row.discount} ${row.taxable} ${row.vat} ${row.gross} ${row.net} ${row.voucher.cancelled ? 'cancelled' : 'active'}`).includes(query)
   })
   const filteredInvoiceReport = invoiceReport && invoiceRows ? {
     ...invoiceReport,
@@ -91,8 +91,8 @@ export function RegistersPage() {
   const exportCsv = () => {
     if (filteredInvoiceReport) {
       const supplierInvoiceColumn = kind === 'purchase'
-      const headers = ['S.No.', 'Date', 'Type', 'Voucher No.', ...(supplierInvoiceColumn ? ['Supplier Invoice No.'] : []), 'Party / Cash', 'Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross']
-      const rows = filteredInvoiceReport.rows.map((row, index) => [index + 1, row.voucher.date_bs, row.voucher.type, row.voucher.invoice_no || row.voucher.seq, ...(supplierInvoiceColumn ? [row.voucher.supplier_invoice_no || ''] : []), row.party, row.subtotal, row.discount, row.taxable, row.vat, row.gross])
+      const headers = ['S.No.', 'Date', 'Type', 'Voucher No.', ...(supplierInvoiceColumn ? ['Supplier Invoice No.'] : []), 'Party / Cash', 'PAN / VAT', 'Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross']
+      const rows = filteredInvoiceReport.rows.map((row, index) => [index + 1, row.voucher.date_bs, row.voucher.type, row.voucher.invoice_no || row.voucher.seq, ...(supplierInvoiceColumn ? [row.voucher.supplier_invoice_no || ''] : []), row.party, row.party_pan_vat, row.subtotal, row.discount, row.taxable, row.vat, row.gross])
       downloadCsv(`${kind}-register.csv`, headers, rows)
       return
     }
@@ -143,8 +143,8 @@ export function RegistersPage() {
 }
 
 function InvoiceRegisterTable({ report, showSupplierInvoiceNo = false, onSelect }: { report: ReturnType<typeof getRegister>; showSupplierInvoiceNo?: boolean; onSelect: (voucher: Voucher) => void }) {
-  const columnCount = showSupplierInvoiceNo ? 12 : 11
-  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className={cn('w-full text-sm', showSupplierInvoiceNo ? 'min-w-[1180px]' : 'min-w-[1080px]')}>
+  const columnCount = showSupplierInvoiceNo ? 13 : 12
+  return <Card className="register-print-table overflow-hidden"><div className="overflow-x-auto"><table className={cn('w-full text-sm', showSupplierInvoiceNo ? 'min-w-[1300px]' : 'min-w-[1200px]')}>
     <thead><tr className="bg-muted/50">
       <th className="report-th text-left">S.No.</th>
       <th className="report-th text-left">Date</th>
@@ -152,15 +152,16 @@ function InvoiceRegisterTable({ report, showSupplierInvoiceNo = false, onSelect 
       <th className="report-th text-left">Voucher No.</th>
       {showSupplierInvoiceNo && <th className="report-th text-left">Supplier Invoice No.</th>}
       <th className="report-th text-left">Party / Cash</th>
+      <th className="register-pan-column report-th text-left">PAN / VAT</th>
       {['Subtotal', 'Discount', 'Taxable', 'VAT', 'Gross'].map(value => <th key={value} className="report-th text-right">{value}</th>)}
       <th className="report-th report-controls text-center">Action</th>
     </tr></thead>
     <tbody>{report.rows.length ? report.rows.map((row, rowIndex) => <tr key={row.voucher.id} onClick={() => onSelect(row.voucher)} className={cn('cursor-pointer border-t hover:bg-muted/30', row.voucher.cancelled && 'opacity-50 line-through', row.voucher.type.includes('Return') && 'bg-muted/20')}>
-      <td className="report-td text-muted-foreground num">{rowIndex + 1}</td><td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td>{showSupplierInvoiceNo && <td className="report-td num">{row.voucher.supplier_invoice_no || '-'}</td>}<td className="report-td font-medium">{row.party}</td>
+      <td className="report-td text-muted-foreground num">{rowIndex + 1}</td><td className="report-td">{fmtDate(row.voucher.date_bs)}</td><td className="register-print-hide report-td font-medium">{row.voucher.type}</td><td className="report-td num">{row.voucher.invoice_no || row.voucher.seq}</td>{showSupplierInvoiceNo && <td className="report-td num">{row.voucher.supplier_invoice_no || '-'}</td>}<td className="report-td font-medium">{row.party}</td><td className="register-pan-column report-td num">{row.party_pan_vat || '-'}</td>
       {[row.subtotal, row.discount, row.taxable, row.vat, row.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} dashWhenZero /></td>)}
       <td className="report-td report-controls text-center"><Button type="button" variant="ghost" size="icon" className="h-8 w-8" aria-label={`Actions for ${row.voucher.invoice_no || row.voucher.seq}`} onClick={event => { event.stopPropagation(); onSelect(row.voucher) }}><MoreVertical className="h-4 w-4" /></Button></td>
     </tr>) : <tr><td colSpan={columnCount} className="px-4 py-10 text-center text-muted-foreground">No transactions found for this period.</td></tr>}</tbody>
-    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 6 : 5}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} /></td>)}<td className="report-td report-controls"></td></tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 5 : 4}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num">{registerPrintMoney(value)}</td>)}</tr></tfoot>
+    <tfoot><tr className="register-screen-total border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 7 : 6}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num"><RegisterMoney value={value} /></td>)}<td className="report-td report-controls"></td></tr><tr className="register-print-total hidden border-t-2 bg-muted/30 font-semibold"><td className="report-td" colSpan={showSupplierInvoiceNo ? 6 : 5}>Total</td>{[report.subtotal, report.discount, report.taxable, report.vat, report.gross].map((value, index) => <td key={index} className="report-td text-right num">{registerPrintMoney(value)}</td>)}</tr></tfoot>
   </table></div></Card>
 }
 

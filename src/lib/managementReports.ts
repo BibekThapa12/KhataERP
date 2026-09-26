@@ -309,6 +309,7 @@ export function suggestSettlementAllocations(kind: OutstandingKind, partyAccount
 export interface RegisterRow {
   voucher: Voucher
   party: string
+  party_pan_vat: string
   subtotal: number
   discount: number
   taxable: number
@@ -331,17 +332,19 @@ export function getRegister(kind: InvoiceRegisterKind, vouchers: Voucher[], part
         : 'Purchase Return'
   const sourceType: Voucher['type'] = kind === 'sales' || kind === 'sales-return' ? 'Sales' : 'Purchase'
   const fromKey = makeBsKey(from), toKey = makeBsKey(to)
-  const partyMap = new Map(parties.map(party => [party.account_id, party.name]))
+  const partyMap = new Map(parties.map(party => [party.account_id, party]))
   const period = vouchers.filter(voucher => keyOf(voucher) >= fromKey && keyOf(voucher) <= toKey && (includeCancelled || !voucher.cancelled))
   const invoiceById = new Map(vouchers.filter(voucher => voucher.type === sourceType).map(voucher => [voucher.id, voucher]))
   const rows: RegisterRow[] = period.filter(voucher => voucher.type === type).map(voucher => {
     const source = voucher.original_voucher_id ? invoiceById.get(voucher.original_voucher_id) : undefined
     const partyAccountId = voucher.party_account_id || source?.party_account_id
+    const party = partyAccountId ? partyMap.get(partyAccountId) : undefined
     const subtotal = voucher.subtotal || 0
     const discount = voucher.discount || 0
     return {
       voucher,
-      party: partyAccountId ? partyMap.get(partyAccountId) || 'Party' : 'Cash',
+      party: party?.name || (partyAccountId ? 'Party' : 'Cash'),
+      party_pan_vat: party?.pan_vat?.trim() || '',
       subtotal: round2(subtotal),
       discount: round2(discount),
       taxable: round2(subtotal - discount),

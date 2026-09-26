@@ -74,29 +74,34 @@ describe('management reports', () => {
   })
 
   it('keeps sales and sales returns in separate registers', () => {
-    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c' }
+    const party: Party = { id:'p1', company_id:companyId, name:'A Store', type:'customer', account_id:'party-c', pan_vat:'123456789' }
     const invoice = voucher('i1','Sales','2083-04-01',100,[{account_id:'party-c',debit:100,credit:0}],{party_account_id:'party-c',subtotal:90,vat_amount:10})
     const returned = voucher('sr1','Sales Return','2083-04-02',25,[{account_id:'party-c',debit:0,credit:25}],{party_account_id:'party-c',original_voucher_id:'i1',settlement_mode:'party'})
     expect(getOutstandingReport('receivable',[party],accounts,[invoice,returned],'2083-04-20').total_outstanding).toBe(75)
     const salesRegister = getRegister('sales',[invoice,returned],[party],'2083-04-01','2083-04-30')
     const returnRegister = getRegister('sales-return',[invoice,returned],[party],'2083-04-01','2083-04-30')
     expect(salesRegister.rows.map(row => row.voucher.id)).toEqual(['i1'])
+    expect(salesRegister.rows[0].party_pan_vat).toBe('123456789')
     expect(salesRegister.net).toBe(100)
     expect(returnRegister.rows.map(row => row.voucher.id)).toEqual(['sr1'])
     expect(returnRegister.rows[0].voucher.type).toBe('Sales Return')
     expect(returnRegister.rows[0].voucher.date_bs).toBe('2083-04-02')
+    expect(returnRegister.rows[0].party_pan_vat).toBe('123456789')
     expect(returnRegister.returns).toBe(25)
     expect(returnRegister.net).toBe(25)
   })
 
   it('keeps purchases and purchase returns in separate registers', () => {
-    const supplier: Party = { id:'s1', company_id:companyId, name:'Supplier Co', type:'supplier', account_id:'party-s' }
+    const supplier: Party = { id:'s1', company_id:companyId, name:'Supplier Co', type:'supplier', account_id:'party-s', pan_vat:'987654321' }
     const bill = voucher('p1','Purchase','2083-04-01',300,[{account_id:'party-s',debit:0,credit:300}],{party_account_id:'party-s',subtotal:280,vat_amount:20})
     const returned = voucher('pr1','Purchase Return','2083-04-02',60,[{account_id:'party-s',debit:60,credit:0}],{party_account_id:'party-s',original_voucher_id:'p1',subtotal:55,vat_amount:5})
 
-    expect(getRegister('purchase',[bill,returned],[supplier],'2083-04-01','2083-04-30').rows.map(row => row.voucher.id)).toEqual(['p1'])
+    const purchaseRegister = getRegister('purchase',[bill,returned],[supplier],'2083-04-01','2083-04-30')
+    expect(purchaseRegister.rows.map(row => row.voucher.id)).toEqual(['p1'])
+    expect(purchaseRegister.rows[0].party_pan_vat).toBe('987654321')
     const returnRegister = getRegister('purchase-return',[bill,returned],[supplier],'2083-04-01','2083-04-30')
     expect(returnRegister.rows.map(row => row.voucher.id)).toEqual(['pr1'])
+    expect(returnRegister.rows[0].party_pan_vat).toBe('987654321')
     expect(returnRegister.net).toBe(60)
   })
 

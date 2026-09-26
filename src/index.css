@@ -417,7 +417,11 @@
   .report-page.cash-bank-book-report-page .report-content .report-table-card th,
   .report-page.cash-bank-book-report-page .report-content .report-table-card td { font-size: 9px !important; line-height: 1.25; }
   .report-page.transaction-register-report-page .report-content .register-print-table th,
-  .report-page.transaction-register-report-page .report-content .register-print-table td { font-size: 9px !important; line-height: 1.25; }
+  .report-page.transaction-register-report-page .report-content .register-print-table td { padding: 2.5px 3px !important; font-size: 9px !important; line-height: 1.25; }
+  .report-page.transaction-register-report-page .report-content .register-print-table,
+  .report-page.transaction-register-report-page .report-content .register-print-table > div { width: 100% !important; max-width: 100% !important; overflow: visible !important; }
+  .report-page.transaction-register-report-page .report-content .register-print-table table { width: 100% !important; min-width: 0 !important; table-layout: auto; }
+  .report-page.transaction-register-report-page .register-pan-column { white-space: nowrap; }
   .balance-sheet-report-page { page: balance-sheet-report; }
   .balance-sheet-screen-heading,
   .balance-sheet-status { display: none !important; }

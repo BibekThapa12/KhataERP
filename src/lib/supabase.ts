@@ -634,6 +634,55 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
   }
 }
 
+export interface DeveloperSystemOverview {
+  companies: Company[]
+  events: Array<{
+    id: string
+    company_id: string | null
+    user_id?: string | null
+    event_type: string
+    metadata?: Record<string, unknown>
+    created_at: string
+  }>
+  modules: AppModule[]
+  companyModules: CompanyModule[]
+  counts: {
+    vouchers: number | null
+    parties: number | null
+    items: number | null
+  }
+}
+
+/** Lightweight cross-company data for the developer overview and diagnostics.
+ * It deliberately avoids loading accounting history and nested voucher children.
+ */
+export async function fetchDeveloperSystemOverview(): Promise<DeveloperSystemOverview> {
+  const [companiesRes, eventsRes, modulesRes, companyModulesRes, vouchersCount, partiesCount, itemsCount] = await Promise.all([
+    supabase.from('companies').select(DEVELOPER_COMPANY_FIELDS).order('created_at', { ascending: false }),
+    supabase.from('app_events').select('id,company_id,user_id,event_type,metadata,created_at').order('created_at', { ascending: false }).limit(250),
+    supabase.from('modules').select(MODULE_FIELDS).order('name'),
+    supabase.from('company_modules').select(COMPANY_MODULE_FIELDS),
+    supabase.from('vouchers').select('id', { count: 'planned', head: true }),
+    supabase.from('parties').select('id', { count: 'planned', head: true }),
+    supabase.from('items').select('id', { count: 'planned', head: true }),
+  ])
+
+  if (companiesRes.error) throw companiesRes.error
+  if (eventsRes.error) throw eventsRes.error
+
+  return {
+    companies: (companiesRes.data || []) as Company[],
+    events: (eventsRes.data || []) as DeveloperSystemOverview['events'],
+    modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
+    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+    counts: {
+      vouchers: vouchersCount.error ? null : vouchersCount.count,
+      parties: partiesCount.error ? null : partiesCount.count,
+      items: itemsCount.error ? null : itemsCount.count,
+    },
+  }
+}
+
 export async function updateDeveloperCompany(id: string, updates: Partial<Company>) {
   const { error } = await supabase.from('companies').update(updates).eq('id', id)
   if (error) throw error
