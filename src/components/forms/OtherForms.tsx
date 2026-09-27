@@ -29,7 +29,7 @@ import { formatMasterName } from '@/lib/nameFormat'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
-import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, focusVoucherDialogAfterSave, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 import { useGlobalSaveShortcut } from '@/lib/globalSaveShortcut'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
@@ -307,7 +307,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         setNarration('')
         setError('')
         setDateInvalid(false)
-        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+        window.setTimeout(() => {
+          baselineRef.current = snapshotRef.current
+          focusVoucherDialogAfterSave(receiptDialogRef.current)
+        }, 0)
       }
     } catch (e: unknown) {
       cancelVoucherPrint(printRequest)
@@ -356,7 +359,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       freshAfterDraftRef.current = true
       baselineRef.current = ''
       setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
-      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+      window.setTimeout(() => {
+        baselineRef.current = snapshotRef.current
+        focusVoucherDialogAfterSave(receiptDialogRef.current)
+      }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`)) }
     finally { setSaving(false) }
   }
@@ -567,7 +573,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         setNarration('')
         setError('')
         setDateInvalid(false)
-        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+        window.setTimeout(() => {
+          baselineRef.current = snapshotRef.current
+          focusVoucherDialogAfterSave(journalDialogRef.current)
+        }, 0)
       }
     } catch (e: unknown) {
       cancelVoucherPrint(printRequest)
@@ -614,7 +623,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       freshAfterDraftRef.current = true
       baselineRef.current = ''
       setDateBs(selectedFiscalYearEndBs(company)); setJournalInvoiceNo(''); setJLines([{ account_id: '', debit: 0, credit: 0 }, { account_id: '', debit: 0, credit: 0 }]); setNarration(''); setError(''); setDateInvalid(false)
-      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+      window.setTimeout(() => {
+        baselineRef.current = snapshotRef.current
+        focusVoucherDialogAfterSave(journalDialogRef.current)
+      }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, 'saving journal draft')) }
     finally { setSaving(false) }
   }

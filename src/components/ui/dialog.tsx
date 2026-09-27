@@ -56,7 +56,11 @@ const DialogContent = React.forwardRef<
     const keepTabInsideVoucher = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
       const active = document.activeElement
-      if (active && content.contains(active)) return
+      // Searchable selectors render their input and options through a Radix
+      // portal. Although that portal is visually part of the voucher editor,
+      // it is not a DOM child of the dialog. Treat it as an in-dialog focus
+      // target so Tab navigation is not incorrectly reset to the first field.
+      if (active && (content.contains(active) || active.closest('[data-khata-select-content], [data-radix-popper-content-wrapper]'))) return
       const target = firstFocusable()
       if (!target) return
       event.preventDefault()

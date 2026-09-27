@@ -24,7 +24,7 @@ import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Voucher } from '@/types'
-import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, focusVoucherDialogAfterSave, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 import { repriceSalesLines } from '@/lib/pricing'
 import type { PricingSnapshot } from '@/types'
 import { applyInvoiceQuantityInput, releaseInvoicePricingLocks } from '@/lib/invoiceLineEditing'
@@ -398,7 +398,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
         setDateInvalid(false)
         itemTriggerRefs.current = []
         pendingLineFocus.current = null
-        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+        window.setTimeout(() => {
+          baselineRef.current = snapshotRef.current
+          focusVoucherDialogAfterSave(dialogRef.current)
+        }, 0)
       }
     } catch (e: unknown) {
       cancelVoucherPrint(printRequest)
@@ -444,7 +447,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       setLines([{ item_id: '', qty: 0, rate: 0, unit_mode: 'main' }]); setVatRate(vatEnabled ? 13 : 0)
       setDiscount(0); setDiscountMode('flat'); setNarration(''); setError(''); setDateInvalid(false)
       itemTriggerRefs.current = []; pendingLineFocus.current = null
-      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+      window.setTimeout(() => {
+        baselineRef.current = snapshotRef.current
+        focusVoucherDialogAfterSave(dialogRef.current)
+      }, 0)
     } catch (e: unknown) {
       setError(publicErrorMessage(e, `saving ${type.toLowerCase()} draft`))
     } finally {

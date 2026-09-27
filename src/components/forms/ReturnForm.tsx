@@ -29,7 +29,7 @@ import { VoucherNumberField } from './VoucherNumberField'
 import type { StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
-import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, focusVoucherDialogAfterSave, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 
 interface ReturnFormProps {
   type: 'Sales Return' | 'Purchase Return'
@@ -347,7 +347,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
         setReason('')
         setError('')
         setDateInvalid(false)
-        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+        window.setTimeout(() => {
+          baselineRef.current = snapshotRef.current
+          focusVoucherDialogAfterSave(dialogRef.current)
+        }, 0)
       }
     } catch (e: unknown) {
       cancelVoucherPrint(printRequest)
@@ -395,7 +398,10 @@ export function ReturnForm({ type, open, onClose, voucher }: ReturnFormProps) {
       freshAfterDraftRef.current = true
       baselineRef.current = ''
       setPartyAccountId(''); setOriginalId(''); setDateBs(selectedFiscalYearEndBs(company)); setLines([emptyManualLine()]); setSettlementMode('party'); setSettlementAccountId(''); setStockCondition('saleable'); setManualVatRate(vatEnabled ? 13 : 0); setReason(''); setError(''); setDateInvalid(false)
-      window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+      window.setTimeout(() => {
+        baselineRef.current = snapshotRef.current
+        focusVoucherDialogAfterSave(dialogRef.current)
+      }, 0)
     } catch (e: unknown) { setError(publicErrorMessage(e, `saving ${isSalesReturn ? 'sales' : 'purchase'} return draft`)) }
     finally { setSaving(false) }
   }

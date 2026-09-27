@@ -493,7 +493,13 @@ export function AppShell() {
     requestAnimationFrame(() => transactionMenuRef.current?.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus())
   }, [location.pathname, navigate])
 
-  useGlobalCreateShortcut({ active: !developerWorkspace, disabled: readOnly, onCreate: openNewTransactionMenu })
+  const hasShellContextualCreate = location.pathname === '/cheques/pending'
+    || location.pathname === '/cheques/received/pending'
+    || location.pathname === '/cheques/issued/pending'
+    || location.pathname === '/cheques/banks'
+  // Alt+N is reserved for creators belonging to the current page or editor.
+  // The general New Transaction menu remains available through plain N only.
+  useGlobalCreateShortcut({ active: !developerWorkspace && hasShellContextualCreate, disabled: readOnly, onCreate: openNewTransactionMenu })
 
   const visibleNavSections = useMemo(() => NAV_SECTIONS.map(section => {
     if (section.label === 'Cheque Management' && !showChequeNavigation) return null

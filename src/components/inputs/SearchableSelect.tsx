@@ -37,6 +37,8 @@ export function SearchableSelect({
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const listRef = useRef<HTMLDivElement>(null)
+  const optionRefs = useRef(new Map<string, HTMLButtonElement>())
   const suppressNextFocus = useRef(false)
   const focusCameFromPointer = useRef(false)
   const scrollFrame = useRef<number | null>(null)
@@ -44,6 +46,7 @@ export function SearchableSelect({
   const uniqueOptions = useMemo(() => [...new Map(options.map(option => [option.value, option])).values()], [options])
   const filtered = useMemo(() => groupSearchableOptions(filterSearchableOptions(uniqueOptions, query)), [uniqueOptions, query])
   const enabled = filtered.filter(option => !option.disabled)
+  const activeValue = enabled[activeIndex]?.value
   const selected = uniqueOptions.find(option => option.value === value)
 
   const closeAndReset = () => {
@@ -66,6 +69,18 @@ export function SearchableSelect({
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
     return () => window.clearTimeout(timer)
   }, [open])
+
+  useEffect(() => {
+    if (!open || !activeValue) return
+    const list = listRef.current
+    const option = optionRefs.current.get(activeValue)
+    if (!list || !option) return
+
+    const listBounds = list.getBoundingClientRect()
+    const optionBounds = option.getBoundingClientRect()
+    if (optionBounds.top < listBounds.top) list.scrollTop -= listBounds.top - optionBounds.top
+    else if (optionBounds.bottom > listBounds.bottom) list.scrollTop += optionBounds.bottom - listBounds.bottom
+  }, [open, activeValue])
 
   useEffect(() => () => {
     if (scrollFrame.current !== null) window.cancelAnimationFrame(scrollFrame.current)
@@ -119,7 +134,7 @@ export function SearchableSelect({
       </button>
     </Popover.Trigger>
     <Popover.Portal>
-      <Popover.Content collisionPadding={8} sideOffset={4} align="start" onEscapeKeyDown={event => { event.preventDefault(); event.stopPropagation(); closeAndReset() }} className="compact-workspace-surface z-[80] w-[var(--radix-popover-trigger-width)] min-w-[min(14rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
+      <Popover.Content data-khata-select-content="" collisionPadding={8} sideOffset={4} align="start" onEscapeKeyDown={event => { event.preventDefault(); event.stopPropagation(); closeAndReset() }} className="compact-workspace-surface z-[80] w-[var(--radix-popover-trigger-width)] min-w-[min(14rem,calc(100vw-1rem))] max-w-[calc(100vw-1rem)] rounded-md border bg-popover p-1 text-popover-foreground shadow-md">
         <div className="relative border-b p-1">
           <Search className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
           <input ref={inputRef} value={query} onChange={event => { setQuery(event.target.value); setActiveIndex(0) }} onKeyDown={event => {
@@ -130,6 +145,7 @@ export function SearchableSelect({
           }} placeholder={searchPlaceholder} className="h-7 w-full rounded-sm bg-transparent pl-7 pr-2 text-[12px] outline-none placeholder:text-muted-foreground" />
         </div>
         <div
+          ref={listRef}
           role="listbox"
           onWheelCapture={event => {
             event.preventDefault()
@@ -144,7 +160,7 @@ export function SearchableSelect({
             const enabledIndex = enabled.findIndex(entry => entry.value === option.value)
             return <div key={option.value}>
               {option.group && option.group !== previousGroup && <p className="px-2 py-1 text-[10px] font-semibold text-muted-foreground">{option.group}</p>}
-              <button type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => enabledIndex >= 0 && setActiveIndex(enabledIndex)} onClick={() => select(option)} className={cn('relative flex w-full items-center rounded-sm py-1 pl-7 pr-2 text-left text-[12px] outline-none hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50', enabledIndex === activeIndex && 'bg-accent text-accent-foreground')}>
+              <button ref={element => { if (element) optionRefs.current.set(option.value, element); else optionRefs.current.delete(option.value) }} type="button" role="option" aria-selected={option.value === value} disabled={option.disabled} onMouseEnter={() => enabledIndex >= 0 && setActiveIndex(enabledIndex)} onClick={() => select(option)} className={cn('relative flex w-full items-center rounded-sm py-1 pl-7 pr-2 text-left text-[12px] outline-none hover:bg-accent hover:text-accent-foreground disabled:pointer-events-none disabled:opacity-50', enabledIndex === activeIndex && 'bg-accent text-accent-foreground')}>
                 {option.value === value && <Check className="absolute left-2 h-4 w-4" />}
                 <span className="truncate">{option.label}</span>
               </button>

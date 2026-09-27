@@ -28,6 +28,16 @@ export function completeVoucherPrint(request: VoucherPrintRequest | undefined, t
 
 export function cancelVoucherPrint(_request?: VoucherPrintRequest) {}
 
+/**
+ * Return keyboard focus to the voucher dialog after a successful save that
+ * resets the form for another entry. The dialog itself is intentionally
+ * focused (rather than a particular field), so the next Tab press follows the
+ * form's normal DOM tab order from the beginning.
+ */
+export function focusVoucherDialogAfterSave(dialog: HTMLElement | null) {
+  window.requestAnimationFrame(() => dialog?.focus({ preventScroll: true }))
+}
+
 export function useVoucherShortcuts(options: {
   open: boolean
   disabled: boolean
