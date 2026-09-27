@@ -20,6 +20,8 @@ import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -53,6 +55,8 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const focusedLineRef = useRef(0)
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
@@ -127,6 +131,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   }
 
   useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: dialogRef, onCreate: () => setLedgerLineIndex(Math.min(focusedLineRef.current, lines.length - 1)) })
 
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed entries cannot be saved as draft.')
@@ -155,7 +160,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
 
   return <>
     <Dialog open={open} onOpenChange={next => { if (!next) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-      <DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
+      <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
         <DialogHeader><DialogTitle>{voucher ? 'Edit' : 'Add'} {entryType}</DialogTitle></DialogHeader>
         <p className="-mt-2 text-sm text-muted-foreground">No debit or credit knowledge needed. Choose where the money moved and what it was for.</p>
         <div className="space-y-4 py-2">
@@ -174,8 +179,8 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
             <div className="hidden grid-cols-[1fr_.35fr_auto] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>{entryType} ledger</span><span>Amount</span><span /></div>
             {lines.map((line, index) => {
               const ledgers = activeAccounts.filter(account => account.type === entryType && account.category_id)
-              return <div key={index} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[1fr_.35fr_auto] sm:border-0 sm:p-0">
-                <div className="flex min-w-0 gap-1"><SearchableSelect className="min-w-0 flex-1" value={line.account_id} onValueChange={value => { const account = activeAccounts.find(item => item.id === value); updateLine(index, { account_id: value, category_id: account?.category_id || '' }) }} placeholder={`Select ${entryType.toLowerCase()} ledger`} options={ledgers.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))} /><Button type="button" variant="outline" size="icon" title={`Create ${entryType.toLowerCase()} ledger`} onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /></Button></div>
+              return <div key={index} onFocusCapture={() => { focusedLineRef.current = index }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[1fr_.35fr_auto] sm:border-0 sm:p-0">
+                <div className="flex min-w-0 gap-1"><SearchableSelect className="min-w-0 flex-1" value={line.account_id} onValueChange={value => { const account = activeAccounts.find(item => item.id === value); updateLine(index, { account_id: value, category_id: account?.category_id || '' }) }} placeholder={`Select ${entryType.toLowerCase()} ledger`} options={ledgers.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))} /><Button type="button" variant="outline" size="sm" className="px-2" title={`Create ${entryType.toLowerCase()} ledger (Alt+N)`} onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button></div>
                 <Input type="number" min="0" step="0.01" value={line.amount || ''} onChange={event => updateLine(index, { amount: Number(event.target.value) })} className="text-right" placeholder="0.00" />
                 <Button type="button" variant="ghost" size="icon" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, lineIndex) => lineIndex !== index))}><Trash2 className="h-4 w-4" /></Button>
               </div>

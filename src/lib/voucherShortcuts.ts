@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { printPersistedVoucher } from '@/lib/voucherPrinterRegistry'
 import { notifyError } from '@/lib/notifications'
+import { useGlobalSaveShortcut } from '@/lib/globalSaveShortcut'
 import type { Voucher } from '@/types'
 
 export type VoucherPrintRequest = { existingIds: Set<string> }
@@ -36,12 +37,13 @@ export function useVoucherShortcuts(options: {
   onSaveDraft?: () => void
 }) {
   const { open, disabled, draftDisabled = disabled, onSave, onSaveAndPrint, onSaveDraft } = options
+  useGlobalSaveShortcut({ active: open, disabled, onSave })
   useEffect(() => {
     if (!open) return
     const handler = (event: KeyboardEvent) => {
       if (!event.altKey || event.ctrlKey || event.metaKey || event.shiftKey || event.repeat) return
       const key = event.key.toLowerCase()
-      if (key !== 's' && key !== 'p' && key !== 'd') return
+      if (key !== 'p' && key !== 'd') return
       if (key === 'd' && !onSaveDraft) return
       event.preventDefault()
       event.stopPropagation()
@@ -50,10 +52,9 @@ export function useVoucherShortcuts(options: {
         return
       }
       if (disabled) return
-      if (key === 's') onSave()
-      else onSaveAndPrint()
+      onSaveAndPrint()
     }
     window.addEventListener('keydown', handler, true)
     return () => window.removeEventListener('keydown', handler, true)
-  }, [open, disabled, draftDisabled, onSave, onSaveAndPrint, onSaveDraft])
+  }, [open, disabled, draftDisabled, onSaveAndPrint, onSaveDraft])
 }

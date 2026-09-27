@@ -19,6 +19,8 @@ import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { CategoryDialog, LedgerDialog } from '@/pages/Masters'
 import type { Account, AccountCategory, AccountType, Party } from '@/types'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 const ACCOUNT_TYPES: AccountType[] = ['Asset', 'Liability', 'Equity', 'Income', 'Expense']
 type StatusFilter = 'all' | 'active' | 'inactive'
@@ -34,9 +36,9 @@ const typeFolderClass: Record<AccountType, string> = {
   Expense: 'text-amber-600',
 }
 
-function NewMenu({ onLedger, onCategory, onParty }: { onLedger: () => void; onCategory: () => void; onParty: (type: 'customer' | 'supplier') => void }) {
-  return <DropdownMenuPrimitive.Root>
-    <DropdownMenuPrimitive.Trigger asChild><Button className="w-full sm:w-auto"><Plus className="mr-1.5 h-4 w-4" />New Account</Button></DropdownMenuPrimitive.Trigger>
+function NewMenu({ open, onOpenChange, onLedger, onCategory, onParty }: { open: boolean; onOpenChange: (open: boolean) => void; onLedger: () => void; onCategory: () => void; onParty: (type: 'customer' | 'supplier') => void }) {
+  return <DropdownMenuPrimitive.Root open={open} onOpenChange={onOpenChange}>
+    <DropdownMenuPrimitive.Trigger asChild><Button className="w-full sm:w-auto"><Plus className="mr-1.5 h-4 w-4" />New Account<CreateShortcutHint /></Button></DropdownMenuPrimitive.Trigger>
     <DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content align="end" sideOffset={4} className={menuContentClass}>
       <DropdownMenuPrimitive.Item onSelect={onLedger} className={menuItemClass}><BookOpen className="h-4 w-4" />New Ledger</DropdownMenuPrimitive.Item>
       <DropdownMenuPrimitive.Item onSelect={onCategory} className={menuItemClass}><FolderPlus className="h-4 w-4" />New Account Category</DropdownMenuPrimitive.Item>
@@ -80,6 +82,8 @@ export function AccountsPage() {
   const [ledgerOpen, setLedgerOpen] = useState(false)
   const [categoryOpen, setCategoryOpen] = useState(false)
   const [partyFormType, setPartyFormType] = useState<'customer' | 'supplier' | null>(null)
+  const [newMenuOpen, setNewMenuOpen] = useState(false)
+  useGlobalCreateShortcut({ active: true, onCreate: () => setNewMenuOpen(true) })
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(() => new Set())
   const expansionInitialized = useRef(false)
 
@@ -178,7 +182,7 @@ export function AccountsPage() {
   const allExpanded = expandableIds.length > 0 && expandableIds.every(id => expandedCategories.has(id))
 
   return <div>
-    <PageHeader title="Chart of Accounts" description="View and manage all your accounts in a structured hierarchy." action={<NewMenu onLedger={() => setLedgerOpen(true)} onCategory={() => setCategoryOpen(true)} onParty={setPartyFormType} />} />
+    <PageHeader title="Chart of Accounts" description="View and manage all your accounts in a structured hierarchy." action={<NewMenu open={newMenuOpen} onOpenChange={setNewMenuOpen} onLedger={() => setLedgerOpen(true)} onCategory={() => setCategoryOpen(true)} onParty={setPartyFormType} />} />
     <PageContent>
       <Card className="overflow-hidden p-3 sm:p-4">
         <div className="report-controls mb-4">

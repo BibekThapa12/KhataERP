@@ -11,6 +11,8 @@ import { Input } from '@/components/ui/input'
 import { Card } from '@/components/ui/card'
 import { Badge } from '@/components/ui/misc'
 import type { StockCondition, Voucher } from '@/types'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 export function StockAdjustmentsPage() {
   const company = useAppStore(state => state.company)
@@ -19,6 +21,7 @@ export function StockAdjustmentsPage() {
   const [search, setSearch] = useState('')
   const [showAdjustment, setShowAdjustment] = useState(false)
   const [editingAdjustment, setEditingAdjustment] = useState<Voucher | null>(null)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditingAdjustment(null); setShowAdjustment(true) } })
   const query = normalizeSearch(search)
   const adjustments = useMemo(() => vouchersInFiscalYear(vouchers, selectedFiscalYearStartBs(company)).filter(voucher => voucher.type === 'Stock Adjustment').filter(voucher => {
     const line = voucher.stock_lines?.[0]
@@ -42,7 +45,7 @@ export function StockAdjustmentsPage() {
     <PageHeader
       title="Stock Adjustments"
       description="Record stock corrections, losses, found stock, and condition transfers"
-      action={<Button onClick={() => { setEditingAdjustment(null); setShowAdjustment(true) }}><SlidersHorizontal className="mr-1.5 h-4 w-4" />New Adjustment</Button>}
+      action={<Button onClick={() => { setEditingAdjustment(null); setShowAdjustment(true) }}><SlidersHorizontal className="mr-1.5 h-4 w-4" />New Adjustment<CreateShortcutHint /></Button>}
     />
     <PageContent className="space-y-4">
       <div className="relative w-full sm:w-72">

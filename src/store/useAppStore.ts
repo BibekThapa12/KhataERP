@@ -577,7 +577,18 @@ export const useAppStore = create<AppState>((set, get) => ({
       let company = response.memberships.find(entry => entry.company_id === response.active_company_id)?.company || null
       const remembered = rememberedActiveCompany(userId)
       if (remembered && remembered !== response.active_company_id && response.memberships.some(entry => entry.company_id === remembered)) {
-        company = response.memberships.find(entry => entry.company_id === remembered)?.company || null
+        // The atomic voucher writer authorizes against my_company_id(), which
+        // reads the server-side preference. Keep it synchronized with the
+        // browser's remembered company before publishing that company as the
+        // active client scope, otherwise reads can target one company while a
+        // voucher write is rejected for targeting another.
+        const active = await setActiveCompanyRemote(remembered)
+        company = active
+        response = {
+          ...response,
+          active_company_id: active.id,
+          memberships: response.memberships.map(entry => entry.company_id === active.id ? { ...entry, company: active } : entry),
+        }
       }
       if (!company) {
         // Preserve first-account onboarding; never repair existing companies.

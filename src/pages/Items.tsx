@@ -16,6 +16,8 @@ import { Badge } from '@/components/ui/misc'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import type { Item, ItemCategory } from '@/types'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 type StatusFilter = 'all' | 'active' | 'inactive'
 
@@ -28,6 +30,10 @@ export function ItemsPage() {
   const [editingItem, setEditingItem] = useState<Item | null>(null)
   const [categoryDialog, setCategoryDialog] = useState<{ category?: ItemCategory; parentCategory?: ItemCategory } | null>(null)
   const query = normalizeSearch(search)
+  useGlobalCreateShortcut({
+    active: tab === 'items' || tab === 'categories',
+    onCreate: () => tab === 'items' ? setShowForm(true) : setCategoryDialog({}),
+  })
   const itemTree = useMemo(() => buildCategoryTree(itemCategories, items), [itemCategories, items])
   const itemRows = useMemo(() => items.filter(item => {
     const statusMatches = status === 'all' || (status === 'inactive' ? !!item.is_archived : !item.is_archived)
@@ -45,7 +51,7 @@ export function ItemsPage() {
       <Tabs value={tab} onValueChange={setTab}>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="items">Items</TabsTrigger><TabsTrigger value="categories">Item Categories</TabsTrigger><TabsTrigger value="pricing">Slab Pricing</TabsTrigger></TabsList></div>
-          {tab === 'items' && <div className="flex flex-wrap gap-2"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items..." className="w-full pl-8 sm:w-64" /></div><SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} /><Button onClick={() => setShowForm(true)}><Plus className="mr-1.5 h-4 w-4" />New Item</Button></div>}
+          {tab === 'items' && <div className="flex flex-wrap gap-2"><div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items..." className="w-full pl-8 sm:w-64" /></div><SearchableSelect value={status} onValueChange={value => setStatus(value as StatusFilter)} className="w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} /><Button onClick={() => setShowForm(true)}><Plus className="mr-1.5 h-4 w-4" />New Item<CreateShortcutHint /></Button></div>}
         </div>
 
         <TabsContent value="items">

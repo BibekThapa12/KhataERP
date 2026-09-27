@@ -27,6 +27,9 @@ import { ledgerDeletionBlockReason } from '@/lib/masterDeletion'
 import { ledgerFieldVisibility, openingBalanceFromStored, openingBalanceToStored, type BalanceType } from '@/lib/ledgerForm'
 import { normalSide } from '@/lib/engine'
 import { formatMasterName } from '@/lib/nameFormat'
+import { useGlobalSaveShortcut } from '@/lib/globalSaveShortcut'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateBankAccount, validateBranch, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 import type { Account, AccountCategory, AccountType, Item, ItemCategory, MasterChangeLog, Party } from '@/types'
 
@@ -104,6 +107,7 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
   const parentOptions = allCategories.filter(candidate => !candidate.is_archived && candidate.id !== category?.id && !descendants.has(candidate.id) && categoryDepth(allCategories, candidate.id) + ownHeight <= 4 && (kind === 'item' || (candidate as AccountCategory).account_type === type))
   const selectedParent = parentId === 'root' ? undefined : allCategories.find(candidate => candidate.id === parentId)
   const systemCategory = kind === 'account' && !!(category as AccountCategory | undefined)?.is_system
+  useGlobalSaveShortcut({ active: open, disabled: saving || systemCategory, onSave: () => void save() })
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
@@ -116,7 +120,7 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
           {systemCategory && <p className="text-xs text-muted-foreground">System account groups are protected and cannot be changed.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving || systemCategory}>{saving ? 'Saving...' : 'Save Category'}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving || systemCategory}>{saving ? 'Saving...' : <>Save Category<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd></>}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
   )
@@ -139,6 +143,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
+  const ledgerDialogRef = useRef<HTMLDivElement | null>(null)
   const initializedSessionRef = useRef<string | null>(null)
   const selectedCategory = activeCategories.find(category => category.id === categoryId)
   const visibility = useMemo(() => ledgerFieldVisibility(accountCategories, categoryId), [accountCategories, categoryId])
@@ -224,11 +229,13 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
       onClose()
     } catch (e: unknown) { setError(identityDatabaseError(e) || ledgerDialogError(e)) } finally { setSaving(false) }
   }
+  useGlobalSaveShortcut({ active: open, disabled: saving, onSave: () => void save() })
+  useGlobalCreateShortcut({ active: open, disabled: saving || partyMode || !!account?.is_system, scopeRef: ledgerDialogRef, onCreate: () => setCategoryDialogOpen(true) })
 
   return (
     <>
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-2xl">
+      <DialogContent ref={ledgerDialogRef} className="max-w-2xl">
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
         <div className="min-w-0 space-y-4 py-2">
           <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
@@ -236,7 +243,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
           {party && !defaultPartyType ? (
             <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
-            <div className="space-y-1.5"><Label>Group / Category <span className="text-destructive">*</span></Label><div className="flex gap-1"><SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={value => { setCategoryId(value); if (!account) { const next = activeCategories.find(category => category.id === value); if (next) setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') } }} disabled={partyMode || !!account?.is_system} placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /><Button type="button" variant="outline" size="icon" disabled={partyMode || !!account?.is_system} title="Create account category" aria-label="Create account category" onClick={() => setCategoryDialogOpen(true)}><FolderPlus className="h-4 w-4" /></Button></div></div>
+            <div className="space-y-1.5"><Label>Group / Category <span className="text-destructive">*</span></Label><div className="flex gap-1"><SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={value => { setCategoryId(value); if (!account) { const next = activeCategories.find(category => category.id === value); if (next) setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') } }} disabled={partyMode || !!account?.is_system} placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /><Button type="button" variant="outline" size="sm" className="px-2" disabled={partyMode || !!account?.is_system} title="Create account category (Alt+N)" aria-label="Create account category (Alt+N)" onClick={() => setCategoryDialogOpen(true)}><FolderPlus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button></div></div>
           )}
             {party && !defaultPartyType && <div className="space-y-1.5 sm:col-span-2"><Label>Group / Category <span className="text-destructive">*</span></Label><SearchableSelect value={categoryId} onValueChange={setCategoryId} disabled placeholder="Select group / category" options={activeCategories.map(category => ({ value: category.id, label: categoryOptionLabel(accountCategories, category.id), searchText: categoryPath(accountCategories, category.id), group: category.account_type }))} /></div>}
             <div className="space-y-1.5"><Label>Opening Balance <span className="text-destructive">*</span></Label><Input type="number" min="0" step="any" value={openingBalance} onChange={event => setOpeningBalance(event.target.value)} /></div>
@@ -259,7 +266,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
           {account?.is_system && <p className="text-xs text-amber-700">System-created ledgers are protected from account-type changes.</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
-        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Ledger'}</Button></DialogFooter>
+        <DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : <>Save Ledger<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd></>}</Button></DialogFooter>
       </DialogContent>
     </Dialog>
     {categoryDialogOpen && <CategoryDialog kind="account" open defaultAccountType={allowedAccountType || selectedCategory?.account_type} onClose={() => setCategoryDialogOpen(false)} onCreated={created => { const next = created as AccountCategory; setCategoryId(next.id); setBalanceType(normalSide(next.account_type) === 'debit' ? 'Dr' : 'Cr') }} />}
@@ -283,11 +290,11 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
     setConfirmUnit(false); setError('')
   }, [open, item])
 
-  if (!item) return null
-  const isService = !!item.is_service
-  const unitChanged = form.unit.trim() !== item.unit
-  const stockBasisChanged = Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate
+  const isService = !!item?.is_service
+  const unitChanged = !!item && form.unit.trim() !== item.unit
+  const stockBasisChanged = !!item && (Number(form.opening_qty) !== item.opening_qty || Number(form.opening_rate) !== item.opening_rate)
   const save = async () => {
+    if (!item) return
     const itemName = formatMasterName(form.name)
     const itemNameError = validateName(itemName, 'Item name')
     if (itemNameError) return setError(itemNameError)
@@ -308,6 +315,9 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       onClose()
     } catch (e: unknown) { setError(masterDialogError(e, 'saving item')) } finally { setSaving(false) }
   }
+  useGlobalSaveShortcut({ active: open && !!item, disabled: saving, onSave: () => void save() })
+
+  if (!item) return null
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
@@ -329,7 +339,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
         <label className="flex items-center gap-2 pt-6 text-sm"><input type="checkbox" checked={form.vat_applicable} onChange={event => setForm({ ...form, vat_applicable: event.target.checked })} className="h-4 w-4 accent-primary" />VAT applicable</label>
         {used && (unitChanged || stockBasisChanged) && <label className="flex items-start gap-2 rounded border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 sm:col-span-2"><input type="checkbox" checked={confirmUnit} onChange={event => setConfirmUnit(event.target.checked)} className="mt-0.5 h-4 w-4" />I understand historical vouchers will not be rewritten and this change affects current stock calculations.</label>}
         {error && <p className="text-sm text-destructive sm:col-span-2">{error}</p>}
-      </div><DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : 'Save Item'}</Button></DialogFooter>
+      </div><DialogFooter><Button variant="outline" onClick={onClose}>Cancel</Button><Button onClick={save} disabled={saving}>{saving ? 'Saving...' : <>Save Item<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd></>}</Button></DialogFooter>
     </DialogContent></Dialog>
   )
 }
@@ -354,6 +364,11 @@ export function MastersPage() {
   const searchPlaceholder = `Search ${tab}…`
   const selectedParty = editingAccount ? partyByAccount.get(editingAccount.id) : null
 
+  useGlobalCreateShortcut({
+    active: tab === 'ledgers' || tab === 'categories',
+    onCreate: () => tab === 'ledgers' ? openLedger() : setCategoryDialog({}),
+  })
+
   useEffect(() => {
     if (tab !== 'history' || !company) return
     fetchMasterChangeLogs(company.id).then(logs => { setChangeLogs(logs); setHistoryError('') }).catch(error => setHistoryError(publicErrorMessage(error, 'loading change history')))
@@ -376,7 +391,7 @@ export function MastersPage() {
       <PageContent className="space-y-4">
         {actionError && <div role="alert" className="flex items-start gap-2 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive"><AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />{actionError}</div>}
         <Tabs value={tab} onValueChange={setTab}><div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between"><div className="overflow-x-auto pb-1"><TabsList className="w-max"><TabsTrigger value="ledgers">Ledgers</TabsTrigger><TabsTrigger value="categories">Account Categories</TabsTrigger><TabsTrigger value="history">Change History</TabsTrigger></TabsList></div>
-          <div className="flex flex-wrap gap-2">{tab !== 'categories' && <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearchByTab(current => ({ ...current, [tab]: event.target.value }))} placeholder={searchPlaceholder} className="w-full pl-8 sm:w-64" /></div>}{tab === 'ledgers' && <Button onClick={() => openLedger()}><Plus className="mr-1.5 h-4 w-4" />New Ledger</Button>}</div></div>
+          <div className="flex flex-wrap gap-2">{tab !== 'categories' && <div className="relative min-w-0 flex-1 sm:flex-none"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearchByTab(current => ({ ...current, [tab]: event.target.value }))} placeholder={searchPlaceholder} className="w-full pl-8 sm:w-64" /></div>}{tab === 'ledgers' && <Button onClick={() => openLedger()}><Plus className="mr-1.5 h-4 w-4" />New Ledger<CreateShortcutHint /></Button>}</div></div>
           {search && tab === 'ledgers' && ledgerRows.length === 0 && <p className="w-full rounded-md border border-dashed p-6 text-center text-sm text-muted-foreground">No matching ledgers.</p>}
           <TabsContent value="ledgers"><Card className="overflow-hidden"><div className="overflow-x-auto"><table className="w-full min-w-[900px] text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">S.No.</th><th className="report-th text-left">Ledger</th><th className="report-th text-left">Category</th><th className="report-th text-left">Type</th><th className="report-th text-right">Balance</th><th className="report-th text-left">Status</th><th className="report-th"></th></tr></thead><tbody>{ledgerRows.map((account, index) => { const current = accounts.find(item => item.id === account.id) || account; const party = partyByAccount.get(account.id); const archived = party?.is_archived || account.is_archived; const deleteBlocked = ledgerDeletionBlockReason(current, vouchers); return <tr key={account.id} className={`border-t ${archived ? 'opacity-55' : ''}`}><td className="report-td text-muted-foreground num">{index + 1}</td><td className="report-td font-medium">{account.name}{party && <span className="ml-2 text-xs text-muted-foreground">{partyTerminology(party.type).singular}</span>}</td><td className="report-td text-muted-foreground">{categoryPath(accountCategories, account.category_id) || account.group}</td><td className="report-td">{account.type}</td><td className="report-td text-right num font-semibold">{fmtMoney(current.balance || 0)}</td><td className="report-td"><Badge variant={archived ? 'secondary' : account.is_system ? 'outline' : 'default'}>{archived ? 'Archived' : account.is_system ? 'System' : 'Active'}</Badge></td><td className="report-td"><div className="flex justify-end gap-1"><Button title="Open ledger report" variant="ghost" size="icon" onClick={() => navigate(`/reports/ledger?account=${encodeURIComponent(account.id)}`)}><ExternalLink className="h-4 w-4" /></Button><Button title="Alter ledger" variant="ghost" size="icon" onClick={() => openLedger(account)}><Pencil className="h-4 w-4" /></Button>{!account.is_system && <Button title={archived ? 'Restore ledger' : 'Archive ledger'} variant="ghost" size="icon" onClick={() => toggleLedger(account)}>{archived ? <RotateCcw className="h-4 w-4" /> : <Archive className="h-4 w-4" />}</Button>}{!account.is_system && !archived && <Button title={deleteBlocked || 'Delete ledger permanently'} variant="ghost" size="icon" disabled={!!deleteBlocked} className="text-muted-foreground hover:text-destructive" onClick={() => removeLedger(account)}><Trash2 className="h-4 w-4" /></Button>}</div></td></tr>})}</tbody></table></div></Card></TabsContent>
           <TabsContent value="categories"><div className="space-y-4"><CategoryTable kind="account" title="Account Categories" rows={accountCategoryTree} loading={loading} error={error} onAdd={() => setCategoryDialog({})} onAddChild={parentCategory => setCategoryDialog({ parentCategory: parentCategory as AccountCategory })} onEdit={category => setCategoryDialog({ category: category as AccountCategory })} onArchive={category => alterAccountCategory(category.id, { is_archived: !category.is_archived })} onDelete={category => deleteAccountCategory(category.id)} /><CategoryLegend kind="account" /></div></TabsContent>
@@ -494,7 +509,7 @@ export function CategoryTable({ kind, title, rows, loading, error, onAdd, onAddC
 
   return <Card className="min-w-0 overflow-hidden">
     <div className="border-b p-4">
-      <div className="flex items-center justify-between gap-3"><h3 className="min-w-0 truncate font-serif font-bold">{title}</h3><Button size="sm" variant="outline" onClick={onAdd}><Plus className="mr-1 h-3.5 w-3.5" />New</Button></div>
+      <div className="flex items-center justify-between gap-3"><h3 className="min-w-0 truncate font-serif font-bold">{title}</h3><Button size="sm" variant="outline" onClick={onAdd}><Plus className="mr-1 h-3.5 w-3.5" />New<CreateShortcutHint /></Button></div>
       <div className="mt-4 flex flex-col gap-2 sm:flex-row">
         <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={`Search ${title.toLowerCase()}...`} className="w-full pl-8" /></div>
         <SearchableSelect value={status} onValueChange={value => setStatus(value as CategoryStatus)} className="sm:w-32" options={[{ value: 'all', label: 'All status' }, { value: 'active', label: 'Active' }, { value: 'inactive', label: 'Inactive' }]} />

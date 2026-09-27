@@ -56,6 +56,35 @@ describe('company-scoped accounting publication', () => {
     expect(mocks.fetchCompanySnapshot).toHaveBeenCalledTimes(1)
     expect(useAppStore.getState().dataReady).toBe(true)
   })
+  it('synchronizes a remembered company with the server before publishing its data', async () => {
+    vi.stubGlobal('window', {
+      localStorage: {
+        getItem: vi.fn((key: string) => key === 'khataerp:active-company:user' ? 'B' : null),
+        setItem: vi.fn(),
+      },
+    })
+    try {
+      useAppStore.setState({ company: null, activeCompanyId: null, dataReady: false })
+      mocks.fetchMyCompanies.mockResolvedValueOnce({
+        active_company_id: 'A',
+        memberships: [
+          { company_id: 'A', company: company('A') },
+          { company_id: 'B', company: company('B') },
+        ],
+        license: null,
+      })
+      mocks.setActiveCompanyRemote.mockResolvedValueOnce(company('B'))
+      mocks.fetchCompanySnapshot.mockResolvedValueOnce(snapshot('B'))
+
+      await useAppStore.getState().loadAll('user')
+
+      expect(mocks.setActiveCompanyRemote).toHaveBeenCalledWith('B')
+      expect(mocks.fetchCompanySnapshot).toHaveBeenCalledWith(expect.objectContaining({ id: 'B' }))
+      expect(useAppStore.getState()).toMatchObject({ company: { id: 'B' }, activeCompanyId: 'B', dataReady: true })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
   it('shares a pending background read instead of invalidating it on every focus event', async () => {
     const waiting = deferred<ReturnType<typeof snapshot>>()
     mocks.fetchCompanySnapshot.mockReturnValueOnce(waiting.promise)

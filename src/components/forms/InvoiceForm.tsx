@@ -28,6 +28,8 @@ import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucher
 import { repriceSalesLines } from '@/lib/pricing'
 import type { PricingSnapshot } from '@/types'
 import { applyInvoiceQuantityInput, releaseInvoicePricingLocks } from '@/lib/invoiceLineEditing'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -65,6 +67,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [showItemForm, setShowItemForm] = useState(false)
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
   const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
+  const createContextRef = useRef<{ kind: 'party' } | { kind: 'item'; index: number } | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const pendingLineFocus = useRef<number | null>(null)
@@ -87,6 +91,25 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const dueDateBs = (() => {
     try { return addDaysToBs(dateBs, isCash ? 0 : creditDays) } catch { return '' }
   })()
+
+  useGlobalCreateShortcut({
+    active: open,
+    disabled: saving,
+    scopeRef: dialogRef,
+    onCreate: () => {
+      const active = document.activeElement instanceof Element ? document.activeElement : null
+      const row = active?.closest<HTMLElement>('[data-create-line]')
+      const rowIndex = row ? Number(row.dataset.createLine) : -1
+      const context = Number.isInteger(rowIndex) && rowIndex >= 0 ? { kind: 'item' as const, index: rowIndex } : createContextRef.current
+      if (context?.kind === 'item' && context.index < lines.length) {
+        setNewItemLineIdx(context.index); setShowItemForm(true); return
+      }
+      if (!isCash && (!partyAccountId || context?.kind === 'party')) {
+        setShowPartyForm(true); return
+      }
+      setNewItemLineIdx(0); setShowItemForm(true)
+    },
+  })
 
   // Totals
   const numericLines = useMemo(() => lines.map(line => ({
@@ -448,7 +471,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   return (
     <>
       <Dialog open={open} onOpenChange={o => { if (!o) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-        <DialogContent className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
+        <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" onFocusCapture={event => { const target = event.target instanceof Element ? event.target : null; const line = target?.closest<HTMLElement>('[data-create-line]'); createContextRef.current = line ? { kind: 'item', index: Number(line.dataset.createLine) } : target?.closest('[data-create-context="party"]') ? { kind: 'party' } : null }} className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
           <DialogHeader>
             <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
           </DialogHeader>
@@ -476,11 +499,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
             {isCash && <LedgerBalanceHint account={cashAccount} />}
 
             <div className={`grid gap-3 ${isCash ? 'sm:grid-cols-[11rem_12rem]' : 'lg:grid-cols-[minmax(18rem,1fr)_11rem_12rem]'}`}>
-              {!isCash && <div className="min-w-0 space-y-1.5">
+              {!isCash && <div data-create-context="party" className="min-w-0 space-y-1.5">
                 <Label>{partyTerms.singular}</Label>
                 <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
                   <SearchableSelect triggerRef={partyTriggerRef} autoFocus className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
-                  <Button type="button" variant="outline" size="sm" tabIndex={-1} className="shrink-0 bg-white hover:bg-white" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
+                  <Button type="button" variant="outline" size="sm" tabIndex={-1} className="shrink-0 bg-white hover:bg-white" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New<CreateShortcutHint /></Button>
                 </div>
                 <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
               </div>}
@@ -510,11 +533,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   const isServiceLine = !!selectedItem?.is_service
                   return (
-                    <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
+                    <div key={idx} data-create-line={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
                       <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
                         <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: i.is_service ? `${i.name} (Service)` : `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''} ${i.is_service ? 'service' : ''}` }))} />
-                        <Button type="button" variant="outline" size="icon" tabIndex={-1} className="h-8 w-8 flex-shrink-0 bg-white hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
-                          <Plus className="h-3.5 w-3.5" />
+                        <Button type="button" variant="outline" size="sm" tabIndex={-1} aria-label="Create new item (Alt+N)" className="h-8 flex-shrink-0 bg-white px-2 hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
+                          <Plus className="h-3.5 w-3.5" /><CreateShortcutHint className="ml-1" />
                         </Button>
                       </div>
                       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${!isServiceLine && stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={!isServiceLine && stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : undefined}>{isServiceLine ? 'Service' : stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : '—'}</div></div>

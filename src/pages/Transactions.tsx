@@ -27,6 +27,8 @@ import { notifyError, withoutSuccessNotifications } from '@/lib/notifications'
 import { fmtMoney } from '@/lib/utils'
 import { buildDraftLoadoutSummary } from '@/lib/draftLoadout'
 import { DraftLoadoutSummary } from '@/components/drafts/DraftLoadoutSummary'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 function useVouchersByType(type: VoucherType) {
   const allVouchers = useAppStore(s => s.vouchers)
@@ -173,10 +175,11 @@ export function SalesPage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
   useCreateEntryRequest(setOpen)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title="Sales Invoices" description={vatEnabled ? 'VAT-ready sales to Sundry Debtors (Customers)' : 'Internal sales records for bookkeeping'}
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Sale<CreateShortcutHint /></Button>} />
       <PageContent>
         <BulkDraftVoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} />
       </PageContent>
@@ -191,10 +194,11 @@ export function PurchasePage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
   useCreateEntryRequest(setOpen)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title="Purchase Bills" description="Goods bought from Sundry Creditors (Suppliers)"
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Purchase</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Purchase<CreateShortcutHint /></Button>} />
       <PageContent>
         <BulkDraftVoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} />
       </PageContent>
@@ -210,10 +214,11 @@ function ReturnPage({ type }: { type: 'Sales Return' | 'Purchase Return' }) {
   const [editing, setEditing] = useState<Voucher | null>(null)
   const isSales = type === 'Sales Return'
   const title = vatEnabled ? (isSales ? 'Sales Returns / Credit Notes' : 'Purchase Returns / Debit Notes') : `${type}s`
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title={title} description={isSales ? 'Goods returned by Sundry Debtors (Customers)' : 'Goods returned to Sundry Creditors (Suppliers)'}
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New {isSales ? 'Sales' : 'Purchase'} Return</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New {isSales ? 'Sales' : 'Purchase'} Return<CreateShortcutHint /></Button>} />
       <PageContent><BulkDraftVoucherTable vouchers={vouchers} onEdit={voucher => { setEditing(voucher); setOpen(true) }} /></PageContent>
       <ReturnForm type={type} open={open} voucher={editing} onClose={() => { setOpen(false); setEditing(null) }} />
     </div>
@@ -229,10 +234,11 @@ export function ReceiptsPage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
   useCreateEntryRequest(setOpen)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title="Receipts" description="Money received from Sundry Debtors (Customers)"
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Receipt</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Receipt<CreateShortcutHint /></Button>} />
       <PageContent>
         <BulkDraftVoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} />
       </PageContent>
@@ -247,10 +253,11 @@ export function PaymentsPage() {
   const [open, setOpen] = useState(false)
   const [editing, setEditing] = useState<Voucher | null>(null)
   useCreateEntryRequest(setOpen)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title="Payments" description="Money paid to Sundry Creditors (Suppliers)"
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Payment</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Payment<CreateShortcutHint /></Button>} />
       <PageContent>
         <BulkDraftVoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} />
       </PageContent>
@@ -268,10 +275,11 @@ export function JournalPage() {
   const editingSimpleType = editing ? voucherSimpleEntryType(editing, accounts) : null
   const editingContra = editing ? voucherIsContra(editing) : false
   useCreateEntryRequest(setOpen)
+  useGlobalCreateShortcut({ active: true, onCreate: () => { setEditing(null); setOpen(true) } })
   return (
     <div>
       <PageHeader title="Journal Entries" description="Manual adjustments — depreciation, write-offs, opening balances"
-        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Journal</Button>} />
+        action={<Button onClick={() => setOpen(true)}><Plus className="h-4 w-4 mr-1.5" />New Journal<CreateShortcutHint /></Button>} />
       <PageContent>
         <BulkDraftVoucherTable vouchers={vouchers} onEdit={v => { setEditing(v); setOpen(true) }} />
       </PageContent>

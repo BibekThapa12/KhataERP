@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { buildContraLines, contraMoneyAccounts, resolveBankChargesAccountId } from '@/lib/contra'
 import { categoryPath } from '@/lib/categoryHierarchy'
@@ -17,6 +17,10 @@ import { VoucherNumberField } from '@/components/forms/VoucherNumberField'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import { Printer } from 'lucide-react'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+
+const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
 type ContraDraft = { sourceAccountId?: string; destinationAccountId?: string; amount?: number; chargeAmount?: number; narration?: string; dateBs?: string; journalInvoiceNo?: string }
 
@@ -39,6 +43,9 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [ledgerTarget, setLedgerTarget] = useState<'source' | 'destination' | null>(null)
+  const focusedLedgerTarget = useRef<'source' | 'destination'>('source')
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const lock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
@@ -90,6 +97,7 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     finally { lock.release(); setSaving(false) }
   }
   useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: dialogRef, onCreate: () => setLedgerTarget(focusedLedgerTarget.current) })
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed Contra vouchers cannot be saved as draft.')
     setSaving(true); setError('')
@@ -102,16 +110,18 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   }
   const removeDraft = async () => { if (!voucher || voucher.status !== 'Draft') return; setSaving(true); try { await deleteDraftVoucher(voucher.id); onClose() } catch (caught) { setError(publicErrorMessage(caught, 'deleting Contra draft')) } finally { setSaving(false) } }
 
-  return <Dialog open={open} onOpenChange={next => { if (!next) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}><DialogContent className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
+  return <><Dialog open={open} onOpenChange={next => { if (!next) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}><DialogContent ref={dialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-h-[88vh] max-w-2xl overflow-y-auto">
     <DialogHeader><DialogTitle>{voucher && !freshAfterDraftRef.current ? 'Edit' : 'Add'} Contra</DialogTitle></DialogHeader>
     <p className="-mt-2 text-sm text-muted-foreground">Move money seamlessly between your Cash and Bank ledgers.</p>
     <div className="space-y-4 py-2">
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>{manualNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={invoiceNo} onChange={event => setInvoiceNo(event.target.value)} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}</div>
-      <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Transfer From <span className="text-destructive">*</span></Label><SearchableSelect value={sourceId} onValueChange={setSourceId} placeholder="Select Cash or Bank" options={options} /></div><div className="space-y-1.5"><Label>Transfer To <span className="text-destructive">*</span></Label><SearchableSelect value={destinationId} onValueChange={setDestinationId} placeholder="Select Cash or Bank" options={options.filter(option => option.value !== sourceId)} /></div></div>
+      <div className="grid gap-3 sm:grid-cols-2"><div onFocusCapture={() => { focusedLedgerTarget.current = 'source' }} className="space-y-1.5"><Label>Transfer From <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect value={sourceId} onValueChange={setSourceId} placeholder="Select Cash or Bank" options={options} /></div><div onFocusCapture={() => { focusedLedgerTarget.current = 'destination' }} className="space-y-1.5"><Label>Transfer To <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect value={destinationId} onValueChange={setDestinationId} placeholder="Select Cash or Bank" options={options.filter(option => option.value !== sourceId)} /></div></div>
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Transfer Amount <span className="text-destructive">*</span></Label><Input type="number" min="0" step="0.01" value={amount || ''} onChange={event => setAmount(Number(event.target.value))} placeholder="0.00" /></div><div className="space-y-1.5"><Label>Bank Charge (optional)</Label><Input type="number" min="0" step="0.01" value={charge || ''} onChange={event => setCharge(Number(event.target.value))} placeholder="0.00" /></div></div>
       <div className="space-y-1.5"><Label>Note</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Transfer reference or details" /></div>
       {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
     <DialogFooter>{voucher?.status === 'Draft' && !freshAfterDraftRef.current && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd></Button>}<Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button><Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button></DialogFooter>
   </DialogContent></Dialog>
+  {ledgerTarget && <LedgerDialog open defaultCategoryId={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.category_id || accounts[0]?.category_id} allowedAccountType={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.type || accounts[0]?.type} onClose={() => setLedgerTarget(null)} onCreated={account => { if (ledgerTarget === 'source') setSourceId(account.id); else setDestinationId(account.id); setLedgerTarget(null) }} />}
+  </>
 }

@@ -30,6 +30,9 @@ import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges
 import type { Item, Voucher } from '@/types'
 import type { VoucherLine } from '@/types'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { useGlobalSaveShortcut } from '@/lib/globalSaveShortcut'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 const CategoryDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.CategoryDialog })))
@@ -53,9 +56,10 @@ interface ItemFormProps {
   open: boolean
   onClose: () => void
   onCreated?: (item: Item) => void
+  allowService?: boolean
 }
 
-export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
+export function ItemForm({ open, onClose, onCreated, allowService = true }: ItemFormProps) {
   const addItem = useAppStore(s => s.addItem)
   const itemCategories = useAppStore(s => s.itemCategories)
   const [name, setName] = useState('')
@@ -76,6 +80,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const submissionLock = useRef(new SubmissionLock()).current
+  const itemDialogRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
@@ -104,11 +109,13 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
       setError(itemFormError(e))
     } finally { submissionLock.release(); setSaving(false) }
   }
+  useGlobalSaveShortcut({ active: open, disabled: saving, onSave: () => void handleSave() })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: itemDialogRef, onCreate: () => setCategoryDialogOpen(true) })
 
   return (
     <>
     <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+      <DialogContent ref={itemDialogRef} className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>New Item</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
@@ -119,12 +126,12 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
             <Label>Category</Label>
             <div className="flex gap-1.5">
               <SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} />
-              <Button type="button" variant="outline" size="icon" className="h-9 w-9 shrink-0" aria-label="Create new item category" title="Create new category" onClick={() => setCategoryDialogOpen(true)}>
-                <Plus className="h-4 w-4" />
+              <Button type="button" variant="outline" size="sm" className="h-9 shrink-0 px-2" aria-label="Create new item category (Alt+N)" title="Create new category (Alt+N)" onClick={() => setCategoryDialogOpen(true)}>
+                <Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" />
               </Button>
             </div>
           </div>
-          <label className="flex items-center gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isService} onChange={e => setIsService(e.target.checked)} className="h-4 w-4 accent-primary" />This item is a service</label>
+          {allowService && <label className="flex items-center gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isService} onChange={e => setIsService(e.target.checked)} className="h-4 w-4 accent-primary" />This item is a service</label>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {!isService && <div className="space-y-1.5">
               <Label>Main Unit</Label>
@@ -164,7 +171,7 @@ export function ItemForm({ open, onClose, onCreated }: ItemFormProps) {
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={onClose}>Cancel</Button>
-          <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : 'Save Item'}</Button>
+          <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : <>Save Item<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd></>}</Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
@@ -197,6 +204,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [error, setError] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const receiptDialogRef = useRef<HTMLDivElement | null>(null)
+  const focusedAllocationRef = useRef(0)
   const pendingAllocationFocus = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
@@ -315,6 +324,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   }
 
   useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: receiptDialogRef, onCreate: () => setLedgerLineIndex(Math.min(focusedAllocationRef.current, allocations.length - 1)) })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -357,7 +367,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   return (
     <>
     <Dialog open={open} onOpenChange={o => { if (!o) void confirmReceiptPaymentDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-      <DialogContent className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent ref={receiptDialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
@@ -374,11 +384,11 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
             {allocations.map((allocation, index) => {
               const selectedAccount = accounts.find(account => account.id === allocation.account_id)
               const selectedParty = parties.find(party => party.account_id === allocation.account_id)
-              return <div key={index} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
+              return <div key={index} onFocusCapture={() => { focusedAllocationRef.current = index }} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
                 <div className="min-w-0 space-y-1.5">
                   <div className="flex min-w-0 gap-1.5">
                     <SearchableSelect className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
-                    <Button type="button" variant="outline" size="icon" title="Create ledger" aria-label="Create ledger" className="h-9 w-9 shrink-0" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /></Button>
+                    <Button type="button" variant="outline" size="sm" title="Create ledger (Alt+N)" aria-label="Create ledger (Alt+N)" className="h-9 shrink-0 px-2" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button>
                   </div>
                   <LedgerBalanceHint account={selectedAccount} party={selectedParty} />
                 </div>
@@ -448,6 +458,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [error, setError] = useState('')
   const [dateInvalid, setDateInvalid] = useState(false)
   const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const journalDialogRef = useRef<HTMLDivElement | null>(null)
+  const focusedJournalLineRef = useRef(0)
   const pendingJournalLineFocus = useRef<number | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
@@ -572,6 +584,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   }
 
   useVoucherShortcuts({ open, disabled: saving || !balanced, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: journalDialogRef, onCreate: () => setLedgerLineIndex(Math.min(focusedJournalLineRef.current, jLines.length - 1)) })
 
   const handleDeleteDraft = async () => {
     if (!voucher || voucher.status !== 'Draft') return
@@ -612,7 +625,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   return (
     <>
     <Dialog open={open} onOpenChange={o => { if (!o) void confirmJournalDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-      <DialogContent className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
+      <DialogContent ref={journalDialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-w-2xl max-h-[85vh] overflow-y-auto">
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} Journal Entry</DialogTitle></DialogHeader>
         <p className="text-sm text-muted-foreground -mt-2">
           Use this for adjustments not covered by other voucher types: depreciation, write-offs, opening balances, etc.
@@ -628,7 +641,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
             <span>Account</span><span>Debit</span><span>Credit</span><span></span>
           </div>
           {jLines.map((line, idx) => (
-            <div key={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
+            <div key={idx} onFocusCapture={() => { focusedJournalLineRef.current = idx }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
               <div className="col-span-2 flex min-w-0 gap-1 sm:col-span-1">
               <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="min-w-0 flex-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
                 const party = partyByAccount.get(account.id)
@@ -639,8 +652,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
                   searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type} ${party?.phone || ''} ${party?.pan_vat || ''} ${party?.address || ''}`,
                 }
               })} />
-              <Button type="button" variant="outline" size="icon" tabIndex={-1} className="h-9 w-9 shrink-0" aria-label="Create new ledger" title="Create new ledger" onClick={() => setLedgerLineIndex(idx)}>
-                <Plus className="h-3.5 w-3.5" />
+              <Button type="button" variant="outline" size="sm" tabIndex={-1} className="h-9 shrink-0 px-2" aria-label="Create new ledger (Alt+N)" title="Create new ledger (Alt+N)" onClick={() => setLedgerLineIndex(idx)}>
+                <Plus className="h-3.5 w-3.5" /><CreateShortcutHint className="ml-1" />
               </Button>
               </div>
               <Input type="number" min="0" step="any" value={line.debit || ''} disabled={line.credit > 0} onChange={e => updateLine(idx, 'debit', e.target.value)} placeholder="0.00" className="text-right disabled:bg-muted" />

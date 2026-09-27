@@ -18,6 +18,8 @@ import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import type { Party } from '@/types'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 
 const statementPrintStyles = `
   @page{size:auto;margin:9mm}*{box-sizing:border-box}body{margin:0;background:#fff;color:#111827;font-family:Arial,sans-serif;font-size:9px}
@@ -304,7 +306,9 @@ export function PartiesPage() {
   const selectedParty = parties.find(party => party.id === selectedPartyId)
   const [tab, setTab] = useState<'customer' | 'supplier'>(selectedParty?.type || 'customer')
   const [newPartyType, setNewPartyType] = useState<'customer' | 'supplier' | null>(null)
+  const [newPartyMenuOpen, setNewPartyMenuOpen] = useState(false)
   const [search, setSearch] = useState('')
+  useGlobalCreateShortcut({ active: true, onCreate: () => setNewPartyMenuOpen(true) })
   const balanceSummary = getPartyBalanceSummary(parties, accounts)
   const normalizedSearch = search.trim().toLowerCase().replace(/\s+/g, ' ')
   const sourceRows = tab === 'customer' ? balanceSummary.debtors : balanceSummary.creditors
@@ -351,7 +355,7 @@ export function PartiesPage() {
   return (
     <div>
       <PageHeader title="Parties" description="Sundry Debtors (Customers) and Sundry Creditors (Suppliers)"
-        action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><DropdownMenuPrimitive.Root><DropdownMenuPrimitive.Trigger asChild><Button><Plus className="mr-1.5 h-4 w-4" />New Party<ChevronDown className="ml-1.5 h-3.5 w-3.5" /></Button></DropdownMenuPrimitive.Trigger><DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content align="end" sideOffset={5} className="z-[100] min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('customer')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><UserRound className="h-4 w-4" />New Customer</DropdownMenuPrimitive.Item><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('supplier')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><Building2 className="h-4 w-4" />New Supplier</DropdownMenuPrimitive.Item></DropdownMenuPrimitive.Content></DropdownMenuPrimitive.Portal></DropdownMenuPrimitive.Root></div>} />
+        action={<div className="flex flex-wrap gap-2"><Button variant="outline" onClick={exportBalances}><Download className="mr-1.5 h-4 w-4" />Export CSV</Button><Button variant="outline" onClick={printBalances}><Printer className="mr-1.5 h-4 w-4" />Print balances</Button><DropdownMenuPrimitive.Root open={newPartyMenuOpen} onOpenChange={setNewPartyMenuOpen}><DropdownMenuPrimitive.Trigger asChild><Button><Plus className="mr-1.5 h-4 w-4" />New Party<CreateShortcutHint /><ChevronDown className="ml-1.5 h-3.5 w-3.5" /></Button></DropdownMenuPrimitive.Trigger><DropdownMenuPrimitive.Portal><DropdownMenuPrimitive.Content align="end" sideOffset={5} className="z-[100] min-w-48 rounded-md border bg-popover p-1 text-sm text-popover-foreground shadow-md"><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('customer')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><UserRound className="h-4 w-4" />New Customer</DropdownMenuPrimitive.Item><DropdownMenuPrimitive.Item onSelect={() => setNewPartyType('supplier')} className="flex cursor-default select-none items-center gap-2 rounded-sm px-2 py-1.5 outline-none focus:bg-accent"><Building2 className="h-4 w-4" />New Supplier</DropdownMenuPrimitive.Item></DropdownMenuPrimitive.Content></DropdownMenuPrimitive.Portal></DropdownMenuPrimitive.Root></div>} />
       <PageContent>
         <Tabs value={tab} onValueChange={value => setTab(value as 'customer' | 'supplier')}>
           <div className="mb-4 flex flex-wrap items-center justify-between gap-2">

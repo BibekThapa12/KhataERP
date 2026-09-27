@@ -20,6 +20,9 @@ import type { StockCondition, Voucher } from '@/types'
 import { SubmissionLock } from '@/lib/submissionLock'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
+import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+import { ItemForm } from '@/components/forms/OtherForms'
 
 export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean; onClose: () => void; voucher?: Voucher | null }) {
   const { company, items, stock, vouchers, saveStockAdjustment, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
@@ -34,6 +37,8 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [showItemForm, setShowItemForm] = useState(false)
+  const dialogRef = useRef<HTMLDivElement | null>(null)
   const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
@@ -119,6 +124,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   }
 
   useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: dialogRef, onCreate: () => setShowItemForm(true) })
 
   const handleSaveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') {
@@ -158,13 +164,13 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const canSaveDraft = !voucher || voucher.status === 'Draft'
   const completedEdit = !!voucher && voucher.status !== 'Draft'
 
-  return <Dialog open={open} onOpenChange={value => { if (!value) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-    <DialogContent className="voucher-dialog max-w-2xl">
+  return <><Dialog open={open} onOpenChange={value => { if (!value) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
+    <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-w-2xl">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} voucher={voucher} /></div>
         <div className="space-y-1.5"><Label>Adjustment Type</Label><SearchableSelect value={mode} onValueChange={value => setMode(value as typeof mode)} options={[{ value: 'adjustment', label: 'Quantity Adjustment' }, { value: 'transfer', label: 'Transfer Stock Condition' }]} /></div>
-        <div className="space-y-1.5"><Label>Item</Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate('') }} placeholder="Select item" options={stockItems.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
+        <div className="space-y-1.5"><Label>Item<CreateShortcutHint /></Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate('') }} placeholder="Select item" options={stockItems.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
         {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="min-w-0 space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="min-w-0 space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div><div className="min-w-0 space-y-1.5"><Label>Rate / {selectedUnit || 'Unit'}</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} onBlur={() => setRate(current => formatRateInput(current))} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="min-w-0 space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="min-w-0 space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)]"><div className="min-w-0 space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableInSelectedUnit} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /></div><div className="min-w-0 space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div></div><p className="text-xs text-muted-foreground">Available: {selectedItem ? formatStockQuantity(availableSaleable, selectedItem) : '0'}. Transferred at {fmtMoney(fromBaseRate(selectedStock?.avg_cost || 0, conversionFactor))} / {selectedUnit || 'unit'}.</p></>}
         <div className="space-y-1.5"><Label>Reason</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Damage, found stock, correction..." /></div>
         {error && <p className="text-sm text-destructive">{error}</p>}
@@ -178,4 +184,6 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       </DialogFooter>
     </DialogContent>
   </Dialog>
+  <ItemForm open={showItemForm} allowService={false} onClose={() => setShowItemForm(false)} onCreated={item => { setItemId(item.id); setUnitMode('main'); setQtyDelta(''); setRate(''); setShowItemForm(false) }} />
+  </>
 }

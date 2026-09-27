@@ -87,6 +87,31 @@
   .overflow-x-auto { -webkit-overflow-scrolling: touch; }
   .ageing-print-detail { display: none; }
 
+  /* The sidebar has its own low-contrast scrollbar so the navigation stays
+     visually integrated with the navy shell instead of inheriting the light
+     workspace scrollbar. */
+  .sidebar-navigation-scroll {
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: rgb(177 194 222 / 0.42) rgb(255 255 255 / 0.035);
+  }
+  .sidebar-navigation-scroll::-webkit-scrollbar { width: 7px; height: 7px; }
+  .sidebar-navigation-scroll::-webkit-scrollbar-track {
+    margin-block: 6px;
+    border-radius: 999px;
+    background: rgb(255 255 255 / 0.035);
+  }
+  .sidebar-navigation-scroll::-webkit-scrollbar-thumb {
+    min-height: 42px;
+    border: 2px solid transparent;
+    border-radius: 999px;
+    background: rgb(177 194 222 / 0.42);
+    background-clip: padding-box;
+  }
+  .sidebar-navigation-scroll:hover::-webkit-scrollbar-thumb { background-color: rgb(203 215 235 / 0.62); }
+  .sidebar-navigation-scroll::-webkit-scrollbar-thumb:hover { background-color: rgb(220 228 242 / 0.78); }
+  .sidebar-navigation-scroll::-webkit-scrollbar-thumb:active { background-color: rgb(196 160 86 / 0.92); }
+
   .app-toast[data-state='open'] {
     animation: app-toast-enter 420ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
@@ -151,6 +176,14 @@
   .app-shell-sidebar {
     height: 100%;
     min-height: 0;
+    transition-property: width, transform;
+    transition-duration: 360ms, 280ms;
+    transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1), cubic-bezier(0.4, 0, 0.2, 1);
+    will-change: width, transform;
+  }
+
+  .app-shell-sidebar.sidebar-is-transitioning > * {
+    animation: sidebar-content-settle 360ms cubic-bezier(0.22, 1, 0.36, 1) both;
   }
 
   .app-workspace-scroll {
@@ -256,6 +289,31 @@
   :where(.compact-workspace, .compact-workspace-surface) [role='button'] { min-height: 2.375rem; }
   :where(.compact-workspace, .compact-workspace-surface) input:not([type='checkbox']):not([type='radio']),
   :where(.compact-workspace, .compact-workspace-surface) select { min-height: 2.375rem; font-size: 16px !important; }
+}
+
+@keyframes sidebar-content-settle {
+  from { opacity: 0.52; transform: translateX(-3px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media screen and (min-width: 768px) {
+  .app-shell-sidebar.sidebar-is-transitioning { overflow: clip; }
+  .app-shell-sidebar[data-collapsed='true'].sidebar-is-transitioning > * {
+    animation-name: sidebar-content-settle-collapsed;
+  }
+}
+
+@keyframes sidebar-content-settle-collapsed {
+  from { opacity: 0.52; transform: translateX(3px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .app-shell-sidebar {
+    transition-duration: 1ms;
+    will-change: auto;
+  }
+  .app-shell-sidebar.sidebar-is-transitioning > * { animation-duration: 1ms; }
 }
 
 @media print {
