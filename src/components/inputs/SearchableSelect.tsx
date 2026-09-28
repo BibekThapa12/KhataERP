@@ -4,6 +4,7 @@ import * as Popover from '@radix-ui/react-popover'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { filterSearchableOptions, groupSearchableOptions } from '@/lib/search'
+import { CLOSE_SEARCHABLE_SELECTS_EVENT, type CloseSearchableSelectsDetail } from '@/lib/searchableSelectFocus'
 
 export interface SearchableSelectOption {
   value: string
@@ -27,16 +28,18 @@ interface SearchableSelectProps {
   openOnFocus?: boolean
   tabIndex?: number
   triggerRef?: Ref<HTMLButtonElement>
+  onTriggerFocus?: () => void
 }
 
 export function SearchableSelect({
   value, onValueChange, options, placeholder = 'Select…', searchPlaceholder = 'Search…',
-  emptyText = 'No matching options', disabled, className, id, openOnFocus = false, tabIndex, triggerRef,
+  emptyText = 'No matching options', disabled, className, id, openOnFocus = false, tabIndex, triggerRef, onTriggerFocus,
 }: SearchableSelectProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
+  const internalTriggerRef = useRef<HTMLButtonElement | null>(null)
   const listRef = useRef<HTMLDivElement>(null)
   const optionRefs = useRef(new Map<string, HTMLButtonElement>())
   const suppressNextFocus = useRef(false)
@@ -68,6 +71,23 @@ export function SearchableSelect({
     if (!open) { setQuery(''); setActiveIndex(0); return }
     const timer = window.setTimeout(() => inputRef.current?.focus(), 0)
     return () => window.clearTimeout(timer)
+  }, [open])
+
+  useEffect(() => {
+    const closeForNestedCreator = (event: Event) => {
+      // Dialog autofocus broadcasts this event for every real dialog. Only an
+      // actively open selector needs closing/suppression; marking closed
+      // selectors would consume their next focus and break voucher auto-open.
+      if (!open) return
+      const detail = (event as CustomEvent<CloseSearchableSelectsDetail>).detail
+      if (detail && !detail.returnFocus) detail.returnFocus = internalTriggerRef.current
+      suppressNextFocus.current = true
+      setQuery('')
+      setActiveIndex(0)
+      setOpen(false)
+    }
+    window.addEventListener(CLOSE_SEARCHABLE_SELECTS_EVENT, closeForNestedCreator)
+    return () => window.removeEventListener(CLOSE_SEARCHABLE_SELECTS_EVENT, closeForNestedCreator)
   }, [open])
 
   useEffect(() => {
@@ -113,8 +133,13 @@ export function SearchableSelect({
   }
 
   const handleTriggerFocus = (event: FocusEvent<HTMLButtonElement>) => {
+    onTriggerFocus?.()
     const focusOpens = openOnFocus || !!event.currentTarget.closest('[data-selectors-open-on-focus="true"]')
     if (!focusOpens) return
+    if (event.currentTarget.dataset.suppressAutoOpenOnce === 'true') {
+      delete event.currentTarget.dataset.suppressAutoOpenOnce
+      return
+    }
     if (suppressNextFocus.current) {
       suppressNextFocus.current = false
       return
@@ -126,9 +151,15 @@ export function SearchableSelect({
     window.setTimeout(() => setOpen(true), 0)
   }
 
+  const setTriggerRef = (element: HTMLButtonElement | null) => {
+    internalTriggerRef.current = element
+    if (typeof triggerRef === 'function') triggerRef(element)
+    else if (triggerRef) triggerRef.current = element
+  }
+
   return <Popover.Root open={open} onOpenChange={handleOpenChange}>
     <Popover.Trigger asChild>
-      <button ref={triggerRef} id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} tabIndex={tabIndex} onPointerDown={() => { focusCameFromPointer.current = true }} onClick={() => { focusCameFromPointer.current = false }} onFocus={handleTriggerFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
+      <button ref={setTriggerRef} id={id} type="button" role="combobox" aria-expanded={open} disabled={disabled} tabIndex={tabIndex} onPointerDown={() => { focusCameFromPointer.current = true }} onClick={() => { focusCameFromPointer.current = false }} onFocus={handleTriggerFocus} className={cn('flex h-9 min-w-0 w-full max-w-full items-center justify-between overflow-hidden rounded-md border border-input bg-background px-2.5 py-1 text-left text-[12px] shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50', className)}>
         <span className={cn('min-w-0 flex-1 truncate', !selected && 'text-muted-foreground')} title={selected?.label}>{selected?.label || placeholder}</span>
         <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
       </button>

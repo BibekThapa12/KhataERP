@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { Copy, History, Pencil, Plus, Power, Search, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import type { PricingRule, PricingRuleScope } from '@/types'
@@ -40,6 +40,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
   const [search, setSearch] = useState('')
   const [status, setStatus] = useState<StatusFilter>('all')
   const [historyRule, setHistoryRule] = useState<PricingRule | null>(null)
+  const editorDialogRef = useRef<HTMLDivElement | null>(null)
   const usedRuleIds = useMemo(() => new Set(vouchers.flatMap(voucher => {
     const completed = (voucher.invoice_items || []).flatMap(line => line.pricing_rule_id ? [line.pricing_rule_id] : [])
     const draftLines = voucher.status === 'Draft' && voucher.draft_payload && Array.isArray((voucher.draft_payload as { lines?: unknown[] }).lines)
@@ -86,7 +87,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
     setError('')
     try { await action() } catch (cause) { setError(publicErrorMessage(cause, 'updating pricing rule')) }
   }
-  useGlobalSaveShortcut({ active: editing !== undefined, disabled: saving, onSave: () => void submit() })
+  useGlobalSaveShortcut({ active: editing !== undefined, disabled: saving, scopeRef: editorDialogRef, onSave: () => void submit() })
   useGlobalCreateShortcut({ active: editing === undefined, disabled: !canManage, onCreate: () => open() })
 
   return <div>
@@ -112,7 +113,7 @@ export function SlabPricingPage({ embedded = false }: { embedded?: boolean } = {
       </Card>
     </PageContent>
 
-    <Dialog open={editing !== undefined} onOpenChange={value => { if (!value && !saving) setEditing(undefined) }}><DialogContent className="max-w-3xl"><DialogHeader><DialogTitle>{editing ? 'Edit' : 'New'} Slab Pricing Rule</DialogTitle></DialogHeader>
+    <Dialog open={editing !== undefined} onOpenChange={value => { if (!value && !saving) setEditing(undefined) }}><DialogContent ref={editorDialogRef} className="max-w-3xl"><DialogHeader><DialogTitle>{editing ? 'Edit' : 'New'} Slab Pricing Rule</DialogTitle></DialogHeader>
       <div className="grid gap-4 py-2">
         <div><Label>Rule Name</Label><Input className="mt-1" value={name} onChange={event => setName(event.target.value)} /></div>
         <div className="grid gap-3 sm:grid-cols-2"><div><Label>Scope</Label><select className={selectClass} value={scope} onChange={event => { setScope(event.target.value as PricingRuleScope); setTargetId(''); setUnit('') }}><option value="ITEM">Item</option><option value="CATEGORY">Category</option></select></div><div><Label>{scope === 'ITEM' ? 'Item' : 'Category'}</Label><select className={selectClass} value={targetId} onChange={event => { setTargetId(event.target.value); setUnit('') }}><option value="">Select</option>{(scope === 'ITEM' ? items.filter(item => !item.is_service) : itemCategories).map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></div></div>

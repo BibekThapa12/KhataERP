@@ -2,6 +2,7 @@ import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import { X } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { closeOpenSearchableSelects } from '@/lib/searchableSelectFocus'
 
 const Dialog = DialogPrimitive.Root
 const DialogTrigger = DialogPrimitive.Trigger
@@ -23,8 +24,9 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, onInteractOutside, onPointerDownOutside, onFocusOutside, onOpenAutoFocus, ...props }, ref) => {
+>(({ className, children, onInteractOutside, onPointerDownOutside, onFocusOutside, onOpenAutoFocus, onCloseAutoFocus, ...props }, ref) => {
   const contentRef = React.useRef<HTMLDivElement | null>(null)
+  const nestedReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const isVoucherDialog = typeof className === 'string' && className.includes('voucher-dialog')
   const focusableSelector = [
     'button:not(:disabled):not([tabindex="-1"])',
@@ -55,6 +57,13 @@ const DialogContent = React.forwardRef<
     window.requestAnimationFrame(() => content.focus({ preventScroll: true }))
     const keepTabInsideVoucher = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
+      const topmostDialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'))
+        .filter(dialog => !dialog.matches('[data-khata-select-content]'))
+        .at(-1)
+      // A creator such as New Ledger is rendered in a second portal above the
+      // voucher. Its own Radix focus scope owns Tab until it closes; the
+      // underlying voucher must not pull focus back into itself.
+      if (topmostDialog && topmostDialog !== content) return
       const active = document.activeElement
       // Searchable selectors render their input and options through a Radix
       // portal. Although that portal is visually part of the voucher editor,
@@ -100,6 +109,10 @@ const DialogContent = React.forwardRef<
         if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()
       }}
       onOpenAutoFocus={(event) => {
+        // A selector may have been open when this dialog was requested. Close
+        // its portal before resolving autofocus so it cannot retain focus
+        // above or behind the newly opened dialog.
+        nestedReturnFocusRef.current = closeOpenSearchableSelects()
         onOpenAutoFocus?.(event)
         if (event.defaultPrevented) return
         const target = event.currentTarget.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
@@ -111,6 +124,14 @@ const DialogContent = React.forwardRef<
         if (!target) return
         event.preventDefault()
         window.setTimeout(() => target.focus(), 0)
+      }}
+      onCloseAutoFocus={(event) => {
+        onCloseAutoFocus?.(event)
+        if (event.defaultPrevented || !nestedReturnFocusRef.current) return
+        const target = nestedReturnFocusRef.current
+        nestedReturnFocusRef.current = null
+        event.preventDefault()
+        window.setTimeout(() => target.isConnected && target.focus({ preventScroll: true }), 0)
       }}
       {...props}
     >

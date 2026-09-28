@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, type RefObject } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { printPersistedVoucher } from '@/lib/voucherPrinterRegistry'
 import { notifyError } from '@/lib/notifications'
@@ -45,9 +45,10 @@ export function useVoucherShortcuts(options: {
   onSave: () => void
   onSaveAndPrint: () => void
   onSaveDraft?: () => void
+  scopeRef?: RefObject<HTMLElement | null>
 }) {
-  const { open, disabled, draftDisabled = disabled, onSave, onSaveAndPrint, onSaveDraft } = options
-  useGlobalSaveShortcut({ active: open, disabled, onSave })
+  const { open, disabled, draftDisabled = disabled, onSave, onSaveAndPrint, onSaveDraft, scopeRef } = options
+  useGlobalSaveShortcut({ active: open, disabled, onSave, scopeRef })
   useEffect(() => {
     if (!open) return
     const handler = (event: KeyboardEvent) => {

@@ -23,6 +23,7 @@ import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucher
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
 import { ItemForm } from '@/components/forms/OtherForms'
+import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
 
 export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean; onClose: () => void; voucher?: Voucher | null }) {
   const { company, items, stock, vouchers, saveStockAdjustment, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
@@ -123,7 +124,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, scopeRef: dialogRef, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
   useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: dialogRef, onCreate: () => setShowItemForm(true) })
 
   const handleSaveDraft = async () => {
@@ -184,6 +185,6 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       </DialogFooter>
     </DialogContent>
   </Dialog>
-  <ItemForm open={showItemForm} allowService={false} onClose={() => setShowItemForm(false)} onCreated={item => { setItemId(item.id); setUnitMode('main'); setQtyDelta(''); setRate(''); setShowItemForm(false) }} />
+  <ItemForm open={showItemForm} allowService={false} onClose={() => setShowItemForm(false)} onCreated={item => { setItemId(item.id); setUnitMode('main'); setQtyDelta(''); setRate(''); setShowItemForm(false); focusAfterNestedDialogCloses(() => itemTriggerRef.current, true) }} />
   </>
 }

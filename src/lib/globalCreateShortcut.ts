@@ -1,9 +1,10 @@
 import { useEffect, useRef, type RefObject } from 'react'
+import { closeOpenSearchableSelects } from '@/lib/searchableSelectFocus'
 
 type CreateShortcutOptions = {
   active: boolean
   disabled?: boolean
-  onCreate: () => void
+  onCreate: (selectorTrigger: HTMLElement | null) => void
   scopeRef?: RefObject<HTMLElement | null>
 }
 
@@ -11,7 +12,7 @@ type CreateShortcutRegistration = {
   id: symbol
   order: number
   disabled: () => boolean
-  create: () => void
+  create: (selectorTrigger: HTMLElement | null) => void
   scope: () => HTMLElement | null
 }
 
@@ -26,7 +27,10 @@ export function isGlobalCreateShortcut(event: Pick<KeyboardEvent, 'key' | 'altKe
 function handleGlobalCreate(event: KeyboardEvent) {
   if (!isGlobalCreateShortcut(event) || event.defaultPrevented) return
   const activeElement = document.activeElement
-  const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]'))
+  // Radix selector popovers can expose dialog semantics too. They are not the
+  // editor scope that owns Alt+N, so exclude them when resolving the active
+  // voucher/creator dialog.
+  const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]:not([data-khata-select-content])'))
   const openDialog = openDialogs.at(-1) || null
   const activeInSelectPortal = !!activeElement?.closest('[data-khata-select-content], [data-radix-popper-content-wrapper]')
   const eligible = registrations.filter(registration => {
@@ -43,7 +47,10 @@ function handleGlobalCreate(event: KeyboardEvent) {
   if (!registration && !openDialog) return
   event.preventDefault()
   event.stopImmediatePropagation()
-  if (registration && !registration.disabled()) registration.create()
+  if (registration && !registration.disabled()) {
+    const selectorTrigger = closeOpenSearchableSelects()
+    registration.create(selectorTrigger)
+  }
 }
 
 function startListening() {
@@ -74,7 +81,7 @@ export function useGlobalCreateShortcut({ active, disabled = false, onCreate, sc
       id,
       order: ++nextOrder,
       disabled: () => disabledRef.current,
-      create: () => createRef.current(),
+      create: selectorTrigger => createRef.current(selectorTrigger),
       scope: () => scopeRefValue.current?.current || null,
     })
     startListening()

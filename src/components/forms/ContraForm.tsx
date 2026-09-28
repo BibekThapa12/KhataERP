@@ -19,6 +19,7 @@ import { Printer } from 'lucide-react'
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -96,7 +97,7 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     catch (caught) { cancelVoucherPrint(printRequest); setError(contraError(caught)) }
     finally { lock.release(); setSaving(false) }
   }
-  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, scopeRef: dialogRef, onSave: () => { void complete() }, onSaveAndPrint: () => { void complete(true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void saveDraft() } : undefined })
   useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: dialogRef, onCreate: () => setLedgerTarget(focusedLedgerTarget.current) })
   const saveDraft = async () => {
     if (voucher && voucher.status !== 'Draft') return setError('Completed Contra vouchers cannot be saved as draft.')
@@ -122,6 +123,6 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     </div>
     <DialogFooter>{voucher?.status === 'Draft' && !freshAfterDraftRef.current && <Button variant="destructive" disabled={saving} onClick={removeDraft}>Delete Draft</Button>}<Button variant="outline" onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>{(!voucher || voucher.status === 'Draft') && <Button variant="outline" disabled={saving} onClick={saveDraft}>{voucher && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd></Button>}<Button disabled={saving} onClick={() => complete()} title="Save voucher (Alt+S)">{saving ? 'Saving...' : voucher && voucher.status !== 'Draft' ? 'Save Changes' : 'Complete Contra'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}</Button><Button variant="outline" disabled={saving} onClick={() => complete(true)} title="Save and print (Alt+P)"><Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd></Button></DialogFooter>
   </DialogContent></Dialog>
-  {ledgerTarget && <LedgerDialog open defaultCategoryId={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.category_id || accounts[0]?.category_id} allowedAccountType={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.type || accounts[0]?.type} onClose={() => setLedgerTarget(null)} onCreated={account => { if (ledgerTarget === 'source') setSourceId(account.id); else setDestinationId(account.id); setLedgerTarget(null) }} />}
+  {ledgerTarget && <LedgerDialog open defaultCategoryId={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.category_id || accounts[0]?.category_id} allowedAccountType={accounts.find(account => account.id === (ledgerTarget === 'source' ? sourceId : destinationId))?.type || accounts[0]?.type} onClose={() => setLedgerTarget(null)} onCreated={account => { const createdTarget = ledgerTarget; if (createdTarget === 'source') setSourceId(account.id); else setDestinationId(account.id); setLedgerTarget(null); focusAfterNestedDialogCloses(() => dialogRef.current?.querySelectorAll<HTMLButtonElement>('button[role="combobox"]')[createdTarget === 'source' ? 0 : 1], true) }} />}
   </>
 }

@@ -490,7 +490,7 @@ export function AppShell() {
     setCollapsedMenuId(null)
     setMobileOpen(window.matchMedia('(max-width: 767px)').matches)
     setTransactionMenuOpen(true)
-    requestAnimationFrame(() => transactionMenuRef.current?.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus())
+    requestAnimationFrame(() => transactionTriggerRef.current?.focus({ preventScroll: true }))
   }, [location.pathname, navigate])
 
   const hasShellContextualCreate = location.pathname === '/cheques/pending'
@@ -683,13 +683,15 @@ export function AppShell() {
     const items = [...event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]:not([disabled])')]
     if (!items.length) return
     const currentIndex = items.indexOf(document.activeElement as HTMLButtonElement)
-    const nextIndex = event.key === 'Home'
-      ? 0
-      : event.key === 'End'
-        ? items.length - 1
-        : event.key === 'ArrowDown'
-          ? (currentIndex + 1 + items.length) % items.length
-          : (currentIndex - 1 + items.length) % items.length
+    const nextIndex = currentIndex < 0
+      ? (event.key === 'ArrowUp' || event.key === 'End' ? items.length - 1 : 0)
+      : event.key === 'Home'
+        ? 0
+        : event.key === 'End'
+          ? items.length - 1
+          : event.key === 'ArrowDown'
+            ? (currentIndex + 1) % items.length
+            : (currentIndex - 1 + items.length) % items.length
     items[nextIndex]?.focus()
   }
 
@@ -766,9 +768,9 @@ export function AppShell() {
         <nav aria-label="Primary navigation" className="sidebar-navigation-scroll min-h-0 flex-1 overflow-y-auto overflow-x-visible py-3">
           {!developerWorkspace && <>
             <SidebarSearch collapsed={navigationCollapsed} destinations={searchDestinations} onRequestOpen={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobileOpen(true) }} onNavigate={to => { navigate(to); setMobileOpen(false) }} />
-            <div ref={transactionMenuRef} className="relative px-2 pb-3">
-              <button ref={transactionTriggerRef} type="button" disabled={readOnly} aria-expanded={transactionMenuOpen} aria-controls={transactionMenuOpen ? 'sidebar-new-transaction-menu' : undefined} aria-label="New transaction" title={navigationCollapsed ? 'New transaction' : undefined} onClick={() => setTransactionMenuOpen(value => !value)} className={cn('group flex min-h-11 w-full items-center rounded-md border text-sm font-semibold text-blue-50 shadow-sm transition-[background-color,border-color,color,box-shadow] hover:border-blue-100/35 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10', transactionMenuOpen ? 'border-amber-300/55 bg-amber-300/10 shadow-[inset_3px_0_0_rgba(217,179,94,0.9)]' : 'border-blue-100/15 bg-white/[0.055]', navigationCollapsed ? 'justify-center px-0' : 'gap-2 px-2.5')}><span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-300/30 bg-amber-300/10 text-amber-200 transition-colors group-hover:border-amber-300/50 group-hover:bg-amber-300/15', navigationCollapsed && 'h-8 w-8')}><PlusCircle className="h-4 w-4" /></span>{!navigationCollapsed && <><span>New transaction</span><ChevronDown className={cn('ml-auto h-4 w-4 text-blue-200/75 transition-transform', transactionMenuOpen && 'rotate-180 text-amber-200')} /></>}</button>
-              {transactionMenuOpen && <div id="sidebar-new-transaction-menu" role="menu" aria-label="New transaction types" onKeyDown={handleTransactionMenuKeyDown} onWheel={event => event.stopPropagation()} style={{ maxHeight: transactionMenuMaxHeight, ...(navigationCollapsed ? { top: Math.max(8, transactionTriggerRef.current?.getBoundingClientRect().top || 80) } : {}) }} className={cn('sidebar-navigation-scroll z-[80] mt-1 overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#10203d] p-1.5 shadow-2xl', navigationCollapsed ? 'fixed left-[72px] hidden w-64 md:block' : 'absolute left-2 right-2 top-full')}>
+            <div ref={transactionMenuRef} onKeyDown={transactionMenuOpen ? handleTransactionMenuKeyDown : undefined} className="relative px-2 pb-3">
+              <button ref={transactionTriggerRef} type="button" disabled={readOnly} aria-haspopup="menu" aria-expanded={transactionMenuOpen} aria-controls={transactionMenuOpen ? 'sidebar-new-transaction-menu' : undefined} aria-label="New transaction" title={navigationCollapsed ? 'New transaction' : undefined} onClick={() => setTransactionMenuOpen(value => !value)} className={cn('group flex min-h-11 w-full items-center rounded-md border text-sm font-semibold text-blue-50 shadow-sm transition-[background-color,border-color,color,box-shadow] hover:border-blue-100/35 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10', transactionMenuOpen ? 'border-amber-300/55 bg-amber-300/10 shadow-[inset_3px_0_0_rgba(217,179,94,0.9)]' : 'border-blue-100/15 bg-white/[0.055]', navigationCollapsed ? 'justify-center px-0' : 'gap-2 px-2.5')}><span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-300/30 bg-amber-300/10 text-amber-200 transition-colors group-hover:border-amber-300/50 group-hover:bg-amber-300/15', navigationCollapsed && 'h-8 w-8')}><PlusCircle className="h-4 w-4" /></span>{!navigationCollapsed && <><span>New transaction</span><ChevronDown className={cn('ml-auto h-4 w-4 text-blue-200/75 transition-transform', transactionMenuOpen && 'rotate-180 text-amber-200')} /></>}</button>
+              {transactionMenuOpen && <div id="sidebar-new-transaction-menu" role="menu" aria-label="New transaction types" onWheel={event => event.stopPropagation()} style={{ maxHeight: transactionMenuMaxHeight, ...(navigationCollapsed ? { top: Math.max(8, transactionTriggerRef.current?.getBoundingClientRect().top || 80) } : {}) }} className={cn('sidebar-navigation-scroll z-[80] mt-1 overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#10203d] p-1.5 shadow-2xl', navigationCollapsed ? 'fixed left-[72px] hidden w-64 md:block' : 'absolute left-2 right-2 top-full')}>
                 <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-blue-200/50">Quick vouchers</p>
                 {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.type} role="menuitem" type="button" onClick={() => { setShortcutVoucher(shortcut.type); setTransactionMenuOpen(false); setMobileOpen(false) }} className="flex min-h-11 w-full items-center justify-between rounded-md px-2.5 text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><span>New {shortcut.label}</span><kbd className="text-[10px] text-blue-200/60">{shortcut.key}</kbd></button>)}
                 <div className="mx-2 my-1 border-t border-white/10" />

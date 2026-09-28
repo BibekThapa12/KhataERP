@@ -69,6 +69,7 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
   const [parentId, setParentId] = useState('root')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const categoryDialogRef = useRef<HTMLDivElement | null>(null)
 
   useEffect(() => {
     if (!open) return
@@ -107,11 +108,11 @@ export function CategoryDialog({ kind, category, parentCategory, defaultAccountT
   const parentOptions = allCategories.filter(candidate => !candidate.is_archived && candidate.id !== category?.id && !descendants.has(candidate.id) && categoryDepth(allCategories, candidate.id) + ownHeight <= 4 && (kind === 'item' || (candidate as AccountCategory).account_type === type))
   const selectedParent = parentId === 'root' ? undefined : allCategories.find(candidate => candidate.id === parentId)
   const systemCategory = kind === 'account' && !!(category as AccountCategory | undefined)?.is_system
-  useGlobalSaveShortcut({ active: open, disabled: saving || systemCategory, onSave: () => void save() })
+  useGlobalSaveShortcut({ active: open, disabled: saving || systemCategory, scopeRef: categoryDialogRef, onSave: () => void save() })
 
   return (
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
-      <DialogContent className="max-w-sm">
+      <DialogContent ref={categoryDialogRef} className="max-w-sm">
         <DialogHeader><DialogTitle>{category ? 'Alter' : 'New'} {kind === 'account' ? 'Account' : 'Item'} Category</DialogTitle></DialogHeader>
         <div className="space-y-3 py-2">
           <div className="space-y-1.5"><Label>Name</Label><Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus disabled={systemCategory} /></div>
@@ -229,7 +230,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
       onClose()
     } catch (e: unknown) { setError(identityDatabaseError(e) || ledgerDialogError(e)) } finally { setSaving(false) }
   }
-  useGlobalSaveShortcut({ active: open, disabled: saving, onSave: () => void save() })
+  useGlobalSaveShortcut({ active: open, disabled: saving, scopeRef: ledgerDialogRef, onSave: () => void save() })
   useGlobalCreateShortcut({ active: open, disabled: saving || partyMode || !!account?.is_system, scopeRef: ledgerDialogRef, onCreate: () => setCategoryDialogOpen(true) })
 
   return (
@@ -239,7 +240,7 @@ export function LedgerDialog({ account, party, defaultCategoryId, allowedAccount
         <DialogHeader><DialogTitle>{account ? 'Alter Ledger' : 'New Ledger'}</DialogTitle></DialogHeader>
         <div className="min-w-0 space-y-4 py-2">
           <section className="grid gap-3 rounded-md border p-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input value={name} maxLength={IDENTITY_LIMITS.name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} autoFocus /></div>
+            <div className="space-y-1.5"><Label>Party / Ledger Name <span className="text-destructive">*</span></Label><Input data-dialog-autofocus value={name} maxLength={IDENTITY_LIMITS.name} onChange={event => setName(event.target.value)} onBlur={() => setName(current => formatMasterName(current))} /></div>
           {party && !defaultPartyType ? (
             <div className="space-y-1.5"><Label>Party Type</Label><SearchableSelect value={partyType} onValueChange={value => setPartyType(value as 'customer' | 'supplier')} options={[{ value: 'customer', label: partyTerminology('customer').plural, searchText: partyTerminology('customer').searchAliases }, { value: 'supplier', label: partyTerminology('supplier').plural, searchText: partyTerminology('supplier').searchAliases }]} /></div>
           ) : (
@@ -281,6 +282,7 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
   const [confirmUnit, setConfirmUnit] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const itemDialogRef = useRef<HTMLDivElement | null>(null)
   const used = !!item && vouchers.some(voucher => voucher.stock_lines?.some(line => line.item_id === item.id) || voucher.invoice_items?.some(line => line.item_id === item.id))
 
   useEffect(() => {
@@ -315,12 +317,12 @@ export function ItemDialog({ item, open, onClose }: { item: Item | null; open: b
       onClose()
     } catch (e: unknown) { setError(masterDialogError(e, 'saving item')) } finally { setSaving(false) }
   }
-  useGlobalSaveShortcut({ active: open && !!item, disabled: saving, onSave: () => void save() })
+  useGlobalSaveShortcut({ active: open && !!item, disabled: saving, scopeRef: itemDialogRef, onSave: () => void save() })
 
   if (!item) return null
 
   return (
-    <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
+    <Dialog open={open} onOpenChange={value => !value && onClose()}><DialogContent ref={itemDialogRef} className="max-w-xl max-h-[90vh] overflow-y-auto"><DialogHeader><DialogTitle>Alter Item</DialogTitle></DialogHeader>
       <div className="grid grid-cols-1 gap-3 py-2 sm:grid-cols-2">
         <div className="space-y-1.5 sm:col-span-2"><Label>Item Name</Label><Input value={form.name} maxLength={IDENTITY_LIMITS.name} onChange={event => setForm({ ...form, name: event.target.value })} onBlur={() => setForm(current => ({ ...current, name: formatMasterName(current.name) }))} /></div>
         <div className="space-y-1.5 sm:col-span-2"><Label>Category</Label><SearchableSelect value={form.category_id} onValueChange={value => setForm({ ...form, category_id: value })} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} /></div>

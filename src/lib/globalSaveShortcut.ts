@@ -1,9 +1,10 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, type RefObject } from 'react'
 
 type SaveShortcutOptions = {
   active: boolean
   disabled?: boolean
   onSave: () => void
+  scopeRef?: RefObject<HTMLElement | null>
 }
 
 type SaveShortcutRegistration = {
@@ -11,6 +12,7 @@ type SaveShortcutRegistration = {
   order: number
   disabled: () => boolean
   save: () => void
+  scope: () => HTMLElement | null
 }
 
 const registrations: SaveShortcutRegistration[] = []
@@ -23,10 +25,26 @@ export function isGlobalSaveShortcut(event: Pick<KeyboardEvent, 'key' | 'altKey'
 
 function handleGlobalSave(event: KeyboardEvent) {
   if (!isGlobalSaveShortcut(event) || event.defaultPrevented) return
-  const registration = registrations.reduce<SaveShortcutRegistration | undefined>((latest, candidate) => (
+  const openDialogs = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]:not([data-khata-select-content])'))
+  const openDialog = openDialogs[openDialogs.length - 1] || null
+  const eligible = registrations.filter(registration => {
+    const scope = registration.scope()
+    return openDialog ? scope === openDialog : !scope
+  })
+  const registration = eligible.reduce<SaveShortcutRegistration | undefined>((latest, candidate) => (
     !latest || candidate.order > latest.order ? candidate : latest
   ), undefined)
-  if (!registration) return
+
+  // Never let an editor behind a nested dialog receive Alt+S. Registration
+  // order can change after a parent rerender, but visual dialog ownership must
+  // remain deterministic.
+  if (!registration) {
+    if (openDialog) {
+      event.preventDefault()
+      event.stopImmediatePropagation()
+    }
+    return
+  }
 
   // Alt+S belongs to the active editor even while its save is disabled. This
   // also prevents the browser's native "Save page" action during submission.
@@ -47,12 +65,14 @@ function stopListening() {
   listening = false
 }
 
-/** Registers an editor for Alt+S. The most recently opened editor wins. */
-export function useGlobalSaveShortcut({ active, disabled = false, onSave }: SaveShortcutOptions) {
+/** Registers an editor for Alt+S. The topmost dialog owns the shortcut. */
+export function useGlobalSaveShortcut({ active, disabled = false, onSave, scopeRef }: SaveShortcutOptions) {
   const saveRef = useRef(onSave)
   const disabledRef = useRef(disabled)
+  const scopeRefValue = useRef(scopeRef)
   saveRef.current = onSave
   disabledRef.current = disabled
+  scopeRefValue.current = scopeRef
 
   useEffect(() => {
     if (!active) return
@@ -62,6 +82,7 @@ export function useGlobalSaveShortcut({ active, disabled = false, onSave }: Save
       order: ++nextOrder,
       disabled: () => disabledRef.current,
       save: () => saveRef.current(),
+      scope: () => scopeRefValue.current?.current || null,
     })
     startListening()
     return () => {

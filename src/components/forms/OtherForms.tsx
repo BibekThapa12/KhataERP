@@ -13,7 +13,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
-import { focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
+import { focusAfterNestedDialogCloses, focusLastSearchableSelect } from '@/lib/searchableSelectFocus'
 import { UnitCombobox } from '@/components/inputs/UnitCombobox'
 import { validateItemUnits } from '@/lib/itemUnits'
 import { formatRateInput, rateInputNumber } from '@/lib/rateFormat'
@@ -109,7 +109,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
       setError(itemFormError(e))
     } finally { submissionLock.release(); setSaving(false) }
   }
-  useGlobalSaveShortcut({ active: open, disabled: saving, onSave: () => void handleSave() })
+  useGlobalSaveShortcut({ active: open, disabled: saving, scopeRef: itemDialogRef, onSave: () => void handleSave() })
   useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: itemDialogRef, onCreate: () => setCategoryDialogOpen(true) })
 
   return (
@@ -120,7 +120,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
         <div className="space-y-4 py-2">
           <div className="space-y-1.5">
             <Label>Item Name</Label>
-            <Input value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="Rice 25kg Bag" autoFocus />
+            <Input data-dialog-autofocus value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="Rice 25kg Bag" />
           </div>
           <div className="space-y-1.5">
             <Label>Category</Label>
@@ -204,6 +204,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [error, setError] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const allocationTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
   const receiptDialogRef = useRef<HTMLDivElement | null>(null)
   const focusedAllocationRef = useRef(0)
   const pendingAllocationFocus = useRef<number | null>(null)
@@ -326,7 +327,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useVoucherShortcuts({ open, disabled: saving, draftDisabled: saving, scopeRef: receiptDialogRef, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
   useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: receiptDialogRef, onCreate: () => setLedgerLineIndex(Math.min(focusedAllocationRef.current, allocations.length - 1)) })
 
   const handleDeleteDraft = async () => {
@@ -393,8 +394,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
               return <div key={index} onFocusCapture={() => { focusedAllocationRef.current = index }} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
                 <div className="min-w-0 space-y-1.5">
                   <div className="flex min-w-0 gap-1.5">
-                    <SearchableSelect className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
-                    <Button type="button" variant="outline" size="sm" title="Create ledger (Alt+N)" aria-label="Create ledger (Alt+N)" className="h-9 shrink-0 px-2" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button>
+                    <SearchableSelect triggerRef={element => { allocationTriggerRefs.current[index] = element }} className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
+                    <Button type="button" variant="outline" size="sm" tabIndex={-1} title="Create ledger (Alt+N)" aria-label="Create ledger (Alt+N)" className="h-9 shrink-0 px-2" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button>
                   </div>
                   <LedgerBalanceHint account={selectedAccount} party={selectedParty} />
                 </div>
@@ -430,8 +431,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       </DialogContent>
     </Dialog>
     {ledgerLineIndex !== null && <LedgerDialog open onClose={() => setLedgerLineIndex(null)} onCreated={account => {
-      updateAllocation(ledgerLineIndex, 'account_id', account.id)
+      const createdLineIndex = ledgerLineIndex
+      updateAllocation(createdLineIndex, 'account_id', account.id)
       setLedgerLineIndex(null)
+      focusAfterNestedDialogCloses(() => allocationTriggerRefs.current[createdLineIndex], true)
     }} />}
     </>
   )
@@ -592,7 +595,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
     } finally { submissionLock.release(); setSaving(false) }
   }
 
-  useVoucherShortcuts({ open, disabled: saving || !balanced, draftDisabled: saving, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
+  useVoucherShortcuts({ open, disabled: saving || !balanced, draftDisabled: saving, scopeRef: journalDialogRef, onSave: () => { void handleSave('Completed') }, onSaveAndPrint: () => { void handleSave('Completed', true) }, onSaveDraft: !voucher || voucher.status === 'Draft' ? () => { void handleSaveDraft() } : undefined })
   useGlobalCreateShortcut({ active: open, disabled: saving, scopeRef: journalDialogRef, onCreate: () => setLedgerLineIndex(Math.min(focusedJournalLineRef.current, jLines.length - 1)) })
 
   const handleDeleteDraft = async () => {
@@ -653,7 +656,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
             <span>Account</span><span>Debit</span><span>Credit</span><span></span>
           </div>
           {jLines.map((line, idx) => (
-            <div key={idx} onFocusCapture={() => { focusedJournalLineRef.current = idx }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
+            <div key={idx} data-journal-line={idx} onFocusCapture={() => { focusedJournalLineRef.current = idx }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
               <div className="col-span-2 flex min-w-0 gap-1 sm:col-span-1">
               <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="min-w-0 flex-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
                 const party = partyByAccount.get(account.id)
@@ -707,8 +710,10 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
       </DialogContent>
     </Dialog>
     {ledgerLineIndex !== null && <LedgerDialog open onClose={() => setLedgerLineIndex(null)} onCreated={account => {
-      setJLines(current => current.map((line, index) => index === ledgerLineIndex ? { ...line, account_id: account.id } : line))
+      const createdLineIndex = ledgerLineIndex
+      setJLines(current => current.map((line, index) => index === createdLineIndex ? { ...line, account_id: account.id } : line))
       setLedgerLineIndex(null)
+      focusAfterNestedDialogCloses(() => journalDialogRef.current?.querySelector<HTMLButtonElement>(`[data-journal-line="${createdLineIndex}"] button[role="combobox"]`), true)
     }} />}
     </>
   )
