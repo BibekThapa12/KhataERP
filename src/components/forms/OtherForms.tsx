@@ -8,6 +8,7 @@ import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
 import { categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
 import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
 import { suggestSettlementAllocations } from '@/lib/managementReports'
+import { sanitizeSettlementAllocations } from '@/lib/settlementAllocations'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -202,6 +203,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [narration, setNarration] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [allocationWarning, setAllocationWarning] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
   const allocationTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
@@ -228,17 +230,21 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       const settlementId = legacySettlementAccountId(voucher) || cashAccountId
       setMoneyAccountId(draft?.moneyAccountId || settlementId)
       const restored = (voucher.lines || []).filter(line => line.account_id !== settlementId).map(line => ({ account_id: line.account_id, amount: String(isReceipt ? line.credit || 0 : line.debit || 0), invoice_allocations: (voucher.settlements || []).filter(row => row.party_account_id === line.account_id).map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: String(row.amount) })) })).filter(line => Number(line.amount) > 0)
-      setAllocations(draft?.allocations?.length ? draft.allocations : restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }])
+      const initialAllocations = draft?.allocations?.length ? draft.allocations : restored.length ? restored : [{ account_id: voucher.party_account_id || '', amount: String(voucher.total || ''), invoice_allocations: [] }]
+      const sanitized = sanitizeSettlementAllocations(initialAllocations, vouchers, voucher.company_id, type)
+      setAllocations(sanitized.allocations)
+      setAllocationWarning(sanitized.removedCount ? `${sanitized.removedCount} saved invoice allocation${sanitized.removedCount === 1 ? '' : 's'} referred to a cancelled or unavailable invoice and will remain unapplied.` : '')
       setNarration(draft?.narration ?? voucher.narration ?? '')
       setError('')
       setDateInvalid(false)
     } else if (open) {
       setMoneyAccountId(cashAccountId)
+      setAllocationWarning('')
     } else if (!open) {
-      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
+      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setAllocationWarning(''); setDateInvalid(false)
     }
     if (open) window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
-  }, [open, voucher, cashAccountId, isReceipt, company, type])
+  }, [open, voucher, cashAccountId, isReceipt, company, type, vouchers])
 
   const moneyIds = new Set([cashAccountId, ...bankAccounts(accounts, accountCategories, true).map(account => account.id)])
   const selectedIds = new Set(allocations.map(allocation => allocation.account_id).filter(Boolean))
@@ -279,7 +285,10 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       setTimeout(() => dateInputRef.current?.focus(), 0)
       return
     }
-    const validAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount), invoice_allocations: allocation.invoice_allocations.map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: Number(row.amount) })).filter(row => row.amount > 0) }))
+    const parsedAllocations = allocations.map(allocation => ({ account_id: allocation.account_id, amount: Number(allocation.amount), invoice_allocations: allocation.invoice_allocations.map(row => ({ invoice_voucher_id: row.invoice_voucher_id, amount: Number(row.amount) })).filter(row => row.amount > 0) }))
+    const sanitized = sanitizeSettlementAllocations(parsedAllocations, vouchers, company?.id || '', type)
+    const validAllocations = sanitized.allocations
+    if (sanitized.removedCount) setAllocationWarning(`${sanitized.removedCount} invoice allocation${sanitized.removedCount === 1 ? '' : 's'} became unavailable and will remain unapplied.`)
     if (validAllocations.some(allocation => !allocation.account_id || allocation.amount <= 0)) { setError('Select a ledger and enter a positive amount for every row.'); return }
     if (new Set(validAllocations.map(allocation => allocation.account_id)).size !== validAllocations.length) { setError('A ledger can appear only once.'); return }
     if (validAllocations.some(allocation => round2(allocation.invoice_allocations.reduce((sum, row) => sum + row.amount, 0)) > allocation.amount)) { setError('Invoice allocations cannot exceed the ledger amount.'); return }
@@ -307,6 +316,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         setMoneyAccountId(cashAccountId)
         setNarration('')
         setError('')
+        setAllocationWarning('')
         setDateInvalid(false)
         window.setTimeout(() => {
           baselineRef.current = snapshotRef.current
@@ -359,7 +369,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
       workingDraftIdRef.current = undefined
       freshAfterDraftRef.current = true
       baselineRef.current = ''
-      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setDateInvalid(false)
+      setDateBs(selectedFiscalYearEndBs(company)); setAllocations([{ account_id: '', amount: '', invoice_allocations: [] }]); setMoneyAccountId(cashAccountId); setNarration(''); setError(''); setAllocationWarning(''); setDateInvalid(false)
       window.setTimeout(() => {
         baselineRef.current = snapshotRef.current
         focusVoucherDialogAfterSave(receiptDialogRef.current)
@@ -419,6 +429,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
             <Label>Narration (optional)</Label>
             <Input value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note…" />
           </div>
+          {allocationWarning && <p className="text-sm text-amber-700">{allocationWarning}</p>}
           {error && <p className="text-sm text-destructive">{error}</p>}
         </div>
         <DialogFooter>

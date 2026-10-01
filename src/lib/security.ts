@@ -89,6 +89,7 @@ const PUBLIC_ERROR_RULES: PublicErrorRule[] = [
   { pattern: /enter the journal voucher number/i, message: 'Enter a Journal voucher number before saving.' },
   { pattern: /return quantity exceeds|exceeds the remaining quantity/i, message: 'The return quantity is greater than the quantity still available to return.' },
   { pattern: /return source invoice is invalid|original voucher.*another company/i, message: 'The selected original invoice is unavailable. Select another invoice and try again.' },
+  { pattern: /Invoice voucher must be an active Sales or Purchase voucher in the same company/i, message: 'One or more saved invoice allocations are no longer active. Reopen the voucher and save again; the amount will remain unapplied.' },
   { pattern: /linked return vouchers before cancelling/i, message: 'Cancel the linked return voucher before cancelling this invoice.' },
   { pattern: /ledger already exist/i, message: 'A ledger with this name already exists. Enter a different name.' },
   { pattern: /account category already exist/i, message: 'An account category with this name already exists under this account type.' },

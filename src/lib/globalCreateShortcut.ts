@@ -6,6 +6,7 @@ type CreateShortcutOptions = {
   disabled?: boolean
   onCreate: (selectorTrigger: HTMLElement | null) => void
   scopeRef?: RefObject<HTMLElement | null>
+  shortcutKey?: 'n' | 'i'
 }
 
 type CreateShortcutRegistration = {
@@ -14,18 +15,20 @@ type CreateShortcutRegistration = {
   disabled: () => boolean
   create: (selectorTrigger: HTMLElement | null) => void
   scope: () => HTMLElement | null
+  shortcutKey: 'n' | 'i'
 }
 
 const registrations: CreateShortcutRegistration[] = []
 let nextOrder = 0
 let listening = false
 
-export function isGlobalCreateShortcut(event: Pick<KeyboardEvent, 'key' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'repeat'>) {
-  return event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && event.key.toLowerCase() === 'n'
+export function isGlobalCreateShortcut(event: Pick<KeyboardEvent, 'key' | 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey' | 'repeat'>, shortcutKey: 'n' | 'i' = 'n') {
+  return event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.repeat && event.key.toLowerCase() === shortcutKey
 }
 
 function handleGlobalCreate(event: KeyboardEvent) {
-  if (!isGlobalCreateShortcut(event) || event.defaultPrevented) return
+  const shortcutKey = event.key.toLowerCase()
+  if ((shortcutKey !== 'n' && shortcutKey !== 'i') || !isGlobalCreateShortcut(event, shortcutKey) || event.defaultPrevented) return
   const activeElement = document.activeElement
   // Radix selector popovers can expose dialog semantics too. They are not the
   // editor scope that owns Alt+N, so exclude them when resolving the active
@@ -34,9 +37,12 @@ function handleGlobalCreate(event: KeyboardEvent) {
   const openDialog = openDialogs.at(-1) || null
   const activeInSelectPortal = !!activeElement?.closest('[data-khata-select-content], [data-radix-popper-content-wrapper]')
   const eligible = registrations.filter(registration => {
+    if (registration.shortcutKey !== shortcutKey) return false
     const scope = registration.scope()
     if (!scope) return !openDialog
-    if (openDialog && scope !== openDialog) return false
+    // The topmost real dialog owns its registered shortcut even if closing a
+    // nested Radix dialog temporarily leaves focus on document.body.
+    if (openDialog) return scope === openDialog
     return (!!activeElement && scope.contains(activeElement)) || activeInSelectPortal
   })
   const registration = eligible.reduce<CreateShortcutRegistration | undefined>((latest, candidate) => (
@@ -65,8 +71,8 @@ function stopListening() {
   listening = false
 }
 
-/** Registers a context-aware Alt+N creator. Scoped editors override page creators. */
-export function useGlobalCreateShortcut({ active, disabled = false, onCreate, scopeRef }: CreateShortcutOptions) {
+/** Registers a context-aware Alt+N or Alt+I creator. Scoped editors override page creators. */
+export function useGlobalCreateShortcut({ active, disabled = false, onCreate, scopeRef, shortcutKey = 'n' }: CreateShortcutOptions) {
   const createRef = useRef(onCreate)
   const disabledRef = useRef(disabled)
   const scopeRefValue = useRef(scopeRef)
@@ -83,6 +89,7 @@ export function useGlobalCreateShortcut({ active, disabled = false, onCreate, sc
       disabled: () => disabledRef.current,
       create: selectorTrigger => createRef.current(selectorTrigger),
       scope: () => scopeRefValue.current?.current || null,
+      shortcutKey,
     })
     startListening()
     return () => {
@@ -90,5 +97,5 @@ export function useGlobalCreateShortcut({ active, disabled = false, onCreate, sc
       if (index >= 0) registrations.splice(index, 1)
       stopListening()
     }
-  }, [active])
+  }, [active, shortcutKey])
 }

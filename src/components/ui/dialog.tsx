@@ -112,7 +112,12 @@ const DialogContent = React.forwardRef<
         // A selector may have been open when this dialog was requested. Close
         // its portal before resolving autofocus so it cannot retain focus
         // above or behind the newly opened dialog.
-        nestedReturnFocusRef.current = closeOpenSearchableSelects()
+        const selectorReturnFocus = closeOpenSearchableSelects()
+        const activeElement = document.activeElement instanceof HTMLElement ? document.activeElement : null
+        const parentDialog = Array.from(document.querySelectorAll<HTMLElement>('[role="dialog"][data-state="open"]:not([data-khata-select-content])'))
+          .filter(dialog => dialog !== event.currentTarget)
+          .at(-1) || null
+        nestedReturnFocusRef.current = selectorReturnFocus || (activeElement && parentDialog?.contains(activeElement) ? activeElement : parentDialog)
         onOpenAutoFocus?.(event)
         if (event.defaultPrevented) return
         const target = event.currentTarget.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')

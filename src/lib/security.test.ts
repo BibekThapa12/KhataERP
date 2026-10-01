@@ -49,6 +49,11 @@ describe('secret-safe logging', () => {
     expect(message).not.toContain('Reference:')
   })
 
+  it('explains stale Receipt and Payment invoice allocations', () => {
+    const error = { code: 'P0001', message: 'Invoice voucher must be an active Sales or Purchase voucher in the same company' }
+    expect(publicErrorMessage(error, 'saving receipt')).toBe('One or more saved invoice allocations are no longer active. Reopen the voucher and save again; the amount will remain unapplied.')
+  })
+
   it('maps common database constraint and permission errors', () => {
     expect(userFacingErrorMessage({ code: '23505', message: 'duplicate key value violates unique constraint' })).toContain('already exists')
     expect(userFacingErrorMessage({ code: '42501', message: 'permission denied for table vouchers' })).toContain('permission')

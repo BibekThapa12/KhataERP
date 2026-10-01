@@ -13,6 +13,12 @@ describe('global create shortcut', () => {
     expect(isGlobalCreateShortcut(event({ key: 'N' }))).toBe(true)
   })
 
+  it('supports the separate Alt+I item shortcut', () => {
+    expect(isGlobalCreateShortcut(event({ key: 'i' }), 'i')).toBe(true)
+    expect(isGlobalCreateShortcut(event({ key: 'I' }), 'i')).toBe(true)
+    expect(isGlobalCreateShortcut(event(), 'i')).toBe(false)
+  })
+
   it('rejects repeats and additional modifiers', () => {
     expect(isGlobalCreateShortcut(event({ repeat: true }))).toBe(false)
     expect(isGlobalCreateShortcut(event({ ctrlKey: true }))).toBe(false)

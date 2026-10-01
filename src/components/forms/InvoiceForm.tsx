@@ -29,7 +29,7 @@ import { repriceSalesLines } from '@/lib/pricing'
 import type { PricingSnapshot } from '@/types'
 import { applyInvoiceQuantityInput, releaseInvoicePricingLocks } from '@/lib/invoiceLineEditing'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
-import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+import { CreateShortcutHint, ItemCreateShortcutHint } from '@/components/ui/shortcut-hint'
 import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
@@ -94,23 +94,26 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   })()
 
   useGlobalCreateShortcut({
+    active: open && !isCash,
+    disabled: saving,
+    scopeRef: dialogRef,
+    onCreate: () => setShowPartyForm(true),
+  })
+
+  useGlobalCreateShortcut({
     active: open,
     disabled: saving,
     scopeRef: dialogRef,
+    shortcutKey: 'i',
     onCreate: selectorTrigger => {
       const active = document.activeElement instanceof Element ? document.activeElement : null
       const row = selectorTrigger?.closest<HTMLElement>('[data-create-line]') || active?.closest<HTMLElement>('[data-create-line]')
       const rowIndex = row ? Number(row.dataset.createLine) : -1
       const context = Number.isInteger(rowIndex) && rowIndex >= 0
         ? { kind: 'item' as const, index: rowIndex }
-        : selectorTrigger === partyTriggerRef.current
-          ? { kind: 'party' as const }
-          : createContextRef.current
+        : createContextRef.current?.kind === 'item' ? createContextRef.current : null
       if (context?.kind === 'item' && context.index < lines.length) {
         setNewItemLineIdx(context.index); setShowItemForm(true); return
-      }
-      if (!isCash && (!partyAccountId || context?.kind === 'party')) {
-        setShowPartyForm(true); return
       }
       setNewItemLineIdx(0); setShowItemForm(true)
     },
@@ -547,8 +550,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                     <div key={idx} data-create-line={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
                       <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
                         <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} onTriggerFocus={() => { createContextRef.current = { kind: 'item', index: idx } }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: i.is_service ? `${i.name} (Service)` : `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''} ${i.is_service ? 'service' : ''}` }))} />
-                        <Button type="button" variant="outline" size="sm" tabIndex={-1} aria-label="Create new item (Alt+N)" className="h-8 flex-shrink-0 bg-white px-2 hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
-                          <Plus className="h-3.5 w-3.5" /><CreateShortcutHint className="ml-1" />
+                        <Button type="button" variant="outline" size="sm" tabIndex={-1} aria-label="Create new item (Alt+I)" className="h-8 flex-shrink-0 bg-white px-2 hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
+                          <Plus className="h-3.5 w-3.5" /><ItemCreateShortcutHint className="ml-1" />
                         </Button>
                       </div>
                       <div className="col-span-2 min-w-0 space-y-1 lg:col-span-1"><Label className="text-xs lg:hidden">Av. Stock</Label><div className={`flex min-h-8 min-w-0 items-center whitespace-normal break-words text-[11px] leading-tight ${!isServiceLine && stock && stock.qty < 0 ? 'text-destructive' : 'text-muted-foreground'}`} title={!isServiceLine && stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : undefined}>{isServiceLine ? 'Service' : stock && selectedItem ? formatStockQuantity(stock.qty, selectedItem) : '—'}</div></div>

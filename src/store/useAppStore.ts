@@ -38,6 +38,7 @@ import { notifySuccess } from '@/lib/notifications'
 import { formatMasterName, masterNameKey } from '@/lib/nameFormat'
 import { assertSimpleEntryCounterAccount, buildSimpleEntryLines, type SimpleEntrySaveParams } from '@/lib/simpleEntries'
 import { buildContraLines, resolveBankChargesAccountId, type ContraSaveParams } from '@/lib/contra'
+import { sanitizeSettlementAllocations } from '@/lib/settlementAllocations'
 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
 
@@ -1460,7 +1461,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     return measuredWrite({ operation: 'update_receipt', companyId: company.id, recordType: 'Receipt', lineItems: allocations.length }, async trace => {
     const { isCash } = validateMoneyAccount(deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true)
-    const validAllocations = validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true)
+    const validAllocations = sanitizeSettlementAllocations(
+      validateAllocations(allocations, deposit_to_account_id, company, get().rawAccounts, get().accountCategories, true),
+      get().vouchers,
+      company.id,
+      'Receipt',
+    ).allocations
     const data = buildReceiptData(validAllocations, deposit_to_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Receipt lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
@@ -1526,7 +1532,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
     return measuredWrite({ operation: 'update_payment', companyId: company.id, recordType: 'Payment', lineItems: allocations.length }, async trace => {
     const { isCash } = validateMoneyAccount(paid_from_account_id, company, get().rawAccounts, get().accountCategories, true)
-    const validAllocations = validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories, true)
+    const validAllocations = sanitizeSettlementAllocations(
+      validateAllocations(allocations, paid_from_account_id, company, get().rawAccounts, get().accountCategories, true),
+      get().vouchers,
+      company.id,
+      'Payment',
+    ).allocations
     const data = buildPaymentData(validAllocations, paid_from_account_id)
     if (!validateBalanced(data.lines as VoucherLine[]).valid) throw new Error('Payment lines do not balance')
     const dateFields = voucherDateFields(date_bs, company)
