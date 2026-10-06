@@ -973,15 +973,84 @@ function snapshotChildCount(vouchers: Voucher[], field: 'lines' | 'stock_lines' 
   return vouchers.reduce((total, voucher) => total + (voucher[field]?.length || 0), 0)
 }
 
+type NormalizedAccountingSnapshot = CompanyAccountingSnapshot & {
+  format_version?: number
+  voucher_lines?: VoucherLine[]
+  stock_lines?: StockLine[]
+  invoice_items?: InvoiceItem[]
+  settlements?: VoucherSettlement[]
+  access_denied?: boolean
+}
+
+function isStatementTimeout(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const value = error as { code?: unknown; message?: unknown }
+  return value.code === '57014' || /canceling statement due to statement timeout/i.test(String(value.message || ''))
+}
+
+function isMissingSnapshotV2(error: unknown) {
+  if (!error || typeof error !== 'object') return false
+  const value = error as { code?: unknown; message?: unknown }
+  return value.code === '42883' || value.code === 'PGRST202' || /get_company_accounting_snapshot_v2.*(?:does not exist|schema cache)/i.test(String(value.message || ''))
+}
+
+async function requestCompanyAccountingSnapshot(company_id: string) {
+  for (const rpcName of ['get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot'] as const) {
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const { data, error } = await withReadDeadline('Accounting snapshot', signal =>
+        supabase.rpc(rpcName, { p_company_id: company_id }).abortSignal(signal),
+        120_000,
+      )
+      if (!error) return data
+      if (rpcName === 'get_company_accounting_snapshot_v2' && isMissingSnapshotV2(error)) break
+      if (attempt === 0 && isStatementTimeout(error)) {
+        await new Promise(resolve => setTimeout(resolve, 750))
+        continue
+      }
+      throw error
+    }
+  }
+  throw new Error('Company accounting snapshot is unavailable.')
+}
+
+function assembleNormalizedVoucherChildren(raw: NormalizedAccountingSnapshot, vouchers: Voucher[]) {
+  if (raw.format_version !== 2) return
+  const byVoucherId = new Map(vouchers.map(voucher => {
+    voucher.lines = []
+    voucher.stock_lines = []
+    voucher.invoice_items = []
+    voucher.settlements = []
+    return [voucher.id, voucher]
+  }))
+  const attach = <T extends { voucher_id: string }>(rows: T[] | undefined, field: 'lines' | 'stock_lines' | 'invoice_items') => {
+    for (const row of rows || []) {
+      const voucher = byVoucherId.get(row.voucher_id)
+      if (!voucher) throw new Error(`Company accounting snapshot contains an orphaned ${field} row.`)
+      ;(voucher[field] as T[]).push(row)
+    }
+  }
+  attach(raw.voucher_lines, 'lines')
+  attach(raw.stock_lines, 'stock_lines')
+  attach(raw.invoice_items, 'invoice_items')
+  for (const row of raw.settlements || []) {
+    const voucher = byVoucherId.get(row.settlement_voucher_id)
+    if (!voucher) throw new Error('Company accounting snapshot contains an orphaned settlement row.')
+    voucher.settlements!.push(row)
+  }
+  const byId = (left: { id?: string }, right: { id?: string }) => String(left.id || '').localeCompare(String(right.id || ''))
+  for (const voucher of vouchers) {
+    voucher.lines!.sort(byId)
+    voucher.stock_lines!.sort(byId)
+    voucher.invoice_items!.sort(byId)
+    voucher.settlements!.sort(byId)
+  }
+}
+
 /** One statement-consistent accounting snapshot. The RPC returns scalar JSON,
  * so neither voucher headers nor nested child arrays are subject to API row caps. */
 export async function fetchCompanyAccountingSnapshot(company_id: string): Promise<CompanyAccountingSnapshot> {
-  const { data, error } = await withReadDeadline('Accounting snapshot', signal =>
-    supabase.rpc('get_company_accounting_snapshot', { p_company_id: company_id }).abortSignal(signal),
-    120_000,
-  )
-  if (error) throw error
-  const raw = data as unknown as (CompanyAccountingSnapshot & { access_denied?: boolean }) | null
+  const data = await requestCompanyAccountingSnapshot(company_id)
+  const raw = data as unknown as NormalizedAccountingSnapshot | null
   if (!raw || raw.access_denied) throw new Error('Company accounting data is unavailable or access was denied.')
   if (raw.company_id !== company_id || !raw.counts || !Array.isArray(raw.vouchers)) {
     throw new Error('Company accounting snapshot was malformed.')
@@ -991,12 +1060,15 @@ export async function fetchCompanyAccountingSnapshot(company_id: string): Promis
     const voucher = normalizeVoucherDates(value) as Voucher
     if (!voucher.id || ids.has(voucher.id) || voucher.company_id !== company_id) throw new Error('Company accounting snapshot contains duplicate or cross-company vouchers.')
     ids.add(voucher.id)
+    return voucher
+  })
+  assembleNormalizedVoucherChildren(raw, vouchers)
+  for (const voucher of vouchers) {
     for (const line of voucher.lines || []) if (line.voucher_id !== voucher.id) throw new Error('Ledger line is attached to the wrong voucher.')
     for (const line of voucher.stock_lines || []) if (line.voucher_id !== voucher.id) throw new Error('Stock line is attached to the wrong voucher.')
     for (const line of voucher.invoice_items || []) if (line.voucher_id !== voucher.id) throw new Error('Invoice item is attached to the wrong voucher.')
     for (const line of voucher.settlements || []) if (line.company_id !== company_id || line.settlement_voucher_id !== voucher.id) throw new Error('Settlement is attached to the wrong company or voucher.')
-    return voucher
-  })
+  }
   const actual = {
     vouchers: vouchers.length,
     voucher_lines: snapshotChildCount(vouchers, 'lines'),

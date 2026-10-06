@@ -3,14 +3,19 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const fake = vi.hoisted(() => {
   vi.stubEnv('VITE_SUPABASE_URL', 'https://test.invalid')
   vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'test-public-key')
-  return { tables: {} as Record<string, Array<Record<string, unknown>>>, failTable: '', calls: [] as string[] }
+  return { tables: {} as Record<string, Array<Record<string, unknown>>>, failTable: '', calls: [] as string[], snapshotFormat: 1, timeoutCount: 0 }
 })
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     rpc: (name: string, args: { p_company_id: string }) => ({ abortSignal: async (_signal: AbortSignal) => {
-      if (name !== 'get_company_accounting_snapshot') return { data: null, error: new Error('unknown rpc') }
+      if (name === 'get_company_accounting_snapshot_v2' && fake.snapshotFormat !== 2) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v2 is not in the schema cache' } }
+      if (name !== 'get_company_accounting_snapshot' && name !== 'get_company_accounting_snapshot_v2') return { data: null, error: new Error('unknown rpc') }
       if (fake.failTable) return { data: null, error: new Error('schema unavailable') }
       fake.calls.push(name)
+      if (fake.timeoutCount > 0) {
+        fake.timeoutCount -= 1
+        return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
+      }
       const vouchers = (fake.tables.vouchers || []).filter(row => row.company_id === args.p_company_id).map(row => ({
         ...row,
         lines: (fake.tables.voucher_lines || []).filter(line => line.voucher_id === row.id),
@@ -19,6 +24,17 @@ vi.mock('@supabase/supabase-js', () => ({
         settlements: (fake.tables.voucher_settlements || []).filter(line => line.company_id === args.p_company_id && line.settlement_voucher_id === row.id),
       }))
       const count = (field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') => vouchers.reduce((sum, voucher) => sum + voucher[field].length, 0)
+      if (name === 'get_company_accounting_snapshot_v2') return { data: {
+        format_version: 2,
+        company_id: args.p_company_id,
+        generated_at: '2026-10-06T00:00:00Z',
+        counts: { vouchers: vouchers.length, voucher_lines: count('lines'), stock_lines: count('stock_lines'), invoice_items: count('invoice_items'), settlements: count('settlements') },
+        vouchers: vouchers.map(({ lines: _lines, stock_lines: _stockLines, invoice_items: _invoiceItems, settlements: _settlements, ...voucher }) => voucher),
+        voucher_lines: vouchers.flatMap(voucher => voucher.lines),
+        stock_lines: vouchers.flatMap(voucher => voucher.stock_lines),
+        invoice_items: vouchers.flatMap(voucher => voucher.invoice_items),
+        settlements: vouchers.flatMap(voucher => voucher.settlements),
+      }, error: null }
       return { data: { company_id: args.p_company_id, generated_at: '2026-09-21T00:00:00Z', counts: { vouchers: vouchers.length, voucher_lines: count('lines'), stock_lines: count('stock_lines'), invoice_items: count('invoice_items'), settlements: count('settlements') }, vouchers }, error: null }
     } }),
     from: (table: string) => {
@@ -48,7 +64,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 import { fetchAccounts, fetchItems, fetchParties, fetchVouchers } from './supabase'
 
-beforeEach(() => { fake.tables = {}; fake.failTable = ''; fake.calls = [] })
+beforeEach(() => { fake.tables = {}; fake.failTable = ''; fake.calls = []; fake.snapshotFormat = 1; fake.timeoutCount = 0 })
 
 describe('company accounting reads beyond API caps', () => {
   it('loads all headers, individual children, settlements, and both voucher types', async () => {
@@ -72,6 +88,19 @@ describe('company accounting reads beyond API caps', () => {
   it('does not replace settlement failures with an empty array', async () => {
     fake.failTable = 'voucher_settlements'
     await expect(fetchVouchers('A')).rejects.toThrow('schema unavailable')
+  })
+  it('assembles normalized indexed snapshot rows and retries one transient statement timeout', async () => {
+    fake.snapshotFormat = 2
+    fake.timeoutCount = 1
+    fake.tables.vouchers = [{ id: 'v1', company_id: 'A', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, date_ad: '2026-04-14', seq: 1, updated_at: '2026-01-01' }]
+    fake.tables.voucher_lines = [{ id: 'l1', voucher_id: 'v1', account_id: 'a', debit: 100, credit: 0 }]
+    fake.tables.invoice_items = [{ id: 'i1', voucher_id: 'v1', item_id: 'item', qty: 1, rate: 100, amount: 100 }]
+
+    const vouchers = await fetchVouchers('A')
+
+    expect(vouchers[0].lines).toEqual(fake.tables.voucher_lines)
+    expect(vouchers[0].invoice_items).toEqual(fake.tables.invoice_items)
+    expect(fake.calls).toEqual(['get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot_v2'])
   })
   it('fully loads masters even when all names are identical', async () => {
     for (const table of ['accounts', 'items', 'parties']) fake.tables[table] = Array.from({ length: 1205 }, (_, i) => ({ id: `${table}${i}`, company_id: 'A', name: 'Same' }))
