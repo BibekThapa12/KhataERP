@@ -8,8 +8,9 @@ const fake = vi.hoisted(() => {
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
     rpc: (name: string, args: { p_company_id: string }) => ({ abortSignal: async (_signal: AbortSignal) => {
-      if (name === 'get_company_accounting_snapshot_v2' && fake.snapshotFormat !== 2) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v2 is not in the schema cache' } }
-      if (name !== 'get_company_accounting_snapshot' && name !== 'get_company_accounting_snapshot_v2') return { data: null, error: new Error('unknown rpc') }
+      if (name === 'get_company_accounting_snapshot_v3' && fake.snapshotFormat !== 3) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v3 is not in the schema cache' } }
+      if (name === 'get_company_accounting_snapshot_v2' && fake.snapshotFormat < 2) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v2 is not in the schema cache' } }
+      if (!['get_company_accounting_snapshot', 'get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot_v3'].includes(name)) return { data: null, error: new Error('unknown rpc') }
       if (fake.failTable) return { data: null, error: new Error('schema unavailable') }
       fake.calls.push(name)
       if (fake.timeoutCount > 0) {
@@ -24,8 +25,8 @@ vi.mock('@supabase/supabase-js', () => ({
         settlements: (fake.tables.voucher_settlements || []).filter(line => line.company_id === args.p_company_id && line.settlement_voucher_id === row.id),
       }))
       const count = (field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') => vouchers.reduce((sum, voucher) => sum + voucher[field].length, 0)
-      if (name === 'get_company_accounting_snapshot_v2') return { data: {
-        format_version: 2,
+      if (name === 'get_company_accounting_snapshot_v2' || name === 'get_company_accounting_snapshot_v3') return { data: {
+        format_version: name === 'get_company_accounting_snapshot_v3' ? 3 : 2,
         company_id: args.p_company_id,
         generated_at: '2026-10-06T00:00:00Z',
         counts: { vouchers: vouchers.length, voucher_lines: count('lines'), stock_lines: count('stock_lines'), invoice_items: count('invoice_items'), settlements: count('settlements') },
@@ -101,6 +102,12 @@ describe('company accounting reads beyond API caps', () => {
     expect(vouchers[0].lines).toEqual(fake.tables.voucher_lines)
     expect(vouchers[0].invoice_items).toEqual(fake.tables.invoice_items)
     expect(fake.calls).toEqual(['get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot_v2'])
+  })
+  it('prefers the lean v3 snapshot when it is deployed', async () => {
+    fake.snapshotFormat = 3
+    fake.tables.vouchers = [{ id: 'v1', company_id: 'A', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, date_ad: '2026-04-14', seq: 1 }]
+    await fetchVouchers('A')
+    expect(fake.calls).toEqual(['get_company_accounting_snapshot_v3'])
   })
   it('fully loads masters even when all names are identical', async () => {
     for (const table of ['accounts', 'items', 'parties']) fake.tables[table] = Array.from({ length: 1205 }, (_, i) => ({ id: `${table}${i}`, company_id: 'A', name: 'Same' }))

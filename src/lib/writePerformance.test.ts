@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { performanceCompanySizeBand } from './writePerformance'
+import { performanceCompanySizeBand, shouldPersistWritePerformance } from './writePerformance'
 
 describe('performanceCompanySizeBand', () => {
   it.each([
@@ -8,5 +8,14 @@ describe('performanceCompanySizeBand', () => {
     [50000, '50k_100k'], [100000, '50k_100k'], [100001, 'over_100k'],
   ] as const)('classifies %s vouchers as %s', (size, expected) => {
     expect(performanceCompanySizeBand(size)).toBe(expected)
+  })
+})
+
+describe('shouldPersistWritePerformance', () => {
+  it('retains failures, slow writes, and sampled successes only', () => {
+    expect(shouldPersistWritePerformance(false, 20, false)).toBe(true)
+    expect(shouldPersistWritePerformance(true, 1000, false)).toBe(true)
+    expect(shouldPersistWritePerformance(true, 20, true)).toBe(true)
+    expect(shouldPersistWritePerformance(true, 20, false)).toBe(false)
   })
 })

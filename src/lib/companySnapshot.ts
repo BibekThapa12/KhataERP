@@ -18,3 +18,5 @@ export async function fetchCompanySnapshot(company: Company) {
     stock: recomputeStock(items, vouchers, company.inventory_valuation_method || 'weighted_average'),
   }
 }
+
+export type CompanySnapshot = Awaited<ReturnType<typeof fetchCompanySnapshot>>

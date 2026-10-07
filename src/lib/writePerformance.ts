@@ -77,9 +77,14 @@ export function setWritePerformanceReporter(reporter: PerformanceReporter) {
 }
 
 const STORAGE_KEY = 'khataerp:write-performance'
+export const WRITE_SUCCESS_SAMPLE_RATE = 0.02
 
 export function performanceCompanySizeBand(companySize: number): PersistedWritePerformanceSample['company_size_band'] {
   return companySize < 1000 ? 'under_1k' : companySize < 10000 ? '1k_10k' : companySize < 50000 ? '10k_50k' : companySize <= 100000 ? '50k_100k' : 'over_100k'
+}
+
+export function shouldPersistWritePerformance(success: boolean, durationMs: number, sampled: boolean) {
+  return !success || durationMs >= 1000 || sampled
 }
 
 function writeTracingEnabled() {
@@ -110,7 +115,7 @@ export class WritePerformanceTrace {
   private readonly startedAt: number
   private queryCount = 0
   private finished = false
-  private readonly sampled = Math.random() < 0.1
+  private readonly sampled = Math.random() < WRITE_SUCCESS_SAMPLE_RATE
   private readonly stages: PersistedWritePerformanceSample['stages'] = []
 
   constructor(readonly context: WriteTraceContext) {
@@ -166,11 +171,9 @@ export class WritePerformanceTrace {
       errorName: error instanceof Error ? error.name : undefined,
     }
     if (this.consoleEnabled) report(totalSample)
-    // Always retain invoice timings: these are the most consequential and
-    // historically variable writes. Other fast operations remain sampled,
-    // while every slow or failed operation is retained.
-    const alwaysMeasure = /(?:sales|purchase)/i.test(this.context.operation) || /(?:sales|purchase)/i.test(this.context.recordType)
-    if (performanceReporter && (alwaysMeasure || this.sampled || !success || durationMs >= 1000)) {
+    // Keep every failure and slow write, but sample routine successful writes.
+    // This preserves actionable diagnostics without one ingestion RPC per bill.
+    if (performanceReporter && shouldPersistWritePerformance(success, durationMs, this.sampled)) {
       const companySize = this.context.companySize || 0
       const connection = typeof navigator === 'undefined' ? undefined : (navigator as Navigator & { connection?: { effectiveType?: string } }).connection
       const errorCode = error && typeof error === 'object' && 'code' in error ? String((error as { code?: unknown }).code || '') : error instanceof Error ? error.name : undefined

@@ -10,6 +10,7 @@ vi.mock('@/lib/companySnapshot', () => ({ fetchCompanySnapshot: mocks.fetchCompa
 vi.mock('@/lib/notifications', () => ({ notifySuccess: vi.fn(), notifyError: vi.fn() }))
 import { useAppStore } from './useAppStore'
 import { reconcileCompanyOnResume } from '@/lib/resumeReconciliation'
+import { clearCompanySnapshotCache } from '@/lib/companySnapshotCache'
 
 const company = (id: string) => ({ id, name: id, user_id: 'user', fiscal_year_configured: true, fiscal_year_start: '2026-07-17' }) as Company
 const snapshot = (id: string) => ({ rawAccounts: [], accounts: [], parties: [], items: [], accountCategories: [], itemCategories: [], pricingRules: [], stock: [], vouchers: [{ id: `${id}-voucher`, company_id: id }] as Voucher[] })
@@ -18,8 +19,9 @@ function deferred<T>() {
   const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no })
   return { promise, resolve, reject }
 }
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks()
+  await clearCompanySnapshotCache()
   useAppStore.getState().setUserId(null)
   useAppStore.getState().setUserId('user')
   useAppStore.setState({ company: company('A'), activeCompanyId: 'A', ...snapshot('A'), dataReady: true, dataStale: false, error: null })

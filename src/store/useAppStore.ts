@@ -1,5 +1,7 @@
 import { create } from 'zustand'
 import { fetchCompanySnapshot } from '@/lib/companySnapshot'
+import type { CompanySnapshot } from '@/lib/companySnapshot'
+import { clearCompanySnapshotCache, loadCompanySnapshotCached, writeCompanySnapshotCache } from '@/lib/companySnapshotCache'
 import { ReconciliationQueue } from '@/lib/reconciliationQueue'
 import { withReadDeadline } from '@/lib/readDeadline'
 import { applyPersistedVoucher } from '@/lib/voucherState'
@@ -58,6 +60,7 @@ let companyDataLoadVersion = 0
 let companyIdentityVersion = 0
 const reconciliationQueue = new ReconciliationQueue()
 const pendingCommittedRefreshes = new Set<string>()
+let snapshotCacheTimer: ReturnType<typeof setTimeout> | null = null
 
 const blankCompanyData = {
   company: null,
@@ -112,7 +115,10 @@ function savedCompanyRefresh(companyId: string) {
     if (voucher || removedVoucherId) {
       try {
         const next = applyPersistedVoucher(state, state.company!, voucher || null, removedVoucherId)
-        if (current()) useAppStore.setState({ ...next, dataReady: true })
+        if (current()) {
+          useAppStore.setState({ ...next, dataReady: true })
+          scheduleCompanySnapshotCache(companyId)
+        }
       } catch (error) {
         if (!current()) return
         useAppStore.setState({ dataStale: true, error: 'Saved, refresh pending. Do not save again; retry the refresh.' })
@@ -228,6 +234,46 @@ interface AppState {
   completeDraftVoucher: (voucher: Voucher) => Promise<Voucher>
   deleteDraftVoucher: (id: string) => Promise<void>
   cancelV: (id: string) => Promise<void>
+}
+
+function cacheableCompanySnapshot(state: AppState): CompanySnapshot {
+  return {
+    rawAccounts: state.rawAccounts,
+    accounts: state.accounts,
+    accountCategories: state.accountCategories,
+    parties: state.parties,
+    items: state.items,
+    itemCategories: state.itemCategories,
+    pricingRules: state.pricingRules,
+    stock: state.stock,
+    vouchers: state.vouchers,
+  }
+}
+
+function scheduleCompanySnapshotCache(companyId: string) {
+  if (snapshotCacheTimer) clearTimeout(snapshotCacheTimer)
+  snapshotCacheTimer = setTimeout(() => {
+    snapshotCacheTimer = null
+    const state = useAppStore.getState()
+    if (!state.userId || state.company?.id !== companyId || !state.dataReady || state.dataStale || !state.lastKnownDataVersion) return
+    void writeCompanySnapshotCache(state.userId, companyId, state.lastKnownDataVersion, cacheableCompanySnapshot(state))
+      .catch(() => undefined)
+  }, 500)
+}
+
+async function loadVersionedCompanySnapshot(company: Company, userId: string, useCache = true) {
+  const dataVersion = await bestEffortCompanyDataVersion(company.id)
+  if (!useCache) {
+    const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
+    return { snapshot, dataVersion }
+  }
+  const result = await loadCompanySnapshotCached({
+    userId,
+    company,
+    dataVersion,
+    fetchSnapshot: () => withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000),
+  })
+  return { snapshot: result.snapshot, dataVersion }
 }
 
 export interface ReturnSaveParams {
@@ -473,6 +519,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   userId: null,
   setUserId: (id) => {
     if (get().userId === id) return
+    if (get().userId) void clearCompanySnapshotCache().catch(() => undefined)
     companyIdentityVersion++
     companyDataLoadVersion++
     companyDataLoadPromises.clear()
@@ -615,8 +662,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeCompanyId: company.id,
         companyCreationLicense: response.license,
       })
-      const dataVersion = await bestEffortCompanyDataVersion(company.id)
-      const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
+      const { snapshot, dataVersion } = await loadVersionedCompanySnapshot(company, userId)
       if (loadVersion !== companyDataLoadVersion || get().userId !== userId || get().company?.id !== company.id) return
       set({ company, ...snapshot, loading: false, dataReady: true, dataStale: false, lastKnownDataVersion: dataVersion, error: null })
       let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], companyPermissions: string[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
@@ -669,11 +715,12 @@ export const useAppStore = create<AppState>((set, get) => ({
     set({ dataStale: true })
     return reconciliationQueue.request(key, async () => {
       const version = readVersion = companyDataLoadVersion
-      const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
+      const { snapshot, dataVersion } = await loadVersionedCompanySnapshot(company, userId, false)
       return () => {
         if (matches() && version === companyDataLoadVersion) {
           pendingCommittedRefreshes.delete(key)
-          set({ ...snapshot, dataReady: true, dataStale: false, loading: false, error: null })
+          set({ ...snapshot, dataReady: true, dataStale: false, lastKnownDataVersion: dataVersion, loading: false, error: null })
+          scheduleCompanySnapshotCache(companyId)
         }
       }
     }, error => {
@@ -706,7 +753,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         next = applyPersistedVoucher({ ...projected, ...next }, company, byId.get(id) || null, id)
         projected = { ...projected, ...next }
       }
-      if (matches()) set({ ...next, lastKnownDataVersion: dataVersion })
+      if (matches()) {
+        set({ ...next, lastKnownDataVersion: dataVersion })
+        scheduleCompanySnapshotCache(company.id)
+      }
     } catch (error) {
       if (!matches()) return
       set({ dataStale: true })
@@ -772,6 +822,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         changes.cheques = chequeData[1]
       }
       set(changes)
+      scheduleCompanySnapshotCache(company.id)
     } catch (error) {
       if (matches()) warnNonSensitive('refreshing changed company resource')(error)
     }

@@ -4,6 +4,7 @@ import { withReadDeadline } from '@/lib/readDeadline'
 import type { Account, AccountCategory, Party, Item, ItemCategory, InvoiceItem, MasterChangeLog, Voucher, VoucherLine, StockLine, Company, CompanyAccountingSnapshot, VoucherSettlement, AppModule, CompanyModule, ChequeBank, Cheque, ChequeEvent, ChequePermission, CompanyCreateInput, MyCompaniesResponse, DeveloperUserCompanyLicense, PricingRule } from '@/types'
 import { DEFAULT_FISCAL_YEAR_START_AD, normalizeVoucherDates } from '@/lib/nepaliDate'
 import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type WritePerformanceTrace } from '@/lib/writePerformance'
+import { ClientLogLimiter } from '@/lib/clientLogLimiter'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
 
@@ -218,22 +219,32 @@ export async function isDeveloperAdmin(): Promise<boolean> {
 }
 
 export async function logAppEvent(event_type: string, company_id?: string | null, metadata: Record<string, unknown> = {}) {
-  const { data: { user } } = await supabase.auth.getUser()
-  if (!user || !company_id) return
-  await supabase.from('app_events').insert({ event_type, company_id, user_id: user.id, metadata: sanitizeForLogging(metadata) })
+  try {
+    const { data: { session } } = await supabase.auth.getSession()
+    const user = session?.user
+    if (!user || !company_id) return false
+    const { error } = await supabase.from('app_events').insert({ event_type, company_id, user_id: user.id, metadata: sanitizeForLogging(metadata) })
+    return !error
+  } catch { return false }
 }
+
+const clientErrorLogLimiter = new ClientLogLimiter()
 
 export function logAppError(company_id: string | undefined | null, error: unknown, context: Record<string, unknown> = {}) {
   const message = safeErrorMessage(error)
   const code = safeErrorCode(error)
+  const path = typeof window !== 'undefined' ? window.location.pathname : undefined
+  const source = typeof context.source === 'string' ? context.source : ''
+  const operation = typeof context.operation === 'string' ? context.operation : ''
+  if (!clientErrorLogLimiter.shouldAccept([company_id || '', code || '', message, path || '', source, operation].join('|'))) return
   const stack = error instanceof Error && error.stack ? redactSensitiveText(error.stack) : undefined
-  logAppEvent('frontend_error', company_id, {
+  void logAppEvent('frontend_error', company_id, {
     message,
     code,
-    stack,
-    path: typeof window !== 'undefined' ? window.location.pathname : undefined,
+    stack: stack?.slice(0, 1500),
+    path,
     ...(sanitizeForLogging(context) as Record<string, unknown>),
-  })
+  }).catch(() => undefined)
 }
 
 export type DeveloperSchemaStatusItem = {
@@ -739,7 +750,7 @@ export async function updateChequeBank(id:string,company_id:string,updates:Parti
 export async function createCheque(value:Omit<Cheque,'id'|'created_at'|'updated_at'|'status'>) { const {data:{user}}=await supabase.auth.getUser(); const {data,error}=await supabase.from('cheques').insert({...value,status:'pending',created_by:user?.id,updated_by:user?.id}).select(CHEQUE_FIELDS).single(); if(error) throw error; await logChequeEvent(value.company_id,'cheque_created',data.id,undefined,{},data); return data as Cheque }
 export async function updateCheque(id:string,company_id:string,updates:Partial<Cheque>,old:Cheque) { const {data,error}=await supabase.from('cheques').update(updates).eq('id',id).eq('company_id',company_id).select(CHEQUE_FIELDS).single(); if(error) throw error; await logChequeEvent(company_id,updates.status?`cheque_${updates.status}`:'cheque_updated',id,undefined,old,data); return data as Cheque }
 export async function clearChequeAtomic(params:{cheque_id:string;date:string;date_bs:string;date_bs_key:number;numbering_period:string;invoice_prefix:string;reset_numbering:boolean;period_start_key:number|null;next_period_start_key:number|null;settlement_account_id?:string|null;reason?:string}) { const {data,error}=await supabase.rpc('clear_cheque_atomic',{p_cheque_id:params.cheque_id,p_date_ad:params.date,p_date_bs:params.date_bs,p_date_bs_key:params.date_bs_key,p_numbering_period:params.numbering_period,p_invoice_prefix:params.invoice_prefix,p_reset_numbering:params.reset_numbering,p_period_start_key:params.period_start_key,p_next_period_start_key:params.next_period_start_key,p_settlement_account_id:params.settlement_account_id||null,p_reason:params.reason||null});if(error)throw error;return data as {cheque:Cheque;voucher:Voucher}}
-export async function logChequeEvents(company_id:string,events:{action:string;cheque_id?:string;bank_id?:string;old_values?:unknown;new_values?:unknown}[]) { if(!events.length)return; const {data:{user}}=await supabase.auth.getUser(); if(!user)return; const {error}=await supabase.from('cheque_events').insert(events.map(event=>({company_id,action:event.action,cheque_id:event.cheque_id,bank_id:event.bank_id,old_values:auditFieldMarkers(event.old_values),new_values:auditFieldMarkers(event.new_values),actor_id:user.id}))); if(error)throw error }
+export async function logChequeEvents(company_id:string,events:{action:string;cheque_id?:string;bank_id?:string;old_values?:unknown;new_values?:unknown}[]) { if(!events.length)return; const {data:{session}}=await supabase.auth.getSession();const user=session?.user;if(!user)return; const {error}=await supabase.from('cheque_events').insert(events.map(event=>({company_id,action:event.action,cheque_id:event.cheque_id,bank_id:event.bank_id,old_values:auditFieldMarkers(event.old_values),new_values:auditFieldMarkers(event.new_values),actor_id:user.id}))); if(error)throw error }
 export async function logChequeEvent(company_id:string,action:string,cheque_id?:string,bank_id?:string,old_values:unknown={},new_values:unknown={}) { await logChequeEvents(company_id,[{action,cheque_id,bank_id,old_values,new_values}]) }
 
 // ─── Accounts ────────────────────────────────────────────────────────────────
@@ -944,7 +955,8 @@ export async function updateItemCategory(id: string, updates: Partial<ItemCatego
 }
 
 export async function logMasterChange(company_id: string, record_type: string, record_id: string, action: string, old_values: Record<string, unknown>, new_values: Record<string, unknown>) {
-  const { data: { user } } = await supabase.auth.getUser()
+  const { data: { session } } = await supabase.auth.getSession()
+  const user = session?.user
   const { error } = await supabase.from('master_change_logs').insert({
     company_id,
     user_id: user?.id,
@@ -996,21 +1008,21 @@ function isStatementTimeout(error: unknown) {
   return value.code === '57014' || /canceling statement due to statement timeout/i.test(String(value.message || ''))
 }
 
-function isMissingSnapshotV2(error: unknown) {
+function isMissingSnapshotRpc(error: unknown, rpcName: string) {
   if (!error || typeof error !== 'object') return false
   const value = error as { code?: unknown; message?: unknown }
-  return value.code === '42883' || value.code === 'PGRST202' || /get_company_accounting_snapshot_v2.*(?:does not exist|schema cache)/i.test(String(value.message || ''))
+  return value.code === '42883' || value.code === 'PGRST202' || new RegExp(`${rpcName}.*(?:does not exist|schema cache)`, 'i').test(String(value.message || ''))
 }
 
 async function requestCompanyAccountingSnapshot(company_id: string) {
-  for (const rpcName of ['get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot'] as const) {
+  for (const rpcName of ['get_company_accounting_snapshot_v3', 'get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot'] as const) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const { data, error } = await withReadDeadline('Accounting snapshot', signal =>
         supabase.rpc(rpcName, { p_company_id: company_id }).abortSignal(signal),
         120_000,
       )
       if (!error) return data
-      if (rpcName === 'get_company_accounting_snapshot_v2' && isMissingSnapshotV2(error)) break
+      if (rpcName !== 'get_company_accounting_snapshot' && isMissingSnapshotRpc(error, rpcName)) break
       if (attempt === 0 && isStatementTimeout(error)) {
         await new Promise(resolve => setTimeout(resolve, 750))
         continue
@@ -1022,7 +1034,7 @@ async function requestCompanyAccountingSnapshot(company_id: string) {
 }
 
 function assembleNormalizedVoucherChildren(raw: NormalizedAccountingSnapshot, vouchers: Voucher[]) {
-  if (raw.format_version !== 2) return
+  if (!raw.format_version || raw.format_version < 2) return
   const byVoucherId = new Map(vouchers.map(voucher => {
     voucher.lines = []
     voucher.stock_lines = []
