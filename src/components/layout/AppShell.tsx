@@ -26,6 +26,7 @@ import { companyBillingStatus, companyCanWrite } from '@/lib/billing'
 import { PopupCalculator } from '@/components/tools/PopupCalculator'
 import { rankSidebarDestinations, sidebarPreferenceKeys } from '@/lib/sidebarNavigation'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
+import { confirmUnsavedChangesAction } from '@/lib/unsavedChanges'
 
 type NavIcon = React.ComponentType<{ className?: string }>
 type NavLinkItem = { kind?: 'link'; to: string; label: string; Icon: NavIcon; end?: boolean; keywords?: readonly string[] }
@@ -194,16 +195,18 @@ function SidebarLink({ item, active, onNavigate, child = false, collapsed = fals
     end={item.end}
     onClick={onNavigate}
     className={cn(
-      'relative flex min-h-11 min-w-0 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:min-h-10',
-      child && 'relative py-1.5 pl-4 before:absolute before:-left-3 before:top-1/2 before:h-px before:w-3 before:bg-blue-200/20',
+      'relative flex min-h-11 min-w-0 items-center gap-3 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80 md:min-h-10',
+      child && 'py-1.5 pl-3 before:absolute before:-left-3 before:top-1/2 before:h-px before:w-3 before:bg-blue-200/20',
       collapsed && 'justify-center px-0',
-      active ? 'bg-white font-semibold text-[#1B2A4A] before:absolute before:left-0 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-amber-500' : 'text-blue-100/85 hover:bg-white/10 hover:text-white',
+      active
+        ? 'bg-white/[0.13] font-semibold text-white shadow-[inset_3px_0_0_#D4A84F]'
+        : 'text-blue-100/80 hover:bg-white/[0.075] hover:text-white',
     )}
     aria-current={active ? 'page' : undefined}
     aria-label={collapsed ? item.label : undefined}
     title={collapsed ? item.label : undefined}
   >
-    {(!child || collapsed) && <Icon className="h-4 w-4 flex-shrink-0" />}
+    {(!child || collapsed) && <Icon className={cn('h-4 w-4 flex-shrink-0', active ? 'text-amber-200' : 'text-blue-200/75')} />}
     {!collapsed && <span className="min-w-0 truncate">{item.label}</span>}
   </NavLink>
 }
@@ -213,20 +216,20 @@ function ReportNavGroup({ item, open, active, onToggle, onNavigate, pathname, se
   const contentId = `report-nav-${item.id}`
   const triggerRef = useRef<HTMLButtonElement | null>(null)
   if (collapsed) return <div className="relative">
-    <button ref={triggerRef} type="button" aria-expanded={open} aria-controls={contentId} aria-label={item.label} title={item.label} onClick={onToggle} className={cn('relative flex min-h-11 w-full items-center justify-center rounded-md text-blue-100/85 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:min-h-10', active && 'bg-white/15 font-semibold text-white before:absolute before:left-0 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-amber-400')}>
-      <Icon className="h-4 w-4" />
+    <button ref={triggerRef} type="button" aria-expanded={open} aria-controls={contentId} aria-label={item.label} title={item.label} onClick={onToggle} className={cn('relative flex min-h-11 w-full items-center justify-center rounded-md text-blue-100/80 transition-[background-color,color,box-shadow] duration-150 hover:bg-white/[0.075] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80 md:min-h-10', active && 'bg-white/[0.13] font-semibold text-white shadow-[inset_3px_0_0_#D4A84F]')}>
+      <Icon className={cn('h-4 w-4', active ? 'text-amber-200' : 'text-blue-200/75')} />
     </button>
-    {open && <div id={contentId} style={{ top: Math.max(8, Math.min(triggerRef.current?.getBoundingClientRect().top || 80, window.innerHeight - 320)) }} className="fixed left-[72px] z-[80] ml-2 hidden w-64 rounded-lg border border-white/10 bg-[#10203d] p-2 shadow-2xl md:block"><p className="px-2 py-1.5 text-xs font-semibold text-white">{item.label}</p>{item.children.map(child => <SidebarLink key={child.to} item={child} active={navLinkIsActive(child, pathname, search)} onNavigate={onNavigate} />)}</div>}
+    {open && <div id={contentId} style={{ top: Math.max(8, Math.min(triggerRef.current?.getBoundingClientRect().top || 80, window.innerHeight - 320)) }} className="fixed left-[72px] z-[80] ml-2 hidden w-64 rounded-lg border border-white/10 bg-[#10203d] p-2 shadow-2xl md:block"><p className="px-3 pb-2 pt-1.5 text-xs font-semibold text-white">{item.label}</p>{item.children.map(child => <SidebarLink key={child.to} item={child} active={navLinkIsActive(child, pathname, search)} onNavigate={onNavigate} />)}</div>}
   </div>
   return <div>
-    <button type="button" aria-expanded={open} aria-controls={contentId} onClick={onToggle} className={cn('relative flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:min-h-10', active ? 'font-semibold text-white before:absolute before:left-0 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-amber-400' : 'text-blue-100/85')}>
-      <Icon className="h-4 w-4 flex-shrink-0" />
+    <button type="button" aria-expanded={open} aria-controls={contentId} onClick={onToggle} className={cn('relative flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm transition-[background-color,color] duration-150 hover:bg-white/[0.075] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80 md:min-h-10', active ? 'font-semibold text-white' : 'text-blue-100/80')}>
+      <Icon className={cn('h-4 w-4 flex-shrink-0', active ? 'text-amber-200' : 'text-blue-200/75')} />
       <span className="min-w-0 truncate">{item.label}</span>
       <ChevronDown className={cn('ml-auto h-3.5 w-3.5 flex-shrink-0 transition-transform duration-300 ease-out motion-reduce:transition-none', !open && '-rotate-90')} />
     </button>
     <div className={cn('grid transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', open ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
       <div className="min-h-0 overflow-hidden">
-        <div id={contentId} aria-hidden={!open} inert={!open ? true : undefined} className="ml-4 space-y-0.5 border-l border-blue-200/20 pl-3 py-0.5">
+        <div id={contentId} aria-hidden={!open} inert={!open ? true : undefined} className="ml-5 space-y-0.5 border-l border-blue-200/15 py-1 pl-3">
           {item.children.map(child => <SidebarLink key={child.to} item={child} child active={navLinkIsActive(child, pathname, search)} onNavigate={onNavigate} />)}
         </div>
       </div>
@@ -265,7 +268,7 @@ function SidebarSearch({ destinations, collapsed, onNavigate, onRequestOpen }: {
     return () => window.clearTimeout(focusTimer)
   }, [collapsed, open])
 
-  const choose = (item: SearchDestination) => { onNavigate(item.to); setOpen(false); setQuery(''); setShowAll(false) }
+  const choose = (item: SearchDestination) => { setOpen(false); setQuery(''); setShowAll(false); onNavigate(item.to) }
   const onInputKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') { event.preventDefault(); setSelected(current => Math.min(current + 1, results.length - 1)) }
     else if (event.key === 'ArrowUp') { event.preventDefault(); setSelected(current => Math.max(current - 1, 0)) }
@@ -273,8 +276,8 @@ function SidebarSearch({ destinations, collapsed, onNavigate, onRequestOpen }: {
     else if (event.key === 'Escape') { event.preventDefault(); setOpen(false); setQuery(''); setShowAll(false) }
   }
 
-  return <div ref={rootRef} className="relative px-2 pb-2">
-    {collapsed ? <button type="button" aria-label="Find a page" title="Find a page (Ctrl+K)" onClick={() => { setOpen(true); requestAnimationFrame(() => inputRef.current?.focus()) }} className="flex min-h-11 w-full items-center justify-center rounded-md text-blue-100/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:min-h-10"><Search className="h-4 w-4" /></button> : <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-200/60" /><input ref={inputRef} value={query} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setSelected(0); setShowAll(false); setOpen(true) }} onKeyDown={onInputKeyDown} placeholder="Find a page…" aria-label="Find a page" className="h-11 w-full rounded-md border border-white/10 bg-white/5 pl-9 pr-12 text-sm text-white outline-none placeholder:text-blue-200/55 focus:border-white/30 focus:ring-2 focus:ring-white/20 md:h-10" /><kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-white/10 px-1.5 py-0.5 text-[10px] text-blue-100/60">Ctrl K</kbd></div>}
+  return <div ref={rootRef} className="relative px-3 pb-2">
+    {collapsed ? <button type="button" aria-label="Find a page" title="Find a page (Ctrl+K)" onClick={() => { setOpen(true); requestAnimationFrame(() => inputRef.current?.focus()) }} className="flex min-h-11 w-full items-center justify-center rounded-md text-blue-100/80 transition-colors hover:bg-white/[0.075] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80 md:min-h-10"><Search className="h-4 w-4" /></button> : <div className="relative"><Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-200/60" /><input ref={inputRef} value={query} onFocus={() => setOpen(true)} onChange={event => { setQuery(event.target.value); setSelected(0); setShowAll(false); setOpen(true) }} onKeyDown={onInputKeyDown} placeholder="Find a page…" aria-label="Find a page" className="h-11 w-full rounded-md border border-white/10 bg-[#142542] pl-9 pr-12 text-sm text-white outline-none transition-[border-color,box-shadow,background-color] placeholder:text-blue-200/50 hover:border-white/15 hover:bg-[#172947] focus:border-amber-200/45 focus:ring-2 focus:ring-amber-200/15 md:h-10" /><kbd className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 rounded border border-white/10 bg-white/[0.04] px-1.5 py-0.5 text-[10px] text-blue-100/55">Ctrl K</kbd></div>}
     {open && <div style={collapsed ? { top: Math.max(8, rootRef.current?.getBoundingClientRect().top || 80) } : undefined} className={cn('z-[90] mt-1 max-h-80 overflow-y-auto rounded-lg border border-white/10 bg-[#10203d] p-1.5 shadow-2xl', collapsed ? 'fixed left-[72px] hidden w-72 md:block' : 'absolute left-2 right-2 top-full')}>
       {collapsed && <div className="relative mb-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-blue-200/60" /><input ref={inputRef} autoFocus value={query} onChange={event => { setQuery(event.target.value); setSelected(0); setShowAll(false) }} onKeyDown={onInputKeyDown} placeholder="Find a page…" aria-label="Find a page" className="h-10 w-full rounded-md border border-white/10 bg-white/5 pl-8 pr-2 text-sm text-white outline-none placeholder:text-blue-200/55" /></div>}
       {results.map((item, index) => <button key={`${item.parent}:${item.to}`} type="button" onMouseEnter={() => setSelected(index)} onClick={() => choose(item)} className={cn('flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-blue-50', selected === index ? 'bg-white/15' : 'hover:bg-white/10')}><item.Icon className="h-4 w-4 shrink-0" /><span className="min-w-0"><span className="block truncate font-medium">{item.label}</span><span className="block truncate text-xs text-blue-200/60">{item.parent}</span></span></button>)}
@@ -384,8 +387,8 @@ function CompanySwitcher({ onSwitched, collapsed = false }: { onSwitched: () => 
 
   return (
     <div ref={switcherRef} className={cn('relative mt-3', collapsed && 'flex justify-center')}>
-      <button type="button" aria-label={`Current company: ${company?.name || 'Loading company'}. Switch company`} title={collapsed ? company?.name || 'Switch company' : undefined} onClick={() => setOpen(value => !value)} className={cn('flex items-center gap-1 rounded bg-white/5 text-left text-xs text-blue-100/80 transition-colors hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white', collapsed ? 'h-10 w-10 justify-center p-0' : 'w-full px-2.5 py-2')}>
-        {collapsed ? <Building2 className="h-4 w-4" /> : <span className="min-w-0 flex-1 truncate">{company?.name ?? 'Loading company...'}</span>}
+      <button type="button" aria-label={`Current company: ${company?.name || 'Loading company'}. Switch company`} title={collapsed ? company?.name || 'Switch company' : undefined} onClick={() => setOpen(value => !value)} className={cn('flex items-center gap-2 rounded-md border border-white/10 bg-[#142542] text-left text-xs text-blue-100/80 transition-[background-color,border-color] hover:border-white/15 hover:bg-[#172947] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80', collapsed ? 'h-10 w-10 justify-center p-0' : 'min-h-11 w-full px-2.5 py-2')}>
+        {collapsed ? <Building2 className="h-4 w-4" /> : <><Building2 className="h-4 w-4 shrink-0 text-blue-200/70" /><span className="min-w-0 flex-1"><span className="block text-[9px] font-semibold uppercase tracking-wider text-blue-200/45">Company</span><span className="block truncate text-xs font-medium text-blue-50">{company?.name ?? 'Loading company...'}</span></span></>}
         {!collapsed && <ChevronDown className={cn('h-3 w-3 flex-shrink-0 transition-transform', open && 'rotate-180')} />}
       </button>
       {open && (
@@ -475,6 +478,25 @@ export function AppShell() {
   const sidebarTransitionTimerRef = useRef<number | null>(null)
   const sidebarTransitionActiveRef = useRef(false)
   const navigationCollapsed = sidebarCollapsed && !mobileOpen
+
+  const navigateFromShell = useCallback(async (to: string) => {
+    const destination = new URL(to, window.location.href)
+    const currentLocation = `${location.pathname}${location.search}${location.hash}`
+    const nextLocation = `${destination.pathname}${destination.search}${destination.hash}`
+    setMobileOpen(false)
+    if (currentLocation === nextLocation) return
+    if (!await confirmUnsavedChangesAction()) return
+    setShortcutVoucher(null)
+    navigate(to)
+  }, [location.hash, location.pathname, location.search, navigate])
+
+  const openShortcutTransaction = useCallback(async (type: SidebarTransactionType) => {
+    setTransactionMenuOpen(false)
+    setMobileOpen(false)
+    if (shortcutVoucher === type) return
+    if (!await confirmUnsavedChangesAction()) return
+    setShortcutVoucher(type)
+  }, [shortcutVoucher])
 
   const openNewTransactionMenu = useCallback(() => {
     if (location.pathname === '/cheques/pending' || location.pathname === '/cheques/received/pending') {
@@ -753,12 +775,12 @@ export function AppShell() {
       </button>
       {mobileOpen && <button type="button" aria-label="Close navigation overlay" onClick={() => setMobileOpen(false)} className="app-mobile-nav fixed inset-0 z-40 bg-black/45 md:hidden" />}
       {/* Sidebar */}
-      <aside ref={sidebarRef} aria-label="Application sidebar" data-collapsed={navigationCollapsed || undefined} className={cn('app-shell-sidebar fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-visible bg-[#1B2A4A] md:static md:translate-x-0', navigationCollapsed ? 'md:w-[72px]' : 'md:w-64', mobileOpen ? 'translate-x-0' : '-translate-x-full', sidebarTransitioning && 'sidebar-is-transitioning')}>
+      <aside ref={sidebarRef} aria-label="Application sidebar" data-collapsed={navigationCollapsed || undefined} className={cn('app-shell-sidebar fixed inset-y-0 left-0 z-50 flex w-72 max-w-[85vw] flex-shrink-0 flex-col overflow-visible border-r border-white/[0.07] bg-[#1B2A4A] shadow-[5px_0_22px_rgba(15,27,50,0.12)] md:static md:translate-x-0', navigationCollapsed ? 'md:w-[72px]' : 'md:w-64', mobileOpen ? 'translate-x-0' : '-translate-x-full', sidebarTransitioning && 'sidebar-is-transitioning')}>
         {/* Brand */}
-        <div className={cn('relative shrink-0 border-b border-white/10 px-4 py-4', navigationCollapsed && 'px-2')}>
+        <div className={cn('relative shrink-0 border-b border-white/[0.08] px-4 py-3.5', navigationCollapsed && 'px-2')}>
           <button type="button" aria-label="Close navigation" onClick={() => setMobileOpen(false)} className="absolute right-3 top-3 flex h-9 w-9 items-center justify-center rounded-md text-white/80 hover:bg-white/10 md:hidden"><X className="h-5 w-5" /></button>
           <div className={cn('flex items-start justify-between gap-2', navigationCollapsed && 'justify-center')}>
-            <div><div className={cn('font-serif text-2xl font-bold tracking-tight text-white', navigationCollapsed && 'text-center text-xl')}>{navigationCollapsed ? 'K' : 'Khata'}</div>{!navigationCollapsed && <div className="mt-0.5 text-[10px] uppercase tracking-widest text-blue-200/70">{developerWorkspace ? 'Developer Workspace' : 'ERP for Nepal'}</div>}</div>
+            <div><div className={cn('font-serif text-2xl font-bold tracking-tight text-white', navigationCollapsed && 'text-center text-xl')}>{navigationCollapsed ? 'K' : 'Khata'}</div>{!navigationCollapsed && <div className="mt-0.5 text-[9px] font-medium uppercase tracking-[0.18em] text-blue-200/55">{developerWorkspace ? 'Developer Workspace' : 'ERP for Nepal'}</div>}</div>
             <button type="button" aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} title={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'} onClick={toggleSidebar} className="hidden h-9 w-9 items-center justify-center rounded-md text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:flex">{sidebarCollapsed ? <PanelLeftOpen className="h-4 w-4" /> : <PanelLeftClose className="h-4 w-4" />}</button>
           </div>
           {!developerWorkspace && <CompanySwitcher collapsed={navigationCollapsed} onSwitched={() => { setMobileOpen(false); navigate('/') }} />}
@@ -767,19 +789,19 @@ export function AppShell() {
         {/* Nav */}
         <nav aria-label="Primary navigation" className="sidebar-navigation-scroll min-h-0 flex-1 overflow-y-auto overflow-x-visible py-3">
           {!developerWorkspace && <>
-            <SidebarSearch collapsed={navigationCollapsed} destinations={searchDestinations} onRequestOpen={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobileOpen(true) }} onNavigate={to => { navigate(to); setMobileOpen(false) }} />
-            <div ref={transactionMenuRef} onKeyDown={transactionMenuOpen ? handleTransactionMenuKeyDown : undefined} className="relative px-2 pb-3">
-              <button ref={transactionTriggerRef} type="button" disabled={readOnly} aria-haspopup="menu" aria-expanded={transactionMenuOpen} aria-controls={transactionMenuOpen ? 'sidebar-new-transaction-menu' : undefined} aria-label="New transaction" title={navigationCollapsed ? 'New transaction' : undefined} onClick={() => setTransactionMenuOpen(value => !value)} className={cn('group flex min-h-11 w-full items-center rounded-md border text-sm font-semibold text-blue-50 shadow-sm transition-[background-color,border-color,color,box-shadow] hover:border-blue-100/35 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300/70 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10', transactionMenuOpen ? 'border-amber-300/55 bg-amber-300/10 shadow-[inset_3px_0_0_rgba(217,179,94,0.9)]' : 'border-blue-100/15 bg-white/[0.055]', navigationCollapsed ? 'justify-center px-0' : 'gap-2 px-2.5')}><span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md border border-amber-300/30 bg-amber-300/10 text-amber-200 transition-colors group-hover:border-amber-300/50 group-hover:bg-amber-300/15', navigationCollapsed && 'h-8 w-8')}><PlusCircle className="h-4 w-4" /></span>{!navigationCollapsed && <><span>New transaction</span><ChevronDown className={cn('ml-auto h-4 w-4 text-blue-200/75 transition-transform', transactionMenuOpen && 'rotate-180 text-amber-200')} /></>}</button>
+            <SidebarSearch collapsed={navigationCollapsed} destinations={searchDestinations} onRequestOpen={() => { if (window.matchMedia('(max-width: 767px)').matches) setMobileOpen(true) }} onNavigate={to => { void navigateFromShell(to) }} />
+            <div ref={transactionMenuRef} onKeyDown={transactionMenuOpen ? handleTransactionMenuKeyDown : undefined} className="relative px-3 pb-4">
+              <button ref={transactionTriggerRef} type="button" disabled={readOnly} aria-haspopup="menu" aria-expanded={transactionMenuOpen} aria-controls={transactionMenuOpen ? 'sidebar-new-transaction-menu' : undefined} aria-label="New transaction" title={navigationCollapsed ? 'New transaction' : undefined} onClick={() => setTransactionMenuOpen(value => !value)} className={cn('group flex min-h-11 w-full items-center rounded-md border text-sm font-semibold text-blue-50 transition-[background-color,border-color,color,box-shadow] hover:border-blue-100/30 hover:bg-white/[0.075] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80 disabled:cursor-not-allowed disabled:opacity-50 md:min-h-10', transactionMenuOpen ? 'border-amber-300/45 bg-amber-300/[0.09] shadow-[inset_3px_0_0_rgba(217,179,94,0.9)]' : 'border-blue-100/12 bg-[#142542]', navigationCollapsed ? 'justify-center px-0' : 'gap-2.5 px-3')}><span className={cn('flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-amber-200 transition-colors group-hover:bg-amber-300/10', navigationCollapsed && 'h-8 w-8')}><PlusCircle className="h-[18px] w-[18px]" /></span>{!navigationCollapsed && <><span>New transaction</span><ChevronDown className={cn('ml-auto h-3.5 w-3.5 text-blue-200/65 transition-transform', transactionMenuOpen && 'rotate-180 text-amber-200')} /></>}</button>
               {transactionMenuOpen && <div id="sidebar-new-transaction-menu" role="menu" aria-label="New transaction types" onWheel={event => event.stopPropagation()} style={{ maxHeight: transactionMenuMaxHeight, ...(navigationCollapsed ? { top: Math.max(8, transactionTriggerRef.current?.getBoundingClientRect().top || 80) } : {}) }} className={cn('sidebar-navigation-scroll z-[80] mt-1 overflow-y-auto overscroll-contain rounded-lg border border-white/10 bg-[#10203d] p-1.5 shadow-2xl', navigationCollapsed ? 'fixed left-[72px] hidden w-64 md:block' : 'absolute left-2 right-2 top-full')}>
                 <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-blue-200/50">Quick vouchers</p>
-                {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.type} role="menuitem" type="button" onClick={() => { setShortcutVoucher(shortcut.type); setTransactionMenuOpen(false); setMobileOpen(false) }} className="flex min-h-11 w-full items-center justify-between rounded-md px-2.5 text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><span>New {shortcut.label}</span><kbd className="text-[10px] text-blue-200/60">{shortcut.key}</kbd></button>)}
+                {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.type} role="menuitem" type="button" onClick={() => { void openShortcutTransaction(shortcut.type) }} className="flex min-h-11 w-full items-center justify-between rounded-md px-2.5 text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><span>New {shortcut.label}</span><kbd className="text-[10px] text-blue-200/60">{shortcut.key}</kbd></button>)}
                 <div className="mx-2 my-1 border-t border-white/10" />
                 <p className="px-2.5 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wider text-blue-200/50">More vouchers</p>
-                {SIDEBAR_ADDITIONAL_TRANSACTIONS.map(action => <button key={action.type} role="menuitem" type="button" onClick={() => { setShortcutVoucher(action.type); setTransactionMenuOpen(false); setMobileOpen(false) }} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><action.Icon className="h-4 w-4 shrink-0 text-blue-200/70" /><span>New {action.label}</span></button>)}
+                {SIDEBAR_ADDITIONAL_TRANSACTIONS.map(action => <button key={action.type} role="menuitem" type="button" onClick={() => { void openShortcutTransaction(action.type) }} className="flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><action.Icon className="h-4 w-4 shrink-0 text-blue-200/70" /><span>New {action.label}</span></button>)}
               </div>}
             </div>
           </>}
-          <div className="space-y-4 px-2">
+          <div className="space-y-3 px-3">
           {developerWorkspace ? (
             <div className="space-y-1">
               <NavLink to="/" title={navigationCollapsed ? 'Back to ERP' : undefined} aria-label={navigationCollapsed ? 'Back to ERP' : undefined} onClick={() => setMobileOpen(false)} className={cn('mb-4 flex min-h-10 items-center gap-2.5 rounded-md px-2.5 text-sm text-blue-100/80 transition-colors hover:bg-white/10 hover:text-white', navigationCollapsed && 'justify-center px-0')}>
@@ -810,7 +832,7 @@ export function AppShell() {
             const expanded = !collapsible || openSections.has(section.label)
             const sectionActive = section.items.some(item => itemIsActive(item, location.pathname, location.search))
             return <div key={section.label}>
-              {!navigationCollapsed && (collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase().replaceAll(' ', '-')}`} onClick={() => toggleSection(section.label)} className={cn('relative mb-1 flex min-h-11 w-full items-center rounded-md px-2.5 text-left text-sm font-semibold text-blue-100/75 transition-colors hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80 md:min-h-10', sectionActive && !expanded && 'text-white before:absolute before:left-0 before:top-2 before:bottom-2 before:w-0.5 before:rounded-full before:bg-amber-400')}>
+              {!navigationCollapsed && (collapsible ? <button type="button" aria-expanded={expanded} aria-controls={`nav-section-${section.label.toLowerCase().replaceAll(' ', '-')}`} onClick={() => toggleSection(section.label)} className={cn('relative mb-1 flex min-h-10 w-full items-center rounded-md px-3 text-left text-[13px] font-semibold text-blue-100/65 transition-colors hover:bg-white/[0.06] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80', sectionActive && 'text-blue-50', sectionActive && !expanded && 'shadow-[inset_3px_0_0_#D4A84F]')}>
                 <span>{section.label}</span><ChevronDown className={cn('ml-auto h-3.5 w-3.5 transition-transform duration-300 ease-out motion-reduce:transition-none', !expanded && '-rotate-90')} />
               </button> : <div className="mb-1 px-2 text-[10px] font-semibold uppercase tracking-widest text-blue-300/50">{section.label}</div>)}
               <div className={cn('grid', !navigationCollapsed && collapsible && 'transition-[grid-template-rows,opacity] duration-300 ease-out motion-reduce:transition-none', navigationCollapsed || expanded ? 'grid-rows-[1fr] opacity-100' : 'grid-rows-[0fr] opacity-0')}>
@@ -852,12 +874,12 @@ export function AppShell() {
         </nav>
 
         {/* Footer */}
-        <div ref={accountMenuRef} className="relative shrink-0 space-y-1 border-t border-white/10 p-2">
+        <div ref={accountMenuRef} className="relative shrink-0 space-y-0.5 border-t border-white/[0.08] bg-[#172642] p-3">
           <NavLink
             to="/settings"
             onClick={() => setMobileOpen(false)}
             className={({ isActive }) =>
-              cn('flex min-h-11 items-center gap-2.5 rounded-md px-2.5 text-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80', navigationCollapsed && 'justify-center px-0', isActive ? 'bg-white text-[#1B2A4A] font-semibold' : 'text-blue-100/80 hover:bg-white/10 hover:text-white')
+              cn('flex min-h-11 items-center gap-3 rounded-md px-3 text-sm transition-[background-color,color,box-shadow] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80', navigationCollapsed && 'justify-center px-0', isActive ? 'bg-white/[0.13] font-semibold text-white shadow-[inset_3px_0_0_#D4A84F]' : 'text-blue-100/80 hover:bg-white/[0.075] hover:text-white')
             }
             title={navigationCollapsed ? 'Settings' : undefined}
             aria-label={navigationCollapsed ? 'Settings' : undefined}
@@ -865,7 +887,7 @@ export function AppShell() {
             <Settings className="h-4 w-4" />
             {!navigationCollapsed && <span>Settings</span>}
           </NavLink>
-          <button type="button" aria-expanded={accountMenuOpen} aria-label="Account menu" title={navigationCollapsed ? 'Account menu' : undefined} onClick={() => setAccountMenuOpen(value => !value)} className={cn('flex min-h-11 w-full items-center gap-2.5 rounded-md px-2.5 text-left text-sm text-blue-100/85 hover:bg-white/10 hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80', navigationCollapsed && 'justify-center px-0')}><UserCircle2 className="h-4 w-4 shrink-0" />{!navigationCollapsed && <><span className="min-w-0 flex-1 truncate">Account</span><ChevronDown className={cn('h-4 w-4 transition-transform', accountMenuOpen && 'rotate-180')} /></>}</button>
+          <button type="button" aria-expanded={accountMenuOpen} aria-label="Account menu" title={navigationCollapsed ? 'Account menu' : undefined} onClick={() => setAccountMenuOpen(value => !value)} className={cn('flex min-h-11 w-full items-center gap-3 rounded-md px-3 text-left text-sm text-blue-100/80 transition-colors hover:bg-white/[0.075] hover:text-white focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-200/80', navigationCollapsed && 'justify-center px-0')}><UserCircle2 className="h-4 w-4 shrink-0 text-blue-200/70" />{!navigationCollapsed && <><span className="min-w-0 flex-1 truncate">Account</span><ChevronDown className={cn('h-3.5 w-3.5 transition-transform', accountMenuOpen && 'rotate-180')} /></>}</button>
           {accountMenuOpen && <div className={cn('absolute z-[90] rounded-lg border border-white/10 bg-[#10203d] p-1.5 shadow-2xl', navigationCollapsed ? 'bottom-2 left-full ml-2 hidden w-56 md:block' : 'bottom-full left-2 right-2 mb-1')}><div className="border-b border-white/10 px-3 py-2 text-xs text-blue-100/65"><span className="block font-medium text-blue-50">Signed in</span><span className="block truncate">{userId || 'Current account'}</span></div><button type="button" onClick={handleSignOut} className="mt-1 flex min-h-11 w-full items-center gap-2.5 rounded-md px-3 text-sm text-blue-50 hover:bg-white/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white/80"><LogOut className="h-4 w-4" />Sign out</button></div>}
         </div>
       </aside>
@@ -877,12 +899,12 @@ export function AppShell() {
             <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Global shortcuts</span>
             <button type="button" disabled={readOnly} onClick={openNewTransactionMenu} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45" title={readOnly ? 'Renew the company plan to create transactions.' : 'Open New Transaction menu (N)'}><kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">N</kbd><PlusCircle className="h-3.5 w-3.5" /><span>New transaction</span></button>
             <button type="button" onClick={() => setCalculatorOpen(true)} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title="Open Calculator (F2)"><kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">F2</kbd><Calculator className="h-3.5 w-3.5" /><span>Calculator</span></button>
-            {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" disabled={readOnly} onClick={() => { setMobileOpen(false); setShortcutVoucher(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45" title={readOnly ? 'Renew the company plan to create vouchers.' : `New ${shortcut.label} Voucher (${shortcut.key})`}>
+            {VOUCHER_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" disabled={readOnly} onClick={() => { void openShortcutTransaction(shortcut.type) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-45" title={readOnly ? 'Renew the company plan to create vouchers.' : `New ${shortcut.label} Voucher (${shortcut.key})`}>
               <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
               <span>{shortcut.label}</span>
             </button>)}
             <span aria-hidden="true" className="mx-0.5 h-5 w-px flex-shrink-0 bg-border" />
-            {NAVIGATION_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { setMobileOpen(false); setShortcutVoucher(null); navigate(shortcut.to) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Open ${shortcut.label} (${shortcut.key})`}>
+            {NAVIGATION_SHORTCUTS.map(shortcut => <button key={shortcut.key} type="button" onClick={() => { void navigateFromShell(shortcut.to) }} className="inline-flex h-7 flex-shrink-0 items-center gap-1.5 rounded border border-border bg-background px-2 text-xs text-foreground transition-colors hover:border-primary/30 hover:bg-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" title={`Open ${shortcut.label} (${shortcut.key})`}>
               <kbd className="rounded bg-muted px-1 py-0.5 font-mono text-[10px] font-semibold text-primary">{shortcut.key}</kbd>
               <span>{shortcut.label}</span>
             </button>)}

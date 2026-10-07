@@ -2,13 +2,14 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Company, Voucher } from '@/types'
 
 const mocks = vi.hoisted(() => ({
-  fetchMyCompanies: vi.fn(), fetchCompanySnapshot: vi.fn(), setActiveCompanyRemote: vi.fn(),
+  fetchMyCompanies: vi.fn(), fetchCompanySnapshot: vi.fn(), fetchCompanyDataVersion: vi.fn(), setActiveCompanyRemote: vi.fn(),
   insertDraftVoucher: vi.fn(), fetchCompanyModules: vi.fn(), fetchCompanyPermissions: vi.fn(), fetchVoucherBundles: vi.fn(),
 }))
 vi.mock('@/lib/supabase', () => ({ ...mocks }))
 vi.mock('@/lib/companySnapshot', () => ({ fetchCompanySnapshot: mocks.fetchCompanySnapshot }))
 vi.mock('@/lib/notifications', () => ({ notifySuccess: vi.fn(), notifyError: vi.fn() }))
 import { useAppStore } from './useAppStore'
+import { reconcileCompanyOnResume } from '@/lib/resumeReconciliation'
 
 const company = (id: string) => ({ id, name: id, user_id: 'user', fiscal_year_configured: true, fiscal_year_start: '2026-07-17' }) as Company
 const snapshot = (id: string) => ({ rawAccounts: [], accounts: [], parties: [], items: [], accountCategories: [], itemCategories: [], pricingRules: [], stock: [], vouchers: [{ id: `${id}-voucher`, company_id: id }] as Voucher[] })
@@ -24,6 +25,58 @@ beforeEach(() => {
   useAppStore.setState({ company: company('A'), activeCompanyId: 'A', ...snapshot('A'), dataReady: true, dataStale: false, error: null })
   mocks.fetchCompanyModules.mockResolvedValue([])
   mocks.fetchCompanyPermissions.mockResolvedValue([])
+  mocks.fetchCompanyDataVersion.mockResolvedValue('1')
+})
+
+describe('focus and reconnect freshness checks', () => {
+  const resumeState = (overrides: Partial<ReturnType<typeof baseResumeState>> = {}) => ({ ...baseResumeState(), ...overrides })
+  const baseResumeState = () => ({
+    userId: 'user',
+    companyId: 'A',
+    lastKnownDataVersion: '7',
+    dataReady: true,
+    dataStale: false,
+    reconcileCompany: vi.fn().mockResolvedValue(undefined),
+  })
+
+  it('does nothing when a focus event occurs inside the cooldown', async () => {
+    const state = resumeState()
+    const fetchDataVersion = vi.fn()
+    const markChecked = vi.fn()
+    const result = await reconcileCompanyOnResume({
+      expectedUserId: 'user', expectedCompanyId: 'A', lastCheckAt: 100_000, now: 150_000,
+      getState: () => state, markChecked, fetchDataVersion, publishDataVersion: vi.fn(),
+    })
+    expect(result).toBe('cooldown')
+    expect(fetchDataVersion).not.toHaveBeenCalled()
+    expect(state.reconcileCompany).not.toHaveBeenCalled()
+    expect(markChecked).not.toHaveBeenCalled()
+  })
+
+  it('does not reconcile after cooldown when the company marker is unchanged', async () => {
+    const state = resumeState()
+    const publishDataVersion = vi.fn()
+    const result = await reconcileCompanyOnResume({
+      expectedUserId: 'user', expectedCompanyId: 'A', lastCheckAt: 1, now: 130_001,
+      getState: () => state, markChecked: vi.fn(), fetchDataVersion: vi.fn().mockResolvedValue('7'), publishDataVersion,
+    })
+    expect(result).toBe('unchanged')
+    expect(state.reconcileCompany).not.toHaveBeenCalled()
+    expect(publishDataVersion).not.toHaveBeenCalled()
+  })
+
+  it('reconciles after cooldown when the company marker changed', async () => {
+    const state = resumeState()
+    const publishDataVersion = vi.fn()
+    const result = await reconcileCompanyOnResume({
+      expectedUserId: 'user', expectedCompanyId: 'A', lastCheckAt: 1, now: 130_001,
+      getState: () => state, markChecked: vi.fn(), fetchDataVersion: vi.fn().mockResolvedValue('8'), publishDataVersion,
+    })
+    expect(result).toBe('reconciled')
+    expect(state.reconcileCompany).toHaveBeenCalledOnce()
+    expect(state.reconcileCompany).toHaveBeenCalledWith('A')
+    expect(publishDataVersion).toHaveBeenCalledWith('8')
+  })
 })
 
 describe('company-scoped accounting publication', () => {

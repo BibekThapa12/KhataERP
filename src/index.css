@@ -93,23 +93,23 @@
   .sidebar-navigation-scroll {
     scrollbar-gutter: stable;
     scrollbar-width: thin;
-    scrollbar-color: rgb(177 194 222 / 0.42) rgb(255 255 255 / 0.035);
+    scrollbar-color: rgb(177 194 222 / 0.34) transparent;
   }
-  .sidebar-navigation-scroll::-webkit-scrollbar { width: 7px; height: 7px; }
+  .sidebar-navigation-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
   .sidebar-navigation-scroll::-webkit-scrollbar-track {
-    margin-block: 6px;
+    margin-block: 8px;
     border-radius: 999px;
-    background: rgb(255 255 255 / 0.035);
+    background: transparent;
   }
   .sidebar-navigation-scroll::-webkit-scrollbar-thumb {
     min-height: 42px;
-    border: 2px solid transparent;
+    border: 1px solid transparent;
     border-radius: 999px;
-    background: rgb(177 194 222 / 0.42);
+    background: rgb(177 194 222 / 0.34);
     background-clip: padding-box;
   }
-  .sidebar-navigation-scroll:hover::-webkit-scrollbar-thumb { background-color: rgb(203 215 235 / 0.62); }
-  .sidebar-navigation-scroll::-webkit-scrollbar-thumb:hover { background-color: rgb(220 228 242 / 0.78); }
+  .sidebar-navigation-scroll:hover::-webkit-scrollbar-thumb { background-color: rgb(203 215 235 / 0.52); }
+  .sidebar-navigation-scroll::-webkit-scrollbar-thumb:hover { background-color: rgb(220 228 242 / 0.7); }
   .sidebar-navigation-scroll::-webkit-scrollbar-thumb:active { background-color: rgb(196 160 86 / 0.92); }
 
   .app-toast[data-state='open'] {
@@ -278,6 +278,140 @@
     border-color: hsl(var(--ring));
   }
   .voucher-dialog input:read-only { background-color: #f6f6f6; }
+
+  /* Sales, Purchase, and their returns use the main workspace as a focused
+     document editor. The sidebar stays visible for navigation context. */
+  .invoice-workspace-overlay {
+    inset: 0 0 0 var(--invoice-workspace-left, 16rem);
+    background: hsl(221 18% 20% / 0.14);
+    backdrop-filter: none;
+  }
+  .invoice-workspace-dialog {
+    inset: 0 0 0 var(--invoice-workspace-left, 16rem) !important;
+    display: flex !important;
+    height: 100dvh !important;
+    max-height: none !important;
+    width: auto !important;
+    max-width: none !important;
+    transform: none !important;
+    flex-direction: column;
+    gap: 0 !important;
+    overflow: hidden !important;
+    border: 0 !important;
+    border-left: 1px solid hsl(var(--border)) !important;
+    border-radius: 0 !important;
+    padding: 0 !important;
+    box-shadow: -8px 0 24px rgb(15 23 42 / 0.08) !important;
+    animation: none !important;
+  }
+  body:has(.app-shell-sidebar[data-collapsed='true']) { --invoice-workspace-left: 72px; }
+  .invoice-workspace-header {
+    flex: none;
+    border-bottom: 1px solid hsl(var(--border));
+    background: #fff;
+    padding: 1rem 1.5rem 0.875rem;
+  }
+  .invoice-workspace-body {
+    min-height: 0;
+    flex: 1;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: hsl(var(--background));
+    padding: 1.125rem 1.5rem 1.5rem;
+  }
+  .invoice-workspace-layout,
+  .return-workspace-layout {
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+  }
+  .invoice-workspace-footer {
+    flex: none;
+    flex-wrap: wrap;
+    border-top: 1px solid hsl(var(--border));
+    background: #fff;
+    padding: 0.75rem 1.5rem;
+    box-shadow: 0 -8px 22px rgb(15 23 42 / 0.045);
+  }
+  .invoice-section {
+    border: 1px solid hsl(var(--border));
+    border-radius: 0.5rem;
+    background: #fff;
+    padding: 1rem;
+    box-shadow: 0 1px 2px rgb(15 23 42 / 0.035);
+  }
+  .invoice-section-title {
+    font-family: 'IBM Plex Sans', system-ui, sans-serif;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    line-height: 1rem;
+    color: hsl(var(--foreground));
+  }
+}
+
+@media (min-width: 1280px) and (min-height: 650px) {
+  .invoice-workspace-header { padding: 0.625rem 1.25rem 0.55rem; }
+  .invoice-workspace-body { padding: 0.5rem 1rem; }
+  .invoice-workspace-footer { padding: 0.45rem 1rem; }
+  .invoice-workspace-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 2.2fr) minmax(20rem, 1fr);
+    grid-template-rows: auto auto auto;
+    align-content: start;
+    gap: 0.625rem;
+  }
+  .invoice-document-section { grid-column: 1 / -1; grid-row: 1; }
+  .invoice-items-section { grid-column: 1; grid-row: 2 / span 2; }
+  .invoice-adjustments-section { grid-column: 2; grid-row: 2; }
+  .invoice-summary-section { grid-column: 2; grid-row: 3; }
+  .return-workspace-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.55fr) minmax(20rem, 1fr);
+    grid-template-rows: auto auto auto;
+    align-content: start;
+    gap: 0.625rem;
+  }
+  .return-document-section { grid-column: 1 / -1; grid-row: 1; }
+  .return-items-section { grid-column: 1 / -1; grid-row: 2; }
+  .return-settlement-section { grid-column: 1; grid-row: 3; }
+  .return-summary-section { grid-column: 2; grid-row: 3; }
+  .return-workspace-layout > .text-destructive { grid-column: 1 / -1; }
+  .invoice-section { padding: 0.5rem 0.75rem; }
+  .invoice-workspace-layout .invoice-section > div:first-child > p,
+  .return-workspace-layout .invoice-section > div:first-child > p { display: none; }
+  .invoice-document-section.space-y-3 > :not([hidden]) ~ :not([hidden]),
+  .invoice-adjustments-section.space-y-3 > :not([hidden]) ~ :not([hidden]),
+  .invoice-summary-section.space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.375rem; }
+  .invoice-items-section > div:first-child { margin-bottom: 0.375rem; }
+  .invoice-items-section > button { margin-top: 0.5rem; }
+  .invoice-adjustments-section textarea { min-height: 2.5rem; height: 2.5rem; }
+  .invoice-summary-section > div:last-child { padding: 0.5rem 0.625rem; }
+  .invoice-summary-section > div:last-child.space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.2rem; }
+  .return-document-section.space-y-3 > :not([hidden]) ~ :not([hidden]),
+  .return-settlement-section.space-y-3 > :not([hidden]) ~ :not([hidden]),
+  .return-summary-section.space-y-3 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.375rem; }
+  .return-items-section > div:first-child { margin-bottom: 0.375rem; }
+  .return-settlement-section textarea { min-height: 2.5rem; height: 2.5rem; }
+  .return-summary-section > div:last-child { padding: 0.5rem 0.625rem; }
+  .return-summary-section > div:last-child.space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.2rem; }
+}
+
+@layer base {
+  @media (max-width: 767px) {
+    body,
+    body:has(.app-shell-sidebar[data-collapsed='true']) { --invoice-workspace-left: 0px; }
+    .invoice-workspace-overlay { inset: 0; }
+    .invoice-workspace-dialog {
+      inset: 0 !important;
+      width: 100vw !important;
+      border-left: 0 !important;
+    }
+    .invoice-workspace-header { padding: 0.875rem 1rem 0.75rem; }
+    .invoice-workspace-body { padding: 0.75rem; }
+    .invoice-workspace-footer { padding: 0.75rem; }
+    .invoice-section { padding: 0.75rem; }
+  }
 }
 
 @media (max-width: 767px) {
@@ -289,6 +423,18 @@
   :where(.compact-workspace, .compact-workspace-surface) [role='button'] { min-height: 2.375rem; }
   :where(.compact-workspace, .compact-workspace-surface) input:not([type='checkbox']):not([type='radio']),
   :where(.compact-workspace, .compact-workspace-surface) select { min-height: 2.375rem; font-size: 16px !important; }
+}
+
+/* Portal positioning utilities are intentionally omitted for invoice
+   workspaces. Keep the mobile override at the final cascade level so neither
+   the expanded nor collapsed desktop sidebar inset can displace the editor. */
+@media screen and (max-width: 767px) {
+  html body .invoice-workspace-overlay { left: 0 !important; }
+  html body .invoice-workspace-dialog {
+    left: 0 !important;
+    right: 0 !important;
+    width: 100vw !important;
+  }
 }
 
 @keyframes sidebar-content-settle {

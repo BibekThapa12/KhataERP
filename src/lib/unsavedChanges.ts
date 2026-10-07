@@ -1,11 +1,12 @@
-import { useCallback, useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
 
-export const UNSAVED_CHANGES_MESSAGE = 'You have unsaved changes. Are you sure you want to leave?'
+export const UNSAVED_CHANGES_MESSAGE = 'Your changes haven\'t been saved. If you leave now, they will be lost.'
 
 type ConfirmationListener = (open: boolean) => void
 const confirmationListeners = new Set<ConfirmationListener>()
 let pendingConfirmation: ((confirmed: boolean) => void) | null = null
 let bypassNavigationHref: string | null = null
+const activeUnsavedGuards = new Set<{ dirty: () => boolean; discard: () => void }>()
 
 function publishConfirmation(open: boolean) {
   confirmationListeners.forEach(listener => listener(open))
@@ -32,6 +33,17 @@ export function resolveUnsavedChangesConfirmation(confirmed: boolean) {
   resolve?.(confirmed)
 }
 
+export async function confirmUnsavedChangesAction() {
+  const guards = [...activeUnsavedGuards]
+  if (!guards.length) return true
+  const confirmed = guards.some(guard => guard.dirty())
+    ? await requestUnsavedChangesConfirmation()
+    : true
+  if (!confirmed) return false
+  guards.forEach(guard => guard.discard())
+  return true
+}
+
 export function stableFormSnapshot(value: unknown) {
   return JSON.stringify(value)
 }
@@ -40,7 +52,19 @@ export function shouldInitializeForm(previousIdentity: string | null, nextIdenti
   return open && previousIdentity !== nextIdentity
 }
 
-export function useUnsavedChangesGuard(active: boolean, dirty: boolean) {
+export function useUnsavedChangesGuard(active: boolean, dirty: boolean, onDiscard?: () => void) {
+  const onDiscardRef = useRef(onDiscard)
+  const dirtyRef = useRef(dirty)
+  onDiscardRef.current = onDiscard
+  dirtyRef.current = dirty
+
+  useEffect(() => {
+    if (!active) return
+    const guard = { dirty: () => dirtyRef.current, discard: () => onDiscardRef.current?.() }
+    activeUnsavedGuards.add(guard)
+    return () => { activeUnsavedGuards.delete(guard) }
+  }, [active])
+
   useEffect(() => {
     if (!active || !dirty) return
     const beforeUnload = (event: BeforeUnloadEvent) => {

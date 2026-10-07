@@ -969,6 +969,14 @@ export async function fetchVouchers(company_id: string): Promise<Voucher[]> {
   return (await fetchCompanyAccountingSnapshot(company_id)).vouchers
 }
 
+/** Lightweight company-scoped revision used by focus/reconnect safety checks. */
+export async function fetchCompanyDataVersion(company_id: string): Promise<string> {
+  const { data, error } = await supabase.rpc('get_company_data_version', { p_company_id: company_id })
+  if (error) throw error
+  if (data === null || data === undefined) throw new Error('Company data version is unavailable.')
+  return String(data)
+}
+
 function snapshotChildCount(vouchers: Voucher[], field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') {
   return vouchers.reduce((total, voucher) => total + (voucher[field]?.length || 0), 0)
 }

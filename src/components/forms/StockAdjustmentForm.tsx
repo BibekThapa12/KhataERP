@@ -86,7 +86,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const formSnapshot = stableFormSnapshot({ dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration })
   snapshotRef.current = formSnapshot
   const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
-  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty, onClose)
 
   const changeUnitMode = (nextMode: UnitMode) => {
     const previousFactor = unitFactor(selectedItem, unitMode)

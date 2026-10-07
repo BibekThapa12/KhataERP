@@ -21,6 +21,15 @@ const DialogOverlay = React.forwardRef<
 ))
 DialogOverlay.displayName = DialogPrimitive.Overlay.displayName
 
+const dialogFocusableSelector = [
+  'button:not(:disabled):not([tabindex="-1"])',
+  '[href]:not([tabindex="-1"])',
+  'input:not(:disabled):not([tabindex="-1"])',
+  'select:not(:disabled):not([tabindex="-1"])',
+  'textarea:not(:disabled):not([tabindex="-1"])',
+  '[tabindex]:not([tabindex="-1"])',
+].join(',')
+
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
   React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
@@ -28,32 +37,19 @@ const DialogContent = React.forwardRef<
   const contentRef = React.useRef<HTMLDivElement | null>(null)
   const nestedReturnFocusRef = React.useRef<HTMLElement | null>(null)
   const isVoucherDialog = typeof className === 'string' && className.includes('voucher-dialog')
-  const focusableSelector = [
-    'button:not(:disabled):not([tabindex="-1"])',
-    '[href]:not([tabindex="-1"])',
-    'input:not(:disabled):not([tabindex="-1"])',
-    'select:not(:disabled):not([tabindex="-1"])',
-    'textarea:not(:disabled):not([tabindex="-1"])',
-    '[tabindex]:not([tabindex="-1"])',
-  ].join(',')
-
+  const isInvoiceWorkspace = typeof className === 'string' && className.includes('invoice-workspace-dialog')
   const setContentRef = (node: HTMLDivElement | null) => {
     contentRef.current = node
     if (typeof ref === 'function') ref(node)
     else if (ref) ref.current = node
   }
 
-  const firstFocusable = () => {
-    const content = contentRef.current
-    if (!content) return null
-    return Array.from(content.querySelectorAll<HTMLElement>(focusableSelector))
-      .find(element => !element.closest('[data-radix-popper-content-wrapper]') && element.offsetParent !== null) || null
-  }
-
   React.useEffect(() => {
     if (!isVoucherDialog) return
     const content = contentRef.current
     if (!content) return
+    const firstFocusable = () => Array.from(content.querySelectorAll<HTMLElement>(dialogFocusableSelector))
+      .find(element => !element.closest('[data-radix-popper-content-wrapper]') && element.offsetParent !== null) || null
     window.requestAnimationFrame(() => content.focus({ preventScroll: true }))
     const keepTabInsideVoucher = (event: KeyboardEvent) => {
       if (event.key !== 'Tab') return
@@ -91,11 +87,15 @@ const DialogContent = React.forwardRef<
 
   return (
   <DialogPortal>
-    <DialogOverlay />
+    <DialogOverlay className={isInvoiceWorkspace ? 'invoice-workspace-overlay' : undefined} />
     <DialogPrimitive.Content
       ref={setContentRef}
       tabIndex={-1}
-      className={cn('compact-workspace-surface fixed left-[50%] top-[50%] z-50 grid min-w-0 max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-lg translate-x-[-50%] translate-y-[-50%] gap-3 overflow-x-hidden overflow-y-auto border bg-background p-3 shadow-lg duration-200 data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=open]:slide-in-from-left-1/2 sm:w-[calc(100vw-2rem)] sm:p-3 sm:rounded-md', className)}
+      className={cn(
+        'compact-workspace-surface fixed z-50 grid min-w-0 max-h-[calc(100dvh-1rem)] w-[calc(100vw-1rem)] max-w-lg gap-3 overflow-x-hidden overflow-y-auto border bg-background p-3 shadow-lg duration-200 sm:w-[calc(100vw-2rem)] sm:p-3 sm:rounded-md',
+        !isInvoiceWorkspace && 'left-[50%] top-[50%] translate-x-[-50%] translate-y-[-50%] data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95 data-[state=closed]:slide-out-to-left-1/2 data-[state=open]:slide-in-from-left-1/2',
+        className,
+      )}
       onInteractOutside={(event) => {
         onInteractOutside?.(event)
         if (!event.defaultPrevented || shouldIgnoreSelectOutsideEvent(event)) event.preventDefault()

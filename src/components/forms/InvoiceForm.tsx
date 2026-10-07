@@ -13,7 +13,7 @@ import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { Textarea } from '@/components/ui/misc'
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogFooter } from '@/components/ui/dialog'
 import { ItemForm } from './OtherForms'
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { publicErrorMessage } from '@/lib/security'
@@ -140,7 +140,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const formSnapshot = stableFormSnapshot({ dateBs, isCash, partyAccountId, creditDays, supplierInvoiceNo, lines, vatRate, discount, discountMode, narration })
   snapshotRef.current = formSnapshot
   const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
-  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty, onClose)
 
   useEffect(() => {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
@@ -484,13 +484,23 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
 
   return (
     <>
-      <Dialog open={open} onOpenChange={o => { if (!o) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
-        <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" onFocusCapture={event => { const target = event.target instanceof Element ? event.target : null; const line = target?.closest<HTMLElement>('[data-create-line]'); createContextRef.current = line ? { kind: 'item', index: Number(line.dataset.createLine) } : target?.closest('[data-create-context="party"]') ? { kind: 'party' } : null }} className="voucher-dialog max-w-4xl md:left-[calc(50%+7rem)] md:w-[calc(100vw-15rem)]">
-          <DialogHeader>
-            <DialogTitle>{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
+      <Dialog modal={false} open={open} onOpenChange={o => { if (!o) void confirmDiscard().then(confirmed => { if (confirmed) onClose() }) }}>
+        <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" onFocusCapture={event => { const target = event.target instanceof Element ? event.target : null; const line = target?.closest<HTMLElement>('[data-create-line]'); createContextRef.current = line ? { kind: 'item', index: Number(line.dataset.createLine) } : target?.closest('[data-create-context="party"]') ? { kind: 'party' } : null }} className="voucher-dialog invoice-workspace-dialog">
+          <DialogHeader className="invoice-workspace-header pr-12 text-left">
+            <DialogTitle className="text-xl leading-6">{isEditing ? 'Edit' : 'New'} {type === 'Sales' ? 'Sales Invoice' : 'Purchase Bill'}</DialogTitle>
+            <DialogDescription className="mt-1 text-xs">
+              {isEditing
+                ? `Update this ${isSales ? 'sales invoice' : 'purchase bill'} without changing its voucher identity.`
+                : `Record ${isSales ? 'a customer sale' : 'a supplier purchase'} with item, tax, and payment details.`}
+            </DialogDescription>
           </DialogHeader>
 
-          <div className="space-y-3 py-1">
+          <div className="invoice-workspace-body invoice-workspace-layout">
+            <section className="invoice-section invoice-document-section space-y-3" aria-labelledby="invoice-document-details">
+              <div>
+                <h3 id="invoice-document-details" className="invoice-section-title">Document details</h3>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">Voucher date, party, and payment terms</p>
+              </div>
             {/* Date + payment mode */}
             <div className="flex flex-wrap items-start gap-3">
               <div className="w-full space-y-1.5 sm:w-40">
@@ -530,15 +540,22 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                 <Input value={dueDateBs} readOnly tabIndex={-1} className="w-44 !bg-[#f6f6f6]" />
               </div>
             </div>
+            </section>
 
             {/* Line items */}
-            <div>
+            <section className="invoice-section invoice-items-section" aria-labelledby="invoice-line-items">
+              <div className="mb-3">
+                <div>
+                  <h3 id="invoice-line-items" className="invoice-section-title">Invoice items</h3>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Quantities, units, rates, and line amounts</p>
+                </div>
+              </div>
               <div className="mb-1.5 hidden grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] gap-1.5 lg:grid">
                 {['Item', 'Av. Stock', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
                   <p key={h} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{h}</p>
                 ))}
               </div>
-              <div className="space-y-2">
+              <div className="invoice-line-list space-y-1">
                 {lines.map((line, idx) => {
                   const rate = rateInputNumber(line.rate)
                   const calculatedAmount = round2Local(line.qty * rate)
@@ -579,13 +596,16 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   )
                 })}
               </div>
-              <Button type="button" variant="outline" size="sm" className="mt-2 bg-white hover:bg-white" onClick={addLine}>
-                <Plus className="h-3.5 w-3.5 mr-1" /> Add line
+              <Button type="button" variant="outline" size="sm" className="mt-3 bg-white hover:bg-white" onClick={addLine}>
+                <Plus className="mr-1 h-3.5 w-3.5" /> Add line
               </Button>
-            </div>
+            </section>
 
-            <div className="grid gap-3 lg:grid-cols-[21.75rem_minmax(18rem,1fr)]">
-              <div className="min-w-0 space-y-3">
+            <section className="invoice-section invoice-adjustments-section min-w-0 space-y-3" aria-labelledby="invoice-adjustments">
+                <div>
+                  <h3 id="invoice-adjustments" className="invoice-section-title">Adjustments &amp; notes</h3>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Discount, VAT treatment, and narration</p>
+                </div>
                 <div className="flex flex-wrap gap-3">
                   <div className="w-full space-y-1.5 sm:w-40">
                     <Label>Discount</Label>
@@ -608,33 +628,38 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   <Label>Narration (optional)</Label>
                   <Textarea value={narration} onChange={e => setNarration(e.target.value)} placeholder="Note about this transaction…" rows={2} />
                 </div>
-              </div>
+            </section>
 
-              <div className="h-full space-y-2 rounded-lg bg-[#f6f6f6] p-3 text-[14px]">
-                <div className="flex justify-between"><span className="text-muted-foreground">Total Quantity</span><span className="num font-medium">{totalQuantityLabel}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num font-medium">{fmtMoney(subtotal)}</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Discount{discountMode === 'percent' && discount > 0 ? ` (${discount}%)` : ''}</span><span className="num font-medium">- {fmtMoney(discountAmount)}</span></div>
-                {vatEnabled && <div className="flex justify-between"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num font-medium">{fmtMoney(vatAmount)}</span></div>}
-                <div className="mt-2 flex justify-between border-t border-border pt-2 font-serif text-[16px] font-bold">
-                  <span>Total</span><span className="num">{fmtMoney(total)}</span>
+            <section className="invoice-section invoice-summary-section space-y-3" aria-labelledby="invoice-summary">
+                <div>
+                  <h3 id="invoice-summary" className="invoice-section-title">Invoice summary</h3>
+                  <p className="mt-0.5 text-[11px] text-muted-foreground">Calculated from the current invoice lines</p>
                 </div>
-              </div>
-            </div>
+                <div className="space-y-2 rounded-md bg-muted/45 p-3 text-[14px]">
+                  <div className="flex justify-between gap-6"><span className="text-muted-foreground">Total Quantity</span><span className="num font-medium">{totalQuantityLabel}</span></div>
+                  <div className="flex justify-between gap-6"><span className="text-muted-foreground">Subtotal</span><span className="num font-medium">{fmtMoney(subtotal)}</span></div>
+                  <div className="flex justify-between gap-6"><span className="text-muted-foreground">Discount{discountMode === 'percent' && discount > 0 ? ` (${discount}%)` : ''}</span><span className="num font-medium">- {fmtMoney(discountAmount)}</span></div>
+                  {vatEnabled && <div className="flex justify-between gap-6"><span className="text-muted-foreground">VAT ({effectiveVatRate}%)</span><span className="num font-medium">{fmtMoney(vatAmount)}</span></div>}
+                  <div className="mt-2 flex justify-between gap-6 border-t border-border pt-2 text-[17px] font-bold">
+                    <span>Total</span><span className="num">{fmtMoney(total)}</span>
+                  </div>
+                </div>
+            </section>
 
             {error && <p className="text-sm text-destructive">{error}</p>}
           </div>
 
-          <DialogFooter>
-            {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving}>Delete Draft</Button>}
-            <Button variant="outline" tabIndex={-1} onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })}>Cancel</Button>
-            {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving}>
+          <DialogFooter className="invoice-workspace-footer grid grid-cols-2 gap-2 sm:flex sm:grid-cols-none sm:space-x-0">
+            {voucher?.status === 'Draft' && <Button variant="destructive" tabIndex={-1} onClick={handleDeleteDraft} disabled={saving} className="order-5 col-span-2 sm:order-none sm:col-span-1">Delete Draft</Button>}
+            <Button variant="outline" tabIndex={-1} onClick={() => void confirmDiscard().then(confirmed => { if (confirmed) onClose() })} className="order-4 sm:order-none">Cancel</Button>
+            {canSaveDraft && <Button variant="outline" onClick={handleSaveDraft} disabled={saving} className="order-3 sm:order-none">
               {saving ? 'Saving...' : voucher?.status === 'Draft' && !freshAfterDraftRef.current ? 'Update Draft' : 'Save as Draft'}
               {!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+D</kbd>}
             </Button>}
-            <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)">
+            <Button onClick={() => handleSave('Completed')} disabled={saving} title="Save voucher (Alt+S)" className="order-1 sm:order-none">
               {saving ? 'Saving...' : completedEdit ? 'Save Changes' : 'Save Voucher'}{!saving && <kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd>}
             </Button>
-            <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)">
+            <Button variant="outline" onClick={() => handleSave('Completed', true)} disabled={saving} title="Save and print (Alt+P)" className="order-2 sm:order-none">
               <Printer className="mr-1 h-4 w-4" />Save &amp; Print<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+P</kbd>
             </Button>
           </DialogFooter>

@@ -80,7 +80,7 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   const formSnapshot = stableFormSnapshot({ dateBs, invoiceNo, sourceId, destinationId, amount, charge, narration })
   snapshotRef.current = formSnapshot
   const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
-  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty, onClose)
 
   const params = () => ({ source_account_id: sourceId, destination_account_id: destinationId, amount, charge_amount: charge, narration: narration.trim(), date_bs: dateBs, invoice_no: manualNumbering ? invoiceNo.trim() : undefined })
   const validate = () => {

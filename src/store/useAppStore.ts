@@ -14,7 +14,7 @@ import {
   fetchCompanyModules, fetchChequePermissions, fetchCompanyPermissions, fetchChequeBanks, fetchCheques,
   fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin, logAppEvent,
   fetchAccounts, fetchAccountCategories, fetchParties, fetchItems, fetchItemCategories, fetchVoucherBundles,
-  fetchPricingRules, savePricingRule, setPricingRuleActive, duplicatePricingRule, removePricingRule,
+  fetchPricingRules, fetchCompanyDataVersion, savePricingRule, setPricingRuleActive, duplicatePricingRule, removePricingRule,
 } from '@/lib/supabase'
 import {
   recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
@@ -41,6 +41,11 @@ import { buildContraLines, resolveBankChargesAccountId, type ContraSaveParams } 
 import { sanitizeSettlementAllocations } from '@/lib/settlementAllocations'
 
 const warnNonSensitive = (context: string) => (error: unknown) => { reportClientError(error, context) }
+
+async function bestEffortCompanyDataVersion(companyId: string, fallback: string | null = null) {
+  try { return await fetchCompanyDataVersion(companyId) }
+  catch (error) { warnNonSensitive('reading company data version')(error); return fallback }
+}
 
 const valuationMethod = (company?: Company | null) => company?.inventory_valuation_method || 'weighted_average'
 const nextVoucherNumberText = (value: string) => value.replace(/(\d+)$/, match => String(Number(match) + 1).padStart(match.length, '0'))
@@ -72,6 +77,7 @@ const blankCompanyData = {
   cheques: [],
   dataReady: false,
   dataStale: false,
+  lastKnownDataVersion: null,
 }
 
 const activeCompanyStorageKey = (userId: string) => `khataerp:active-company:${userId}`
@@ -160,6 +166,7 @@ interface AppState {
   loading: boolean
   dataReady: boolean
   dataStale: boolean
+  lastKnownDataVersion: string | null
   reconcileCompany: (companyId: string, saved?: boolean) => Promise<void>
   refreshVouchers: (voucherIds: string[]) => Promise<void>
   refreshCompanyResources: (resources: CompanyRefreshResource[]) => Promise<void>
@@ -499,6 +506,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: false,
   dataReady: false,
   dataStale: false,
+  lastKnownDataVersion: null,
   error: null,
 
   // ─── Derived ────────────────────────────────────────────────────────────────
@@ -607,9 +615,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         activeCompanyId: company.id,
         companyCreationLicense: response.license,
       })
+      const dataVersion = await bestEffortCompanyDataVersion(company.id)
       const snapshot = await withReadDeadline('complete accounting history', () => fetchCompanySnapshot(company), 120_000)
       if (loadVersion !== companyDataLoadVersion || get().userId !== userId || get().company?.id !== company.id) return
-      set({ company, ...snapshot, loading: false, dataReady: true, dataStale: false, error: null })
+      set({ company, ...snapshot, loading: false, dataReady: true, dataStale: false, lastKnownDataVersion: dataVersion, error: null })
       let companyModules: CompanyModule[] = [], chequePermissions: ChequePermission[] = [], companyPermissions: string[] = [], chequeBanks: ChequeBank[] = [], cheques: Cheque[] = []
       try {
         ;[companyModules, companyPermissions] = await Promise.all([fetchCompanyModules(company.id), fetchCompanyPermissions(company.id)])
@@ -687,6 +696,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !userId || !ids.length) return
     const matches = () => identity === companyIdentityVersion && get().userId === userId && get().company?.id === company.id
     try {
+      const dataVersion = await bestEffortCompanyDataVersion(company.id, state.lastKnownDataVersion)
       const fetched = await fetchVoucherBundles(company.id, ids)
       if (!matches()) return
       const byId = new Map(fetched.map(voucher => [voucher.id, voucher]))
@@ -696,7 +706,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         next = applyPersistedVoucher({ ...projected, ...next }, company, byId.get(id) || null, id)
         projected = { ...projected, ...next }
       }
-      if (matches()) set(next)
+      if (matches()) set({ ...next, lastKnownDataVersion: dataVersion })
     } catch (error) {
       if (!matches()) return
       set({ dataStale: true })
@@ -713,6 +723,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (!company || !userId || !resources.size) return
     const matches = () => identity === companyIdentityVersion && get().userId === userId && get().company?.id === company.id
     try {
+      const dataVersion = await bestEffortCompanyDataVersion(company.id, current.lastKnownDataVersion)
       const [rawAccounts, accountCategories, parties, items, itemCategories, pricingRules, companyResponse, moduleData, chequeData] = await Promise.all([
         resources.has('accounts') ? fetchAccounts(company.id) : undefined,
         resources.has('account_categories') ? fetchAccountCategories(company.id) : undefined,
@@ -734,6 +745,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const nextRawAccounts = rawAccounts || latest.rawAccounts
       const nextItems = items || latest.items
       const changes: Partial<AppState> = {
+        lastKnownDataVersion: dataVersion,
         company: nextCompany,
         rawAccounts: nextRawAccounts,
         accounts: rawAccounts ? recomputeAllBalances(nextRawAccounts, latest.vouchers) : latest.accounts,

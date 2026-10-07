@@ -253,7 +253,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const receiptPaymentSnapshot = stableFormSnapshot({ dateBs, allocations, moneyAccountId, narration })
   snapshotRef.current = receiptPaymentSnapshot
   const receiptPaymentDirty = open && baselineRef.current !== '' && receiptPaymentSnapshot !== baselineRef.current
-  const confirmReceiptPaymentDiscard = useUnsavedChangesGuard(open, receiptPaymentDirty)
+  const confirmReceiptPaymentDiscard = useUnsavedChangesGuard(open, receiptPaymentDirty, onClose)
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type, dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, type, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status])
   useEffect(() => {
     if (dateInvalid && dateValidation.valid) setDateInvalid(false)
@@ -527,7 +527,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const journalSnapshot = stableFormSnapshot({ dateBs, journalInvoiceNo, jLines, narration })
   snapshotRef.current = journalSnapshot
   const journalDirty = open && baselineRef.current !== '' && journalSnapshot !== baselineRef.current
-  const confirmJournalDiscard = useUnsavedChangesGuard(open, journalDirty)
+  const confirmJournalDiscard = useUnsavedChangesGuard(open, journalDirty, onClose)
   const balanced = Math.abs(diff) < 0.005
   const dateValidation = useMemo(() => company ? validateVoucherDateForNumbering({ company, vouchers, type: 'Journal', dateBs, currentVoucherId: voucher?.status === 'Draft' ? undefined : voucher?.id, invoiceNo: company.journal_numbering_mode === 'manual' ? journalInvoiceNo : voucher?.invoice_no, status: 'Completed' }) : { valid: true }, [company, vouchers, dateBs, voucher?.id, voucher?.invoice_no, voucher?.status, journalInvoiceNo])
   useEffect(() => {

@@ -98,7 +98,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   const formSnapshot = stableFormSnapshot({ dateBs, invoiceNo, counterAccountId, lines, narration })
   snapshotRef.current = formSnapshot
   const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
-  const confirmDiscard = useUnsavedChangesGuard(open, dirty)
+  const confirmDiscard = useUnsavedChangesGuard(open, dirty, onClose)
 
   const updateLine = (index: number, updates: Partial<SimpleEntryLineInput>) => setLines(current => current.map((line, lineIndex) => lineIndex === index ? { ...line, ...updates } : line))
   useEffect(() => {

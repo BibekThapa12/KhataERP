@@ -2,8 +2,9 @@ import { Component, Suspense, lazy, useEffect, useRef, useState } from 'react'
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
 import { Analytics } from '@vercel/analytics/react'
 import { SpeedInsights } from '@vercel/speed-insights/react'
-import { logAppError, supabase } from '@/lib/supabase'
+import { fetchCompanyDataVersion, logAppError, supabase } from '@/lib/supabase'
 import { useAppStore, type CompanyRefreshResource } from '@/store/useAppStore'
+import { reconcileCompanyOnResume } from '@/lib/resumeReconciliation'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
@@ -190,10 +191,30 @@ export default function App() {
       if (resumeTimer.current) window.clearTimeout(resumeTimer.current)
       resumeTimer.current = window.setTimeout(() => {
         resumeTimer.current = null
-        if (Date.now() - lastResumeRefresh.current < 15_000) return
-        lastResumeRefresh.current = Date.now()
-        const state = useAppStore.getState()
-        if (state.userId === userId && state.company?.id === company.id) void state.reconcileCompany(company.id)
+        void reconcileCompanyOnResume({
+          expectedUserId: userId,
+          expectedCompanyId: company.id,
+          lastCheckAt: lastResumeRefresh.current,
+          getState: () => {
+            const state = useAppStore.getState()
+            return {
+              userId: state.userId,
+              companyId: state.company?.id || null,
+              lastKnownDataVersion: state.lastKnownDataVersion,
+              dataReady: state.dataReady,
+              dataStale: state.dataStale,
+              reconcileCompany: state.reconcileCompany,
+            }
+          },
+          markChecked: checkedAt => { lastResumeRefresh.current = checkedAt },
+          fetchDataVersion: fetchCompanyDataVersion,
+          publishDataVersion: dataVersion => {
+            const state = useAppStore.getState()
+            if (state.userId === userId && state.company?.id === company.id) {
+              useAppStore.setState({ lastKnownDataVersion: dataVersion })
+            }
+          },
+        }).catch(error => logAppError(company.id, error, { operation: 'checking company data freshness' }))
       }, 250)
     }
     window.addEventListener('online', resume)
