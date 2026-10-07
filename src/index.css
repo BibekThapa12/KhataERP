@@ -84,6 +84,7 @@
   .credit-amt { @apply text-forest font-semibold; }
   .report-th { @apply px-2 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground; }
   .report-td { @apply px-2 py-1.5 align-top text-xs; }
+  .daybook-summary-grid > * + * { border-top-width: 1px; }
   .overflow-x-auto { -webkit-overflow-scrolling: touch; }
   .ageing-print-detail { display: none; }
 
@@ -348,6 +349,17 @@
     line-height: 1rem;
     color: hsl(var(--foreground));
   }
+}
+
+@media (min-width: 420px) and (max-width: 1023px) {
+  .daybook-summary-grid > * { border-top-width: 0; }
+  .daybook-summary-grid > :nth-child(even) { border-left-width: 1px; }
+  .daybook-summary-grid > :nth-child(n + 3) { border-top-width: 1px; }
+}
+
+@media (min-width: 1024px) {
+  .daybook-summary-grid > * { border-top-width: 0; }
+  .daybook-summary-grid > * + * { border-left-width: 1px; }
 }
 
 @media (min-width: 1280px) and (min-height: 650px) {
