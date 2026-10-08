@@ -3,28 +3,52 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const fake = vi.hoisted(() => {
   vi.stubEnv('VITE_SUPABASE_URL', 'https://test.invalid')
   vi.stubEnv('VITE_SUPABASE_ANON_KEY', 'test-public-key')
-  return { tables: {} as Record<string, Array<Record<string, unknown>>>, failTable: '', calls: [] as string[], snapshotFormat: 1, timeoutCount: 0 }
+  return { tables: {} as Record<string, Array<Record<string, unknown>>>, failTable: '', calls: [] as string[], snapshotFormat: 1, timeoutCount: 0, dataVersion: '1' }
 })
 vi.mock('@supabase/supabase-js', () => ({
   createClient: () => ({
-    rpc: (name: string, args: { p_company_id: string }) => ({ abortSignal: async (_signal: AbortSignal) => {
+    rpc: (name: string, args: { p_company_id: string; p_after_id?: string | null; p_page_size?: number }) => name === 'get_company_data_version'
+      ? (fake.calls.push(name), Promise.resolve({ data: fake.dataVersion, error: null }))
+      : ({ abortSignal: async (_signal: AbortSignal) => {
+      if (name === 'get_company_accounting_snapshot_page_v1' && fake.snapshotFormat !== 4) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_page_v1 is not in the schema cache' } }
       if (name === 'get_company_accounting_snapshot_v3' && fake.snapshotFormat !== 3) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v3 is not in the schema cache' } }
       if (name === 'get_company_accounting_snapshot_v2' && fake.snapshotFormat < 2) return { data: null, error: { code: 'PGRST202', message: 'get_company_accounting_snapshot_v2 is not in the schema cache' } }
-      if (!['get_company_accounting_snapshot', 'get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot_v3'].includes(name)) return { data: null, error: new Error('unknown rpc') }
+      if (!['get_company_accounting_snapshot', 'get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot_v3', 'get_company_accounting_snapshot_page_v1'].includes(name)) return { data: null, error: new Error('unknown rpc') }
       if (fake.failTable) return { data: null, error: new Error('schema unavailable') }
       fake.calls.push(name)
       if (fake.timeoutCount > 0) {
         fake.timeoutCount -= 1
         return { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }
       }
-      const vouchers = (fake.tables.vouchers || []).filter(row => row.company_id === args.p_company_id).map(row => ({
+      const allVouchers = (fake.tables.vouchers || []).filter(row => row.company_id === args.p_company_id).map(row => ({
         ...row,
         lines: (fake.tables.voucher_lines || []).filter(line => line.voucher_id === row.id),
         stock_lines: (fake.tables.stock_lines || []).filter(line => line.voucher_id === row.id),
         invoice_items: (fake.tables.invoice_items || []).filter(line => line.voucher_id === row.id),
         settlements: (fake.tables.voucher_settlements || []).filter(line => line.company_id === args.p_company_id && line.settlement_voucher_id === row.id),
-      }))
+      })).sort((left, right) => String(left.id).localeCompare(String(right.id)))
+      const pageStart = name === 'get_company_accounting_snapshot_page_v1' && args.p_after_id
+        ? allVouchers.findIndex(voucher => String(voucher.id).localeCompare(String(args.p_after_id)) > 0)
+        : 0
+      const safePageStart = pageStart < 0 ? allVouchers.length : pageStart
+      const pageSize = args.p_page_size || 200
+      const vouchers = name === 'get_company_accounting_snapshot_page_v1'
+        ? allVouchers.slice(safePageStart, safePageStart + pageSize)
+        : allVouchers
       const count = (field: 'lines' | 'stock_lines' | 'invoice_items' | 'settlements') => vouchers.reduce((sum, voucher) => sum + voucher[field].length, 0)
+      if (name === 'get_company_accounting_snapshot_page_v1') return { data: {
+        format_version: 4,
+        company_id: args.p_company_id,
+        generated_at: '2026-10-08T00:00:00Z',
+        data_version: fake.dataVersion,
+        page: { has_more: safePageStart + vouchers.length < allVouchers.length, next_after_id: vouchers.at(-1)?.id || null },
+        counts: { vouchers: vouchers.length, voucher_lines: count('lines'), stock_lines: count('stock_lines'), invoice_items: count('invoice_items'), settlements: count('settlements') },
+        vouchers: vouchers.map(({ lines: _lines, stock_lines: _stockLines, invoice_items: _invoiceItems, settlements: _settlements, ...voucher }) => voucher),
+        voucher_lines: vouchers.flatMap(voucher => voucher.lines),
+        stock_lines: vouchers.flatMap(voucher => voucher.stock_lines),
+        invoice_items: vouchers.flatMap(voucher => voucher.invoice_items),
+        settlements: vouchers.flatMap(voucher => voucher.settlements),
+      }, error: null }
       if (name === 'get_company_accounting_snapshot_v2' || name === 'get_company_accounting_snapshot_v3') return { data: {
         format_version: name === 'get_company_accounting_snapshot_v3' ? 3 : 2,
         company_id: args.p_company_id,
@@ -65,7 +89,7 @@ vi.mock('@supabase/supabase-js', () => ({
 }))
 import { fetchAccounts, fetchItems, fetchParties, fetchVouchers } from './supabase'
 
-beforeEach(() => { fake.tables = {}; fake.failTable = ''; fake.calls = []; fake.snapshotFormat = 1; fake.timeoutCount = 0 })
+beforeEach(() => { fake.tables = {}; fake.failTable = ''; fake.calls = []; fake.snapshotFormat = 1; fake.timeoutCount = 0; fake.dataVersion = '1' })
 
 describe('company accounting reads beyond API caps', () => {
   it('loads all headers, individual children, settlements, and both voucher types', async () => {
@@ -108,6 +132,14 @@ describe('company accounting reads beyond API caps', () => {
     fake.tables.vouchers = [{ id: 'v1', company_id: 'A', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, date_ad: '2026-04-14', seq: 1 }]
     await fetchVouchers('A')
     expect(fake.calls).toEqual(['get_company_accounting_snapshot_v3'])
+  })
+  it('loads large accounting histories in bounded pages and validates the final revision', async () => {
+    fake.snapshotFormat = 4
+    fake.tables.vouchers = Array.from({ length: 1203 }, (_, i) => ({ id: `v${String(i).padStart(4, '0')}`, company_id: 'A', type: 'Sales', date_bs: '2083-01-01', date_bs_key: 20830101, date_ad: '2026-04-14', seq: i + 1 }))
+    const vouchers = await fetchVouchers('A')
+    expect(vouchers).toHaveLength(1203)
+    expect(fake.calls.filter(name => name === 'get_company_accounting_snapshot_page_v1')).toHaveLength(7)
+    expect(fake.calls.at(-1)).toBe('get_company_data_version')
   })
   it('fully loads masters even when all names are identical', async () => {
     for (const table of ['accounts', 'items', 'parties']) fake.tables[table] = Array.from({ length: 1205 }, (_, i) => ({ id: `${table}${i}`, company_id: 'A', name: 'Same' }))

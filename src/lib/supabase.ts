@@ -1002,6 +1002,13 @@ type NormalizedAccountingSnapshot = CompanyAccountingSnapshot & {
   access_denied?: boolean
 }
 
+type PagedAccountingSnapshot = NormalizedAccountingSnapshot & {
+  data_version?: string | number
+  page?: { has_more?: boolean; next_after_id?: string | null }
+}
+
+const ACCOUNTING_SNAPSHOT_PAGE_SIZE = 200
+
 function isStatementTimeout(error: unknown) {
   if (!error || typeof error !== 'object') return false
   const value = error as { code?: unknown; message?: unknown }
@@ -1014,7 +1021,86 @@ function isMissingSnapshotRpc(error: unknown, rpcName: string) {
   return value.code === '42883' || value.code === 'PGRST202' || new RegExp(`${rpcName}.*(?:does not exist|schema cache)`, 'i').test(String(value.message || ''))
 }
 
+async function requestPagedCompanyAccountingSnapshot(company_id: string): Promise<NormalizedAccountingSnapshot | null> {
+  for (let snapshotAttempt = 0; snapshotAttempt < 2; snapshotAttempt += 1) {
+    const combined: PagedAccountingSnapshot = {
+      format_version: 4,
+      company_id,
+      generated_at: '',
+      counts: { vouchers: 0, voucher_lines: 0, stock_lines: 0, invoice_items: 0, settlements: 0 },
+      vouchers: [],
+      voucher_lines: [],
+      stock_lines: [],
+      invoice_items: [],
+      settlements: [],
+    }
+    let afterId: string | null = null
+    let expectedVersion: string | null = null
+    let pageNumber = 0
+    let changedDuringRead = false
+
+    while (true) {
+      let pageData: unknown = null
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const { data, error } = await withReadDeadline('Accounting snapshot page', signal =>
+          supabase.rpc('get_company_accounting_snapshot_page_v1', {
+            p_company_id: company_id,
+            p_after_id: afterId,
+            p_page_size: ACCOUNTING_SNAPSHOT_PAGE_SIZE,
+          }).abortSignal(signal),
+          45_000,
+        )
+        if (!error) { pageData = data; break }
+        if (isMissingSnapshotRpc(error, 'get_company_accounting_snapshot_page_v1') && pageNumber === 0) return null
+        if (attempt === 0 && isStatementTimeout(error)) {
+          await new Promise(resolve => setTimeout(resolve, 500))
+          continue
+        }
+        throw error
+      }
+
+      const page = pageData as PagedAccountingSnapshot | null
+      if (!page || page.access_denied) throw new Error('Company accounting data is unavailable or access was denied.')
+      if (page.company_id !== company_id || page.format_version !== 4 || !page.counts || !page.page || !Array.isArray(page.vouchers)) {
+        throw new Error('Company accounting snapshot page was malformed.')
+      }
+      const pageVersion = String(page.data_version ?? '')
+      if (!pageVersion) throw new Error('Company accounting snapshot revision is unavailable.')
+      if (expectedVersion === null) expectedVersion = pageVersion
+      else if (pageVersion !== expectedVersion) { changedDuringRead = true; break }
+
+      if (!combined.generated_at) combined.generated_at = page.generated_at
+      combined.vouchers.push(...page.vouchers)
+      combined.voucher_lines!.push(...(page.voucher_lines || []))
+      combined.stock_lines!.push(...(page.stock_lines || []))
+      combined.invoice_items!.push(...(page.invoice_items || []))
+      combined.settlements!.push(...(page.settlements || []))
+      for (const key of Object.keys(combined.counts) as Array<keyof typeof combined.counts>) {
+        combined.counts[key] += Number(page.counts[key] || 0)
+      }
+
+      pageNumber += 1
+      if (!page.page.has_more) break
+      const nextAfterId = page.page.next_after_id || null
+      if (!nextAfterId || nextAfterId === afterId || pageNumber > 100_000) {
+        throw new Error('Company accounting snapshot pagination did not advance.')
+      }
+      afterId = nextAfterId
+    }
+
+    if (!changedDuringRead) {
+      const finalVersion = await fetchCompanyDataVersion(company_id)
+      if (finalVersion === expectedVersion) return combined
+    }
+    if (snapshotAttempt === 0) continue
+    throw new Error('Company data changed while it was loading. Please retry.')
+  }
+  throw new Error('Company accounting snapshot is unavailable.')
+}
+
 async function requestCompanyAccountingSnapshot(company_id: string) {
+  const paged = await requestPagedCompanyAccountingSnapshot(company_id)
+  if (paged) return paged
   for (const rpcName of ['get_company_accounting_snapshot_v3', 'get_company_accounting_snapshot_v2', 'get_company_accounting_snapshot'] as const) {
     for (let attempt = 0; attempt < 2; attempt += 1) {
       const { data, error } = await withReadDeadline('Accounting snapshot', signal =>
