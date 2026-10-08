@@ -475,11 +475,12 @@ export function AppShell() {
   const transactionMenuRef = useRef<HTMLDivElement | null>(null)
   const transactionTriggerRef = useRef<HTMLButtonElement | null>(null)
   const accountMenuRef = useRef<HTMLDivElement | null>(null)
+  const workspaceRef = useRef<HTMLElement | null>(null)
   const sidebarTransitionTimerRef = useRef<number | null>(null)
   const sidebarTransitionActiveRef = useRef(false)
   const navigationCollapsed = sidebarCollapsed && !mobileOpen
 
-  const navigateFromShell = useCallback(async (to: string) => {
+  const navigateFromShell = useCallback(async (to: string, focusDestination = false) => {
     const destination = new URL(to, window.location.href)
     const currentLocation = `${location.pathname}${location.search}${location.hash}`
     const nextLocation = `${destination.pathname}${destination.search}${destination.hash}`
@@ -488,6 +489,9 @@ export function AppShell() {
     if (!await confirmUnsavedChangesAction()) return
     setShortcutVoucher(null)
     navigate(to)
+    if (focusDestination) {
+      window.requestAnimationFrame(() => workspaceRef.current?.focus({ preventScroll: true }))
+    }
   }, [location.hash, location.pathname, location.search, navigate])
 
   const openShortcutTransaction = useCallback(async (type: SidebarTransactionType) => {
@@ -676,11 +680,11 @@ export function AppShell() {
       }
       setMobileOpen(false)
       if (voucherShortcut && !readOnly) setShortcutVoucher(voucherShortcut.type)
-      else if (navigationShortcut) { setShortcutVoucher(null); navigate(navigationShortcut.to) }
+      else if (navigationShortcut) { void navigateFromShell(navigationShortcut.to, true) }
     }
     window.addEventListener('keydown', openVoucherFromKey)
     return () => window.removeEventListener('keydown', openVoucherFromKey)
-  }, [developerWorkspace, navigate, openNewTransactionMenu, readOnly])
+  }, [developerWorkspace, navigateFromShell, openNewTransactionMenu, readOnly])
 
   const toggleSection = (label: string) => setOpenSections(current => {
     const next = new Set(current)
@@ -893,7 +897,7 @@ export function AppShell() {
       </aside>
 
       {/* Main */}
-      <main className="compact-workspace flex min-w-0 flex-1 flex-col overflow-hidden">
+      <main ref={workspaceRef} tabIndex={-1} className="compact-workspace flex min-w-0 flex-1 flex-col overflow-hidden focus:outline-none">
         {!developerWorkspace && <div className="app-shortcuts flex-shrink-0 border-b border-border bg-card px-3 py-2 pl-16 md:px-5" aria-label="Global shortcuts">
           <div className="flex items-center gap-1.5 overflow-x-auto">
             <span className="mr-1 hidden whitespace-nowrap text-[10px] font-semibold uppercase text-muted-foreground lg:inline">Global shortcuts</span>
