@@ -13,6 +13,7 @@ import type { InvoiceItem, Item, StockLine, Voucher, VoucherLine } from '@/types
 import { legacySettlementAccountId } from '@/lib/banks'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { printHtmlDocument, registerVoucherPrinter } from '@/lib/voucherPrinterRegistry'
+import { invoiceAmountInWords } from '@/lib/amountInWords'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
@@ -401,6 +402,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     const isStock = !isInvoice && stockLines.length > 0
     const vatEnabled = company?.vat_enabled ?? true
     const displayedTotal = voucherDisplayTotal(voucher, vatEnabled)
+    const amountInWords = invoiceAmountInWords(voucher.type, displayedTotal)
     const rows = isInvoice ? invoiceRows : isStock ? stockRows : ledgerRows
     const head = isInvoice
       ? '<tr><th class="col-no">#</th><th class="col-item">Item</th><th class="right col-qty">Qty</th><th class="right col-alt">Alt. Qty</th><th class="right col-rate">Rate</th><th class="right col-amount">Amount</th></tr>'
@@ -423,10 +425,12 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <div class="grand"><span>Total</span><strong>${esc(fmtMoney(displayedTotal))}</strong></div>
       </div>
     `
-    const printFormat = company?.print_format || 'A5'
+    const printFormat = (company?.print_format || 'A5').toUpperCase() as 'A4' | 'A5'
     const printableWidthMm = printFormat === 'A4' ? 188 : 126
     const pageMarginMm = printFormat === 'A4' ? 9 : 7
-    const densePrint = Math.max(invoiceItems.length, stockLines.length, ledgerLines.length) > 6
+    const printLineCount = Math.max(invoiceItems.length, stockLines.length, ledgerLines.length)
+    const denseA5Print = printLineCount > 6
+    const denseA4Print = printLineCount > 14
     const showCompanyIdentity = voucher.type !== 'Sales' || company?.show_company_details_on_sales_invoice !== false
     const originalVoucher = voucher.original_voucher_id ? allVouchers.find(entry => entry.id === voucher.original_voucher_id) : null
     const documentTitle = voucher.type === 'Sales Return' && vatEnabled
@@ -440,7 +444,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
         <head>
           <title>${esc(documentTitle)} ${esc(savedVoucherNumber(voucher))}</title>
           <style>
-            @page { size: ${esc(printFormat)}; margin: ${pageMarginMm}mm; }
+            @page { size: ${amountInWords ? 'auto' : esc(printFormat)}; margin: ${amountInWords ? 7 : pageMarginMm}mm; }
             * { box-sizing: border-box; }
             body { margin: 0; color: #111827; font-family: Arial, sans-serif; font-size: 10px; }
             body::after { content: "KhataERP"; position: fixed; right: 0; bottom: 1mm; left: 0; text-align: center; color: #6b7280; font-size: 6.5px; font-weight: 600; letter-spacing: .35px; }
@@ -474,29 +478,89 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             .col-qty, .col-alt { width: 15mm; }
             .col-rate, .col-amount { width: 23mm; }
             .totals { margin-left: auto; margin-top: 5px; width: 55mm; }
-            .totals, .note { break-inside: avoid; page-break-inside: avoid; }
+            .invoice-summary, .totals, .amount-words, .note { break-inside: avoid; page-break-inside: avoid; }
+            .invoice-summary { display: grid; grid-template-columns: minmax(0, 1fr) clamp(50mm, 42%, 55mm); gap: 4mm; align-items: stretch; margin-top: 5px; }
+            .invoice-summary .totals { width: auto; margin: 0; align-self: start; }
             .totals div { display: flex; justify-content: space-between; padding: 2px 0; }
             .totals .grand { border-top: 1px solid #111827; font-size: 12px; padding-top: 4px; }
+            .amount-words { min-width: 0; border: 1px solid #cbd5e1; padding: 2.5mm 3mm 2.8mm; color: #1f2937; }
+            .amount-words-label { display: block; color: #475569; font-size: 8.2px; font-weight: 700; line-height: 1; letter-spacing: .5px; text-transform: uppercase; }
+            .amount-words-value { display: block; margin-top: 2.2mm; color: #374151; font-family: Arial, Helvetica, sans-serif; font-size: 10.5px; font-style: italic; font-weight: 400; line-height: 1.38; overflow-wrap: break-word; }
             .note { margin-top: 7px; border-top: 1px solid #d1d5db; padding-top: 4px; }
             .payment-qr { margin-top: 6px; display: flex; align-items: center; gap: 6px; break-inside: avoid; page-break-inside: avoid; }
             .payment-qr img { width: 32mm; height: 32mm; object-fit: contain; border: 1px solid #d1d5db; background: #fff; padding: 1.2mm; }
-            .sheet.dense { font-size: 9px; }
-            .sheet.dense .invoice-head { padding: 2.5mm 1mm; }
-            .sheet.dense h1, .sheet.dense h2 { font-size: 18px; }
-            .sheet.dense .party { margin-bottom: 1.5mm; gap: 2mm; }
-            .sheet.dense .box { min-height: 14mm; padding: 2mm; }
-            .sheet.dense .box-title { margin-bottom: 1mm; }
-            .sheet.dense th, .sheet.dense td { padding: 2px 3px; }
-            .sheet.dense .totals { margin-top: 3px; }
-            .sheet.dense .totals div { padding: 1px 0; }
-            .sheet.dense .note { margin-top: 4px; padding-top: 3px; }
-            .sheet.dense .payment-qr { margin-top: 4px; }
-            .sheet.dense .payment-qr img { width: 30mm; height: 30mm; }
-            @media print { .sheet { width: 100%; max-width: none; } }
+            @media print {
+              .sheet { width: 100%; max-width: none; margin: 0; }
+            }
+            @media print and (max-width: 179mm) {
+              .sheet.dense-a5 { font-size: 9px; }
+              .sheet.dense-a5 .invoice-head { padding: 2.5mm 1mm; }
+              .sheet.dense-a5 h1, .sheet.dense-a5 h2 { font-size: 18px; }
+              .sheet.dense-a5 .party { margin-bottom: 1.5mm; gap: 2mm; }
+              .sheet.dense-a5 .box { min-height: 14mm; padding: 2mm; }
+              .sheet.dense-a5 .box-title { margin-bottom: 1mm; }
+              .sheet.dense-a5 th, .sheet.dense-a5 td { padding: 2px 3px; }
+              .sheet.dense-a5 .totals { margin-top: 3px; }
+              .sheet.dense-a5 .totals div { padding: 1px 0; }
+              .sheet.dense-a5 .invoice-summary { gap: 3mm; margin-top: 3px; }
+              .sheet.dense-a5 .invoice-summary .totals { margin-top: 0; }
+              .sheet.dense-a5 .amount-words { padding: 2mm 2.5mm 2.2mm; }
+              .sheet.dense-a5 .amount-words-label { font-size: 7.5px; }
+              .sheet.dense-a5 .amount-words-value { margin-top: 1.5mm; font-size: 9.5px; line-height: 1.32; }
+              .sheet.dense-a5 .note { margin-top: 4px; padding-top: 3px; }
+              .sheet.dense-a5 .payment-qr { margin-top: 4px; }
+              .sheet.dense-a5 .payment-qr img { width: 30mm; height: 30mm; }
+            }
+            @media print and (min-width: 180mm) {
+              .invoice-print { padding: 0 2mm; font-size: 11px; }
+              .invoice-print .invoice-head { grid-template-columns: minmax(0,1fr) 62mm; gap: 8mm; padding: 5mm 2mm; }
+              .invoice-print .invoice-head.no-company { padding: 3mm 2mm; }
+              .invoice-print .invoice-head.no-company .meta { grid-template-columns: minmax(42mm,.75fr) repeat(2,minmax(48mm,1fr)); gap: 3mm 10mm; }
+              .invoice-print h1, .invoice-print h2 { font-size: 25px; }
+              .invoice-print .company-lines { font-size: 11px; line-height: 1.35; }
+              .invoice-print .meta { width: 58mm; }
+              .invoice-print .meta-row { grid-template-columns: 25mm 2mm 1fr; margin: 3px 0; }
+              .invoice-print .party { gap: 5mm; margin-bottom: 4mm; }
+              .invoice-print .box { min-height: 21mm; padding: 3.5mm; }
+              .invoice-print .box-title { margin-bottom: 2.5mm; }
+              .invoice-print table { margin-top: 5px; }
+              .invoice-print th, .invoice-print td { padding: 5px 6px; }
+              .invoice-print th { font-size: 9.5px; }
+              .invoice-print .col-no { width: 9mm; }
+              .invoice-print .col-qty, .invoice-print .col-alt { width: 20mm; }
+              .invoice-print .col-rate, .invoice-print .col-amount { width: 29mm; }
+              .invoice-print .invoice-summary { grid-template-columns: minmax(0,1fr) 65mm; gap: 7mm; margin-top: 8px; }
+              .invoice-print .totals { width: 65mm; }
+              .invoice-print .totals div { padding: 3px 0; }
+              .invoice-print .totals .grand { font-size: 14px; padding-top: 5px; }
+              .invoice-print .amount-words { padding: 3.5mm 4mm; }
+              .invoice-print .amount-words-label { font-size: 8.8px; }
+              .invoice-print .amount-words-value { margin-top: 2.8mm; font-size: 11.5px; line-height: 1.42; }
+              .invoice-print .note { margin-top: 10px; padding-top: 6px; }
+              .invoice-print .payment-qr { margin-top: 9px; gap: 9px; }
+              .invoice-print .payment-qr img { width: 38mm; height: 38mm; }
+              .invoice-print.dense-a4 { font-size: 9px; }
+              .invoice-print.dense-a4 .invoice-head { padding: 2.5mm 1mm; }
+              .invoice-print.dense-a4 h1, .invoice-print.dense-a4 h2 { font-size: 18px; }
+              .invoice-print.dense-a4 .party { margin-bottom: 1.5mm; gap: 2mm; }
+              .invoice-print.dense-a4 .box { min-height: 14mm; padding: 2mm; }
+              .invoice-print.dense-a4 .box-title { margin-bottom: 1mm; }
+              .invoice-print.dense-a4 th, .invoice-print.dense-a4 td { padding: 2px 3px; }
+              .invoice-print.dense-a4 .totals { margin-top: 3px; }
+              .invoice-print.dense-a4 .totals div { padding: 1px 0; }
+              .invoice-print.dense-a4 .invoice-summary { gap: 3mm; margin-top: 3px; }
+              .invoice-print.dense-a4 .invoice-summary .totals { margin-top: 0; }
+              .invoice-print.dense-a4 .amount-words { padding: 2mm 2.5mm 2.2mm; }
+              .invoice-print.dense-a4 .amount-words-label { font-size: 7.5px; }
+              .invoice-print.dense-a4 .amount-words-value { margin-top: 1.5mm; font-size: 9.5px; line-height: 1.32; }
+              .invoice-print.dense-a4 .note { margin-top: 4px; padding-top: 3px; }
+              .invoice-print.dense-a4 .payment-qr { margin-top: 4px; }
+              .invoice-print.dense-a4 .payment-qr img { width: 30mm; height: 30mm; }
+            }
           </style>
         </head>
         <body>
-          <main class="sheet${densePrint ? ' dense' : ''}">
+          <main class="sheet${amountInWords ? ' invoice-print' : ''}${denseA5Print ? ' dense-a5' : ''}${denseA4Print ? ' dense-a4' : ''}">
             <section class="invoice-head${showCompanyIdentity ? '' : ' no-company'}">
               ${showCompanyIdentity ? `<div>
                 ${company?.logo_url ? `<img src="${esc(company.logo_url)}" alt="Logo" referrerpolicy="no-referrer" style="max-height:40px;max-width:120px;margin-bottom:4px;" />` : ''}
@@ -535,7 +599,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
               <tbody>${rows}</tbody>
               ${isInvoice ? `<tfoot>${invoiceFooter}</tfoot>` : ''}
             </table>
-            ${totals}
+            ${amountInWords ? `<section class="invoice-summary"><div class="amount-words"><span class="amount-words-label">Amount in Words</span><span class="amount-words-value">${esc(amountInWords)}</span></div>${totals}</section>` : totals}
             ${voucher.return_reason ? `<p class="note"><strong>Return reason:</strong> ${esc(voucher.return_reason)}</p>` : voucher.narration ? `<p class="note"><strong>Note:</strong> ${esc(voucher.narration)}</p>` : ''}
             ${company?.invoice_terms ? `<p class="note"><strong>Terms:</strong> ${esc(company.invoice_terms)}</p>` : ''}
             ${company?.payment_qr_text && !(voucher.type === 'Sales' && company?.payment_qr_url) ? `<p class="note"><strong>Payment:</strong> ${esc(company.payment_qr_text)}</p>` : ''}
