@@ -128,6 +128,95 @@ export interface InventorySerialCandidate {
   last_voucher_id?: string | null
 }
 
+export type InventorySerialStatus = 'available' | 'sold' | 'returned_to_supplier' | 'adjusted_out' | 'unavailable'
+
+export interface InventorySerialRegisterRow {
+  serial_id: string
+  serial_number: string
+  item_id: string
+  item_name: string
+  sku?: string | null
+  status: InventorySerialStatus
+  stock_condition?: StockCondition | null
+  received_date_bs?: string | null
+  received_voucher_id?: string | null
+  received_voucher_no?: string | null
+  received_voucher_type?: VoucherType | null
+  received_party?: string | null
+  latest_date_bs?: string | null
+  latest_voucher_id?: string | null
+  latest_voucher_no?: string | null
+  latest_voucher_type?: VoucherType | null
+  latest_party?: string | null
+}
+
+export interface InventorySerialRegisterSummary {
+  total: number
+  available: number
+  saleable: number
+  damaged: number
+  expired: number
+  sold: number
+  returned_to_supplier: number
+  adjusted_out: number
+  unavailable: number
+}
+
+export interface InventorySerialRegisterResult {
+  company_id: string
+  generated_at: string
+  total_count: number
+  summary: InventorySerialRegisterSummary
+  rows: InventorySerialRegisterRow[]
+}
+
+export interface InventorySerialItemGroup {
+  item_id: string
+  item_name: string
+  sku?: string | null
+  primary_supplier?: string | null
+  total: number
+  available: number
+  saleable: number
+  damaged: number
+  expired: number
+  sold: number
+  returned_to_supplier: number
+  adjusted_out: number
+  unavailable: number
+}
+
+export interface InventorySerialItemGroupResult {
+  company_id: string
+  generated_at: string
+  total_count: number
+  total_items: number
+  summary: InventorySerialRegisterSummary
+  groups: InventorySerialItemGroup[]
+}
+
+export interface InventorySerialMovement {
+  movement_id: string
+  serial_id: string
+  voucher_id: string
+  date_bs: string
+  date_bs_key: number
+  voucher_type: VoucherType
+  voucher_no: string
+  direction: 'in' | 'out'
+  stock_condition: StockCondition
+  party_name?: string | null
+  narration?: string | null
+  voucher_status: VoucherStatus
+  cancelled: boolean
+}
+
+export interface VoucherSerialNumber {
+  item_id: string
+  serial_number: string
+  direction: 'in' | 'out'
+}
+
 export type PricingRuleScope = 'ITEM' | 'CATEGORY'
 
 export interface PricingRuleSlab {

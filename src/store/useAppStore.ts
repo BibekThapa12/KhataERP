@@ -17,6 +17,7 @@ import {
   fetchMyCompanies, setActiveCompanyRemote, createCompanyAtomic, addExistingCompanyAdmin, logAppEvent,
   fetchAccounts, fetchAccountCategories, fetchParties, fetchItems, fetchItemCategories, fetchVoucherBundles,
   fetchPricingRules, fetchCompanyDataVersion, savePricingRule, setPricingRuleActive, duplicatePricingRule, removePricingRule,
+  ensureFreshSession, SessionExpiredError,
 } from '@/lib/supabase'
 import {
   recomputeAllBalances, recomputeAffectedBalances, recomputeStock, recomputeAffectedStock,
@@ -629,6 +630,10 @@ export const useAppStore = create<AppState>((set, get) => ({
     const request = (async () => {
     set({ loading: true, error: null })
     try {
+      // Validate the restored token with Supabase before the first company
+      // request. A locally plausible but server-expired JWT otherwise causes
+      // every parallel hydration query to fail at once.
+      await ensureFreshSession(30, true)
       let response = await fetchMyCompanies()
       let company = response.memberships.find(entry => entry.company_id === response.active_company_id)?.company || null
       const remembered = rememberedActiveCompany(userId)
@@ -678,6 +683,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         if (loadVersion === companyDataLoadVersion && get().company?.id === company.id) set({ companyModules, companyPermissions, chequePermissions, chequeBanks, cheques })
       } catch (moduleError) { warnNonSensitive('Optional module data unavailable')(moduleError) }
     } catch (e: unknown) {
+      if (e instanceof SessionExpiredError) {
+        get().setUserId(null)
+        return
+      }
       if (loadVersion === companyDataLoadVersion && get().userId === userId) {
         set({ error: publicErrorMessage(e, 'loading company data'), loading: false, dataStale: true })
       }

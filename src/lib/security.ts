@@ -73,6 +73,7 @@ type PublicErrorRule = { pattern: RegExp; message: string }
 // Database errors are intentionally translated through an allowlist. This
 // keeps SQL/schema details private while giving users a concrete correction.
 const PUBLIC_ERROR_RULES: PublicErrorRule[] = [
+  { pattern: /JWT expired|session has expired|refresh token/i, message: 'Your session has expired. Sign in again to continue.' },
   { pattern: /company data read timed out/i, message: 'Company data took too long to load. Check your connection and retry loading. No records were changed.' },
   { pattern: /canceling statement due to statement timeout|\b57014\b/i, message: 'The database took too long to load company data. Retry after refreshing the app. No records were changed.' },
   { pattern: /invoice totals do not match server-calculated values/i, message: 'The invoice total could not be verified. Check the item quantities, rates, discount, and VAT, then save again.' },

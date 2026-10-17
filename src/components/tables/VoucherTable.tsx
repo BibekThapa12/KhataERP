@@ -1,8 +1,8 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Edit2, Eye, Printer, XCircle } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { voucherStatus as workflowStatus, isCompletedVoucher } from '@/lib/engine'
-import { logAppEvent } from '@/lib/supabase'
+import { fetchVoucherSerials, logAppEvent } from '@/lib/supabase'
 import { fmtMoney, fmtDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/misc'
 import { Button } from '@/components/ui/button'
@@ -14,6 +14,8 @@ import { legacySettlementAccountId } from '@/lib/banks'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { printHtmlDocument, registerVoucherPrinter } from '@/lib/voucherPrinterRegistry'
 import { invoiceAmountInWords } from '@/lib/amountInWords'
+import { attachVoucherSerials, groupVoucherSerials } from '@/lib/voucherSerials'
+import { notifyError } from '@/lib/notifications'
 
 const esc = (value: unknown) =>
   String(value ?? '').replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch] || ch))
@@ -45,7 +47,7 @@ function voucherBadgeVariant(type: string, cancelled: boolean) {
 }
 
 type DraftInvoicePayload = {
-  lines?: Array<{ item_id: string; qty: number; rate: number; amount?: number; amount_input?: string; entry_unit?: string; conversion_factor?: number }>
+  lines?: Array<{ item_id: string; qty: number; rate: number; amount?: number; amount_input?: string; entry_unit?: string; conversion_factor?: number; serial_numbers?: string[] }>
   vatRate?: number
   discount?: number
   discountMode?: 'flat' | 'percent'
@@ -124,6 +126,7 @@ function draftInvoiceItems(voucher: Voucher): InvoiceItem[] {
     amount: line.amount ?? (line.amount_input === undefined || line.amount_input === '' ? undefined : Number(line.amount_input)),
     entry_unit: line.entry_unit,
     conversion_factor: line.conversion_factor || 1,
+    serial_numbers: line.serial_numbers,
   }))
 }
 
@@ -169,7 +172,24 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
   const vatEnabled = company?.vat_enabled ?? true
   const displayedTotal = voucherDisplayTotal(voucher, vatEnabled)
   const settlementId = legacySettlementAccountId(voucher) || draftPayload<DraftReceiptPaymentPayload>(voucher)?.moneyAccountId
-  const invoiceItems = draftInvoiceItems(voucher)
+  const sourceInvoiceItems = draftInvoiceItems(voucher)
+  const [serialsByItem, setSerialsByItem] = useState<Map<string, string[]>>(new Map())
+  const [serialsUnavailable, setSerialsUnavailable] = useState(false)
+  useEffect(() => {
+    setSerialsUnavailable(false)
+    if (voucher.status === 'Draft' || !company?.id || !sourceInvoiceItems.some(line => getItem(line.item_id)?.is_serialized)) {
+      setSerialsByItem(new Map())
+      return
+    }
+    let active = true
+    void fetchVoucherSerials(company.id, voucher.id)
+      .then(rows => { if (active) setSerialsByItem(groupVoucherSerials(rows)) })
+      .catch(() => { if (active) { setSerialsByItem(new Map()); setSerialsUnavailable(true) } })
+    return () => { active = false }
+  // Item serialization cannot change after movement history exists.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [company?.id, voucher.id, voucher.status, voucher.updated_at])
+  const invoiceItems = sourceInvoiceItems.map(line => ({ ...line, serial_numbers: serialsByItem.get(line.item_id) || line.serial_numbers }))
   const ledgerLines = draftVoucherLines(voucher)
   const stockLines = draftStockLines(voucher)
   const invoiceDraft = draftPayload<DraftInvoicePayload>(voucher)
@@ -213,7 +233,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
                 const item = getItem(it.item_id)
                 return (
                   <tr key={i} className="border-t border-border">
-                    <td className="px-3 py-2">{it.item_name || item?.name || it.item_id}</td>
+                    <td className="px-3 py-2"><span className="font-medium">{it.item_name || item?.name || it.item_id}</span>{it.serial_numbers?.length ? <span className="mt-1 block text-xs leading-relaxed text-muted-foreground"><span className="font-medium text-foreground/75">Serial No{it.serial_numbers.length === 1 ? '' : 's'}:</span> {it.serial_numbers.join(', ')}</span> : null}</td>
                     <td className="px-3 py-2 text-right num">{invoicePrimaryQty(it, item)}</td>
                     <td className="px-3 py-2 text-right num text-muted-foreground">{invoiceAlternativeQty(it, item)}</td>
                     <td className="px-3 py-2 text-right num">{fmtMoney(it.rate)}</td>
@@ -223,6 +243,7 @@ export function VoucherDetail({ voucher }: { voucher: Voucher }) {
               })}
             </tbody>
           </table>
+          {serialsUnavailable && <p className="text-xs text-amber-700">Serial numbers could not be loaded for this preview. Refresh and try again.</p>}
           <div className="text-sm space-y-1 pt-2 border-t border-border">
             <div className="flex justify-between"><span className="text-muted-foreground">Subtotal</span><span className="num">{fmtMoney(subtotal)}</span></div>
             {discount > 0 && <div className="flex justify-between"><span className="text-muted-foreground">Discount</span><span className="num">- {fmtMoney(discount)}</span></div>}
@@ -363,7 +384,7 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
       return `
         <tr>
           <td>${index + 1}</td>
-          <td>${esc(it.item_name || item?.name || it.item_id)}</td>
+          <td><span class="item-name">${esc(it.item_name || item?.name || it.item_id)}</span>${it.serial_numbers?.length ? `<span class="serial-numbers"><strong>Serial No${it.serial_numbers.length === 1 ? '' : 's'}:</strong> ${it.serial_numbers.map(esc).join(', ')}</span>` : ''}</td>
           <td class="right">${esc(invoicePrimaryQty(it, item))}</td>
           <td class="right muted">${esc(invoiceAlternativeQty(it, item))}</td>
           <td class="right">${esc(fmtMoney(it.rate))}</td>
@@ -471,6 +492,9 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
             tr { break-inside: avoid; page-break-inside: avoid; }
             th, td { border: 1px solid #d1d5db; padding: 3px; vertical-align: top; }
             th { text-align: left; background: #f3f4f6; font-size: 9px; text-transform: uppercase; }
+            .item-name { display: block; }
+            .serial-numbers { display: block; margin-top: 2px; color: #4b5563; font-size: 8.5px; line-height: 1.32; overflow-wrap: anywhere; }
+            .serial-numbers strong { color: #374151; font-weight: 600; }
             .quantity-total td { border-top: 1.5px solid #111827; background: #f8fafc; font-weight: 700; vertical-align: middle; }
             .right { text-align: right; }
             .col-no { width: 7mm; }
@@ -611,13 +635,25 @@ export function VoucherTable({ vouchers, showActions = true, alwaysShowFilters =
     return html
   }
 
-  const printVoucher = (voucher: Voucher, targetWindow?: Window) => {
-    logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
-    if (targetWindow) targetWindow.close()
-    printHtmlDocument(renderVoucherPrintHtml(voucher))
+  const prepareVoucherForPrint = async (voucher: Voucher) => {
+    const invoiceItems = draftInvoiceItems(voucher)
+    if (!company?.id || voucher.status === 'Draft' || !invoiceItems.some(line => getItem(line.item_id)?.is_serialized)) return voucher
+    return attachVoucherSerials(voucher, await fetchVoucherSerials(company.id, voucher.id))
   }
 
-  registerVoucherPrinter(printVoucher, renderVoucherPrintHtml)
+  const printVoucher = async (voucher: Voucher, targetWindow?: Window) => {
+    logAppEvent('print_voucher', company?.id, { type: voucher.type, print_format: company?.print_format || 'A5' })
+    try {
+      const printableVoucher = await prepareVoucherForPrint(voucher)
+      if (targetWindow) targetWindow.close()
+      printHtmlDocument(renderVoucherPrintHtml(printableVoucher))
+    } catch {
+      if (targetWindow) targetWindow.close()
+      notifyError('The voucher was saved, but its serial numbers could not be loaded for printing. Open the voucher and try again.')
+    }
+  }
+
+  registerVoucherPrinter(printVoucher, renderVoucherPrintHtml, prepareVoucherForPrint)
 
   if (printerOnly) return null
 

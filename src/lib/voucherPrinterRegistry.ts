@@ -1,13 +1,16 @@
 import type { Voucher } from '@/types'
 
-type VoucherPrinter = (voucher: Voucher, targetWindow?: Window) => void
+type VoucherPrinter = (voucher: Voucher, targetWindow?: Window) => void | Promise<void>
 type VoucherRenderer = (voucher: Voucher) => string
+type VoucherPreparer = (voucher: Voucher) => Voucher | Promise<Voucher>
 let activePrinter: VoucherPrinter | null = null
 let activeRenderer: VoucherRenderer | null = null
+let activePreparer: VoucherPreparer | null = null
 
-export function registerVoucherPrinter(printer: VoucherPrinter, renderer?: VoucherRenderer) {
+export function registerVoucherPrinter(printer: VoucherPrinter, renderer?: VoucherRenderer, preparer?: VoucherPreparer) {
   activePrinter = printer
   activeRenderer = renderer || null
+  activePreparer = preparer || null
 }
 
 export function printPersistedVoucher(voucher: Voucher, targetWindow?: Window) {
@@ -60,10 +63,11 @@ export function printHtmlDocument(html: string): boolean {
   return true
 }
 
-export function printPersistedVouchers(vouchers: Voucher[]): boolean {
+export async function printPersistedVouchers(vouchers: Voucher[]): Promise<boolean> {
   if (!vouchers.length || !activeRenderer) return false
 
-  const documents = vouchers.map(voucher => new DOMParser().parseFromString(activeRenderer!(voucher), 'text/html'))
+  const printableVouchers = activePreparer ? await Promise.all(vouchers.map(voucher => activePreparer!(voucher))) : vouchers
+  const documents = printableVouchers.map(voucher => new DOMParser().parseFromString(activeRenderer!(voucher), 'text/html'))
   const first = documents[0]
   const styles = Array.from(first.head.querySelectorAll('style')).map(style => style.outerHTML).join('')
   const pages = documents.map((document, index) => {

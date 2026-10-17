@@ -4,8 +4,12 @@ import type { Company, Voucher } from '@/types'
 const mocks = vi.hoisted(() => ({
   fetchMyCompanies: vi.fn(), fetchCompanySnapshot: vi.fn(), fetchCompanyDataVersion: vi.fn(), setActiveCompanyRemote: vi.fn(),
   insertDraftVoucher: vi.fn(), fetchCompanyModules: vi.fn(), fetchCompanyPermissions: vi.fn(), fetchVoucherBundles: vi.fn(),
+  ensureFreshSession: vi.fn(),
 }))
-vi.mock('@/lib/supabase', () => ({ ...mocks }))
+vi.mock('@/lib/supabase', () => ({
+  ...mocks,
+  SessionExpiredError: class SessionExpiredError extends Error {},
+}))
 vi.mock('@/lib/companySnapshot', () => ({ fetchCompanySnapshot: mocks.fetchCompanySnapshot }))
 vi.mock('@/lib/notifications', () => ({ notifySuccess: vi.fn(), notifyError: vi.fn() }))
 import { useAppStore } from './useAppStore'
@@ -28,6 +32,7 @@ beforeEach(async () => {
   mocks.fetchCompanyModules.mockResolvedValue([])
   mocks.fetchCompanyPermissions.mockResolvedValue([])
   mocks.fetchCompanyDataVersion.mockResolvedValue('1')
+  mocks.ensureFreshSession.mockResolvedValue({ user: { id: 'user' } })
 })
 
 describe('focus and reconnect freshness checks', () => {

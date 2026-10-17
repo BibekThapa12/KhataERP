@@ -103,6 +103,44 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
   },
 })
 
+let sessionRefreshPromise: ReturnType<typeof supabase.auth.refreshSession> | null = null
+
+export class SessionExpiredError extends Error {
+  constructor() {
+    super('Your session has expired. Sign in again.')
+    this.name = 'SessionExpiredError'
+  }
+}
+
+/** Prevent initial company reads from racing Supabase's background token refresh. */
+export async function ensureFreshSession(minimumValiditySeconds = 30, forceRefresh = false) {
+  const { data, error } = await supabase.auth.getSession()
+  if (error) throw error
+  if (!data.session) throw new SessionExpiredError()
+
+  const expiresAt = Number(data.session.expires_at || 0)
+  const nowSeconds = Math.floor(Date.now() / 1000)
+  if (!forceRefresh && expiresAt > nowSeconds + minimumValiditySeconds) return data.session
+
+  sessionRefreshPromise ||= supabase.auth.refreshSession()
+  try {
+    const refreshed = await sessionRefreshPromise
+    if (refreshed.error || !refreshed.data.session) {
+      const status = Number(refreshed.error?.status || 0)
+      const invalidRefresh = !refreshed.data.session && (!refreshed.error || (status >= 400 && status < 500))
+      if (!invalidRefresh) throw refreshed.error
+      // A stale local session must not leave the application trapped behind
+      // the company loader. Local sign-out returns the user to Login without
+      // revoking valid sessions on their other devices.
+      await supabase.auth.signOut({ scope: 'local' }).catch(() => undefined)
+      throw new SessionExpiredError()
+    }
+    return refreshed.data.session
+  } finally {
+    sessionRefreshPromise = null
+  }
+}
+
 setWritePerformanceReporter(async (sample: PersistedWritePerformanceSample) => {
   const { company_id, ...safeSample } = sample
   const { error } = await supabase.rpc('record_performance_sample', { p_company_id: company_id, p_sample: safeSample })
@@ -910,6 +948,108 @@ export async function fetchVoucherItemSerials(companyId: string, voucherId: stri
   })
   if (error) throw error
   return (data || []).map((row: { serial_number: string }) => row.serial_number)
+}
+
+export async function fetchVoucherSerials(companyId: string, voucherId: string) {
+  const { data, error } = await supabase.rpc('get_voucher_serials', {
+    p_company_id: companyId,
+    p_voucher_id: voucherId,
+  })
+  if (error) throw error
+  return (data || []) as import('@/types').VoucherSerialNumber[]
+}
+
+export interface InventorySerialRegisterFilters {
+  query?: string
+  itemId?: string | null
+  status?: import('@/types').InventorySerialStatus | 'all'
+  stockCondition?: import('@/types').StockCondition | 'all'
+}
+
+export async function fetchInventorySerialRegister(
+  companyId: string,
+  filters: InventorySerialRegisterFilters = {},
+  page = 1,
+  pageSize = 50,
+) {
+  const safePage = Math.max(1, Math.trunc(page))
+  const safePageSize = Math.min(200, Math.max(1, Math.trunc(pageSize)))
+  const { data, error } = await supabase.rpc('get_inventory_serial_register', {
+    p_company_id: companyId,
+    p_query: filters.query?.trim() || null,
+    p_item_id: filters.itemId || null,
+    p_status: !filters.status || filters.status === 'all' ? null : filters.status,
+    p_stock_condition: !filters.stockCondition || filters.stockCondition === 'all' ? null : filters.stockCondition,
+    p_limit: safePageSize,
+    p_offset: (safePage - 1) * safePageSize,
+  })
+  if (error) throw error
+  const payload = (data || {}) as Partial<import('@/types').InventorySerialRegisterResult>
+  return {
+    company_id: payload.company_id || companyId,
+    generated_at: payload.generated_at || new Date().toISOString(),
+    total_count: Number(payload.total_count || 0),
+    summary: {
+      total: Number(payload.summary?.total || 0),
+      available: Number(payload.summary?.available || 0),
+      saleable: Number(payload.summary?.saleable || 0),
+      damaged: Number(payload.summary?.damaged || 0),
+      expired: Number(payload.summary?.expired || 0),
+      sold: Number(payload.summary?.sold || 0),
+      returned_to_supplier: Number(payload.summary?.returned_to_supplier || 0),
+      adjusted_out: Number(payload.summary?.adjusted_out || 0),
+      unavailable: Number(payload.summary?.unavailable || 0),
+    },
+    rows: Array.isArray(payload.rows) ? payload.rows : [],
+  } satisfies import('@/types').InventorySerialRegisterResult
+}
+
+export async function fetchInventorySerialItemGroups(
+  companyId: string,
+  filters: InventorySerialRegisterFilters = {},
+  page = 1,
+  pageSize = 20,
+) {
+  const safePage = Math.max(1, Math.trunc(page))
+  const safePageSize = Math.min(100, Math.max(1, Math.trunc(pageSize)))
+  const { data, error } = await supabase.rpc('get_inventory_serial_item_groups', {
+    p_company_id: companyId,
+    p_query: filters.query?.trim() || null,
+    p_item_id: filters.itemId || null,
+    p_status: !filters.status || filters.status === 'all' ? null : filters.status,
+    p_stock_condition: !filters.stockCondition || filters.stockCondition === 'all' ? null : filters.stockCondition,
+    p_limit: safePageSize,
+    p_offset: (safePage - 1) * safePageSize,
+  })
+  if (error) throw error
+  const payload = (data || {}) as Partial<import('@/types').InventorySerialItemGroupResult>
+  return {
+    company_id: payload.company_id || companyId,
+    generated_at: payload.generated_at || new Date().toISOString(),
+    total_count: Number(payload.total_count || 0),
+    total_items: Number(payload.total_items || 0),
+    summary: {
+      total: Number(payload.summary?.total || 0),
+      available: Number(payload.summary?.available || 0),
+      saleable: Number(payload.summary?.saleable || 0),
+      damaged: Number(payload.summary?.damaged || 0),
+      expired: Number(payload.summary?.expired || 0),
+      sold: Number(payload.summary?.sold || 0),
+      returned_to_supplier: Number(payload.summary?.returned_to_supplier || 0),
+      adjusted_out: Number(payload.summary?.adjusted_out || 0),
+      unavailable: Number(payload.summary?.unavailable || 0),
+    },
+    groups: Array.isArray(payload.groups) ? payload.groups : [],
+  } satisfies import('@/types').InventorySerialItemGroupResult
+}
+
+export async function fetchInventorySerialHistory(companyId: string, serialId: string) {
+  const { data, error } = await supabase.rpc('get_inventory_serial_history', {
+    p_company_id: companyId,
+    p_serial_id: serialId,
+  })
+  if (error) throw error
+  return (data || []) as import('@/types').InventorySerialMovement[]
 }
 
 export async function fetchItemCategories(company_id: string): Promise<ItemCategory[]> {

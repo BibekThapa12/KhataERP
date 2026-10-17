@@ -7,7 +7,7 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator, SlidersHorizontal, HardDrive, ShieldCheck, Activity, Search, PanelLeftClose, PanelLeftOpen, UserCircle2, PlusCircle, Building2
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator, SlidersHorizontal, HardDrive, ShieldCheck, Activity, Search, PanelLeftClose, PanelLeftOpen, UserCircle2, PlusCircle, Building2, Barcode
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -120,6 +120,7 @@ const NAV_SECTIONS: {
       { to: '/reports/cash-bank-book', label: 'Cash & Bank', Icon: Landmark },
       { to: '/stock-report', label: 'Stock Summary', Icon: Boxes },
       { to: '/reports/stock-ledger', label: 'Stock Ledger', Icon: FileText },
+      { to: '/reports/serial-numbers', label: 'Serial Number Register', Icon: Barcode, keywords: ['serial', 'serials', 'imei', 'engine number', 'chassis number'] },
       {
         kind: 'group', id: 'financial', label: 'Financial Reports', Icon: BarChart2,
         children: [

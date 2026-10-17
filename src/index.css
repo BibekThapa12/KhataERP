@@ -638,6 +638,21 @@
   .report-page.transaction-register-report-page .report-content .register-print-table > div { width: 100% !important; max-width: 100% !important; overflow: visible !important; }
   .report-page.transaction-register-report-page .report-content .register-print-table table { width: 100% !important; min-width: 0 !important; table-layout: auto; }
   .report-page.transaction-register-report-page .register-pan-column { white-space: nowrap; }
+  .serial-register-report-page .report-table-card { display: none !important; }
+  .serial-register-report-page .serial-register-print-table { display: block !important; }
+  .serial-register-report-page .serial-register-print-summary { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #4b5563; border-bottom: 0; padding: 5px 7px; color: #111827; font-family: Arial, sans-serif; font-size: 8px; }
+  .serial-register-report-page .serial-register-table { table-layout: fixed; width: 100% !important; min-width: 0 !important; font-size: 7.5px !important; }
+  .serial-register-report-page .serial-register-table th,
+  .serial-register-report-page .serial-register-table td { padding: 3px !important; line-height: 1.2; }
+  .serial-register-report-page .serial-register-table th:nth-child(1) { width: 4%; }
+  .serial-register-report-page .serial-register-table th:nth-child(2) { width: 13%; }
+  .serial-register-report-page .serial-register-table th:nth-child(3) { width: 13%; }
+  .serial-register-report-page .serial-register-table th:nth-child(4) { width: 9%; }
+  .serial-register-report-page .serial-register-table th:nth-child(5) { width: 7%; }
+  .serial-register-report-page .serial-register-table th:nth-child(6) { width: 13%; }
+  .serial-register-report-page .serial-register-table th:nth-child(7) { width: 13%; }
+  .serial-register-report-page .serial-register-table th:nth-child(8) { width: 15%; }
+  .serial-register-report-page .serial-register-table th:nth-child(9) { width: 13%; }
   .balance-sheet-report-page { page: balance-sheet-report; }
   .balance-sheet-screen-heading,
   .balance-sheet-status { display: none !important; }

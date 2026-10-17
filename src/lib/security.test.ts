@@ -70,6 +70,11 @@ describe('secret-safe logging', () => {
     expect(message).not.toContain('auth.example.test')
   })
 
+  it('turns an expired database JWT into a sign-in instruction', () => {
+    expect(userFacingErrorMessage({ code: 'PGRST303', message: 'JWT expired' }))
+      .toBe('Your session has expired. Sign in again to continue.')
+  })
+
   it('rejects oversized or non-JSON backup uploads before reading them', () => {
     expect(backupFileValidationError({ name: 'backup.json', size: 11 * 1024 * 1024, type: 'application/json' })).toContain('10 MB')
     expect(backupFileValidationError({ name: 'backup.html', size: 100, type: 'text/html' })).toContain('JSON')

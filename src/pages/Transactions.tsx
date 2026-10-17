@@ -116,21 +116,24 @@ export function BulkDraftVoucherTable({ vouchers, onEdit, draftOnly = false }: {
     }
     setSelectedIds(failedIds); setProcessing(false)
   }
-  const printSelected = () => {
+  const printSelected = async () => {
     if (processing || !selectedIds.size) return
     const selected = drafts.filter(voucher => selectedIds.has(voucher.id)).sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
-    if (!printPersistedVouchers(selected)) {
+    if (!await printPersistedVouchers(selected)) {
       notifyError('The selected drafts could not be prepared for printing. Please try again.')
     }
   }
-  const printSelectedCompleted = () => {
+  const printSelectedCompleted = async () => {
     if (printingCompleted || !selectedCompletedIds.size) return
     const selected = completedVouchers.filter(voucher => selectedCompletedIds.has(voucher.id)).sort((a, b) => a.date_bs_key - b.date_bs_key || a.seq - b.seq)
     setPrintingCompleted(true)
-    if (!printPersistedVouchers(selected)) {
-      notifyError('The selected completed vouchers could not be prepared for printing. Please try again.')
+    try {
+      if (!await printPersistedVouchers(selected)) notifyError('The selected completed vouchers could not be prepared for printing. Please try again.')
+    } catch {
+      notifyError('Serial numbers could not be loaded for the selected vouchers. Refresh and try again.')
+    } finally {
+      window.setTimeout(() => setPrintingCompleted(false), 1000)
     }
-    window.setTimeout(() => setPrintingCompleted(false), 1000)
   }
   const deleteSelected = async () => {
     if (processing || !canComplete || !selectedIds.size) return
