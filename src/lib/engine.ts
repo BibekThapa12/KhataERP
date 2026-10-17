@@ -548,6 +548,7 @@ export interface InvoiceEntryInput {
   calculated_rate?: number | null
   price_overridden?: boolean
   pricing_snapshot?: import('@/types').PricingSnapshot | null
+  serial_numbers?: string[]
 }
 
 interface InvoiceParams {
@@ -589,7 +590,7 @@ export function buildSalesVoucherData(p: InvoiceParams) {
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })
   const invoice_items = p.items.map(l => ({ ...l, amount: round6(l.amount ?? l.qty * l.rate), conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
-  const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const, stock_condition: 'saleable' as const }))
+  const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'out' as const, stock_condition: 'saleable' as const, ...(l.serial_numbers ? { serial_numbers: l.serial_numbers } : {}) }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -605,7 +606,7 @@ export function buildPurchaseVoucherData(p: InvoiceParams) {
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_receivable'), debit: vat_amount, credit: 0 })
   lines.push({ account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: 0, credit: total })
   const invoice_items = p.items.map(l => ({ ...l, amount: round6(l.amount ?? l.qty * l.rate), conversion_factor: l.conversion_factor || 1, base_qty: toBaseQty(l.qty, l.conversion_factor || 1) }))
-  const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const, stock_condition: 'saleable' as const }))
+  const stock_lines = p.items.filter(l => !l.is_service).map(l => ({ item_id: l.item_id, qty: toBaseQty(l.qty, l.conversion_factor || 1), rate: toBaseRate(l.rate, l.conversion_factor || 1), direction: 'in' as const, stock_condition: 'saleable' as const, ...(l.serial_numbers ? { serial_numbers: l.serial_numbers } : {}) }))
   return { subtotal, discount, vat_rate: p.vat_rate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 
@@ -623,6 +624,7 @@ export interface ReturnItemInput {
   conversion_factor?: number
   base_qty?: number
   is_service?: boolean
+  serial_numbers?: string[]
 }
 
 export interface ReturnVoucherParams {
@@ -689,8 +691,8 @@ export function buildReturnVoucherData(p: ReturnVoucherParams) {
         ...(vat_amount ? [{ account_id: sys(p.system_accounts, 'vat_receivable'), debit: 0, credit: vat_amount }] : []),
       ]
   const stock_lines = isSalesReturn
-    ? (p.restock_items ? p.items.filter(item => !item.is_service).map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'in' as const, stock_condition: p.stock_condition })) : [])
-    : p.items.filter(item => !item.is_service).map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'out' as const, stock_condition: p.stock_condition }))
+    ? (p.restock_items ? p.items.filter(item => !item.is_service).map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'in' as const, stock_condition: p.stock_condition, ...(item.serial_numbers ? { serial_numbers: item.serial_numbers } : {}) })) : [])
+    : p.items.filter(item => !item.is_service).map(item => ({ item_id: item.item_id, qty: toBaseQty(item.qty, item.conversion_factor || 1), rate: item.cost_rate, direction: 'out' as const, stock_condition: p.stock_condition, ...(item.serial_numbers ? { serial_numbers: item.serial_numbers } : {}) }))
   return { subtotal, discount, vat_rate: vatRate, vat_amount, total, lines, stock_lines, invoice_items }
 }
 

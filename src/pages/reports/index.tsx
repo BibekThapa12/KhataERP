@@ -19,6 +19,7 @@ import { Label } from '@/components/ui/label'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { categorySelectorOption, sortSelectorOptions } from '@/lib/selectorOptions'
 import { ReportActions } from '@/components/reports/ReportActions'
 import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
@@ -26,7 +27,7 @@ import { ExpandCollapseControls } from '@/components/ExpandCollapseControls'
 import { Badge } from '@/components/ui/misc'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { normalizeSearch } from '@/lib/search'
-import { categoryDescendantIds, categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
+import { categoryDescendantIds, categoryPath } from '@/lib/categoryHierarchy'
 import type { Account, AccountType, InventoryValuationMethod, Item, StockCondition, StockEntry } from '@/types'
 
 // ─── Trial Balance ────────────────────────────────────────────────────────────
@@ -729,7 +730,7 @@ export function StockReportPage() {
       </div>
       <div className="report-controls flex flex-col gap-2 lg:flex-row lg:items-center">
         <div className="relative min-w-0 flex-1"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder="Search items…" className="w-full pl-8" /></div>
-        <SearchableSelect className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} options={[{ value: 'all', label: 'All Categories' }, ...itemCategories.map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))]} />
+        <SearchableSelect mode="typeahead" className="w-full lg:w-56" value={categoryId} onValueChange={setCategoryId} placeholder="All Categories" searchPlaceholder="Search item category…" options={[{ value: 'all', label: 'All Categories' }, ...sortSelectorOptions(itemCategories.map(category => ({ ...categorySelectorOption(category, itemCategories), disabled: false })))]} />
          <SearchableSelect className="w-full lg:w-40" value={status} onValueChange={value => setStatus(value as typeof status)} options={[{ value: 'all', label: 'All Status' }, { value: 'in', label: 'In Stock' }, ...(stockCondition === 'saleable' ? [{ value: 'low', label: 'Low Stock' }] : []), { value: 'out', label: 'Out of Stock' }]} />
         <SearchableSelect className="w-full lg:w-52" value={method} onValueChange={changeMethod} options={[{ value: 'weighted_average', label: 'Weighted Average' }, { value: 'fifo', label: 'FIFO' }, { value: 'lifo', label: 'LIFO' }]} />
         <Button size="sm" className="h-9" variant={showDetails ? 'default' : 'outline'} onClick={() => setShowDetails(value => !value)}>{showDetails ? 'Hide Details' : 'Show Details'}</Button>

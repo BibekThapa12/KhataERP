@@ -2,7 +2,6 @@ import { lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, Printer, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
-import { categoryPath } from '@/lib/categoryHierarchy'
 import { fmtMoney } from '@/lib/utils'
 import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
 import { SubmissionLock } from '@/lib/submissionLock'
@@ -22,6 +21,7 @@ import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges
 import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucherShortcuts, type VoucherPrintRequest } from '@/lib/voucherShortcuts'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+import { ledgerSelectorOption, sortSelectorOptions } from '@/lib/selectorOptions'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -57,7 +57,7 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const focusedLineRef = useRef(0)
-  const ledgerTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const ledgerTriggerRefs = useRef<Array<HTMLElement | null>>([])
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
@@ -166,22 +166,22 @@ export function SimpleEntryForm({ entryType, open, voucher, onClose }: { entryTy
         <p className="-mt-2 text-sm text-muted-foreground">No debit or credit knowledge needed. Choose where the money moved and what it was for.</p>
         <div className="space-y-4 py-2">
           <div className="grid gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} /></div>
             {manualNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={invoiceNo} maxLength={100} onChange={event => setInvoiceNo(event.target.value)} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
           <div className="space-y-1.5">
             <Label>{entryType === 'Income' ? 'Received into' : 'Paid from'} <span className="text-destructive">*</span></Label>
-            <SearchableSelect value={counterAccountId} onValueChange={setCounterAccountId} placeholder="Select Cash, Bank, Customer, or Supplier" options={[
-              ...counterChoices.cashAndBanks.map(account => ({ value: account.id, label: account.name, group: 'Cash & Bank', searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` })),
-              ...counterChoices.partyAccounts.map(account => { const party = counterChoices.partyByAccount.get(account.id); return { value: account.id, label: party?.name || account.name, group: party?.type === 'customer' ? 'Customers' : 'Suppliers', searchText: `${party?.name || account.name} ${party?.phone || ''} ${party?.pan_vat || ''} ${party?.address || ''}` } }),
-            ]} />
+            <SearchableSelect mode="typeahead" value={counterAccountId} onValueChange={setCounterAccountId} placeholder="Select Cash, Bank, Customer, or Supplier" searchPlaceholder="Search account or party…" options={sortSelectorOptions([
+              ...counterChoices.cashAndBanks.map(account => ledgerSelectorOption(account, accountCategories)),
+              ...counterChoices.partyAccounts.map(account => ledgerSelectorOption(account, accountCategories, counterChoices.partyByAccount.get(account.id))),
+            ])} />
           </div>
           <div className="space-y-2">
             <div className="hidden grid-cols-[1fr_.35fr_auto] gap-2 text-xs font-semibold uppercase tracking-wider text-muted-foreground sm:grid"><span>{entryType} ledger</span><span>Amount</span><span /></div>
             {lines.map((line, index) => {
               const ledgers = activeAccounts.filter(account => account.type === entryType && account.category_id)
               return <div key={index} onFocusCapture={() => { focusedLineRef.current = index }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[1fr_.35fr_auto] sm:border-0 sm:p-0">
-                <div className="flex min-w-0 gap-1"><SearchableSelect triggerRef={element => { ledgerTriggerRefs.current[index] = element }} className="min-w-0 flex-1" value={line.account_id} onValueChange={value => { const account = activeAccounts.find(item => item.id === value); updateLine(index, { account_id: value, category_id: account?.category_id || '' }) }} placeholder={`Select ${entryType.toLowerCase()} ledger`} options={ledgers.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))} /><Button type="button" variant="outline" size="sm" tabIndex={-1} className="px-2" title={`Create ${entryType.toLowerCase()} ledger (Alt+N)`} onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button></div>
+                <div className="flex min-w-0 gap-1"><SearchableSelect mode="typeahead" triggerRef={element => { ledgerTriggerRefs.current[index] = element }} className="min-w-0 flex-1" value={line.account_id} onValueChange={value => { const account = activeAccounts.find(item => item.id === value); updateLine(index, { account_id: value, category_id: account?.category_id || '' }) }} placeholder={`Select ${entryType.toLowerCase()} ledger`} searchPlaceholder={`Search ${entryType.toLowerCase()} ledger…`} options={sortSelectorOptions(ledgers.map(account => ledgerSelectorOption(account, accountCategories)))} /><Button type="button" variant="outline" size="sm" tabIndex={-1} className="px-2" title={`Create ${entryType.toLowerCase()} ledger (Alt+N)`} onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button></div>
                 <Input type="number" min="0" step="0.01" value={line.amount || ''} onChange={event => updateLine(index, { amount: Number(event.target.value) })} className="text-right" placeholder="0.00" />
                 <Button type="button" variant="ghost" size="icon" disabled={lines.length === 1} onClick={() => setLines(current => current.filter((_, lineIndex) => lineIndex !== index))}><Trash2 className="h-4 w-4" /></Button>
               </div>

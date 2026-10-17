@@ -22,6 +22,15 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(buildPaymentData([{ account_id: 'supplier', amount: 300 }], 'cash').lines).valid).toBe(true)
   })
 
+  it('carries serialized identities into transactional stock movements', () => {
+    const serials = ['IMEI-001', 'IMEI-002']
+    const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items: [{ item_id: 'phone', qty: 2, rate: 500, serial_numbers: serials }], vat_rate: 0, system_accounts: accounts })
+    const sale = buildSalesVoucherData({ party_account_id: 'customer', is_cash: false, items: [{ item_id: 'phone', qty: 2, rate: 700, serial_numbers: serials }], vat_rate: 0, system_accounts: accounts })
+    expect(purchase.stock_lines[0]).toMatchObject({ item_id: 'phone', direction: 'in', serial_numbers: serials })
+    expect(sale.stock_lines[0]).toMatchObject({ item_id: 'phone', direction: 'out', serial_numbers: serials })
+    expect(purchase.invoice_items[0].serial_numbers).toEqual(serials)
+  })
+
   it('matches PostgreSQL per-line rounding for fractional invoice rates', () => {
     const items = ['a', 'b', 'c', 'd'].map(item_id => ({ item_id, qty: 1, rate: 0.335 }))
     const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items, vat_rate: 13, system_accounts: accounts })

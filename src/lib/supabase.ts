@@ -137,7 +137,7 @@ const COMPANY_FIELDS = 'id,user_id,owner_email,name,address,pan_vat,phone,vat_en
 const DEVELOPER_COMPANY_FIELDS = `${COMPANY_FIELDS},support_status,developer_notes`
 const ACCOUNT_FIELDS = 'id,company_id,name,type,group,is_system,is_party,opening_balance,address,contact_no,pan_no,credit_days,bank_account_no,bank_branch,category_id,is_archived,created_at'
 const PARTY_FIELDS = 'id,company_id,name,type,phone,pan_vat,address,default_credit_days,account_id,is_archived,created_at'
-const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion,sell_rate,opening_qty,opening_rate,reorder_level,category_id,sku,barcode,vat_applicable,is_service,is_archived,created_at'
+const ITEM_FIELDS = 'id,company_id,name,unit,alternate_unit,alternate_conversion,sell_rate,opening_qty,opening_rate,reorder_level,category_id,sku,barcode,vat_applicable,is_service,is_serialized,is_archived,created_at'
 const ACCOUNT_CATEGORY_FIELDS = 'id,company_id,name,account_type,parent_category_id,is_system,is_archived,created_at'
 const ITEM_CATEGORY_FIELDS = 'id,company_id,name,parent_category_id,is_archived,created_at'
 const PRICING_SLAB_FIELDS = 'id,pricing_rule_id,min_quantity,rate,created_at,updated_at'
@@ -882,6 +882,34 @@ export async function updateItemsByIds(ids: string[], updates: Partial<Item>) {
   if (!ids.length) return
   const { error } = await supabase.from('items').update(updates).in('id', ids)
   if (error) throw error
+}
+
+export async function fetchInventorySerialCandidates(params: {
+  companyId: string
+  itemId: string
+  mode: 'sale' | 'sales_return' | 'purchase_return'
+  sourceVoucherId?: string | null
+  excludeVoucherId?: string | null
+}) {
+  const { data, error } = await supabase.rpc('get_inventory_serial_candidates', {
+    p_company_id: params.companyId,
+    p_item_id: params.itemId,
+    p_mode: params.mode,
+    p_source_voucher_id: params.sourceVoucherId || null,
+    p_exclude_voucher_id: params.excludeVoucherId || null,
+  })
+  if (error) throw error
+  return (data || []) as import('@/types').InventorySerialCandidate[]
+}
+
+export async function fetchVoucherItemSerials(companyId: string, voucherId: string, itemId: string) {
+  const { data, error } = await supabase.rpc('get_voucher_item_serials', {
+    p_company_id: companyId,
+    p_voucher_id: voucherId,
+    p_item_id: itemId,
+  })
+  if (error) throw error
+  return (data || []).map((row: { serial_number: string }) => row.serial_number)
 }
 
 export async function fetchItemCategories(company_id: string): Promise<ItemCategory[]> {

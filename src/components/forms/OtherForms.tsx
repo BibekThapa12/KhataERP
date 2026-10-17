@@ -5,7 +5,6 @@ import { fmtMoney } from '@/lib/utils'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { resolveSystemAccountId, round2 } from '@/lib/engine'
 import { toBaseQty, toBaseRate, type UnitMode } from '@/lib/units'
-import { categoryOptionLabel, categoryPath } from '@/lib/categoryHierarchy'
 import { bankAccounts, legacySettlementAccountId } from '@/lib/banks'
 import { suggestSettlementAllocations } from '@/lib/managementReports'
 import { sanitizeSettlementAllocations } from '@/lib/settlementAllocations'
@@ -26,6 +25,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from '
 import { LedgerBalanceHint } from './LedgerBalanceHint'
 import { VoucherNumberField } from './VoucherNumberField'
 import { SubmissionLock } from '@/lib/submissionLock'
+import { categorySelectorOption, ledgerSelectorOption, sortSelectorOptions } from '@/lib/selectorOptions'
 import { formatMasterName } from '@/lib/nameFormat'
 import { stableFormSnapshot, useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import type { Item, Voucher } from '@/types'
@@ -78,6 +78,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
   const [barcode, setBarcode] = useState('')
   const [vatApplicable, setVatApplicable] = useState(true)
   const [isService, setIsService] = useState(false)
+  const [isSerialized, setIsSerialized] = useState(false)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const submissionLock = useRef(new SubmissionLock()).current
@@ -85,7 +86,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setIsSerialized(false); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
@@ -99,11 +100,12 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
       if (unitError) { setError(unitError); return }
       if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
     }
+    if (isSerialized && openingQty > 0) { setError('Serialized items must start with zero opening stock. Add each serial through a Purchase invoice.'); return }
     const factor = !isService && openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService ? 0 : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : toBaseRate(rateInputNumber(openingRate), factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService })
+      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService || isSerialized ? 0 : toBaseQty(openingQty, factor), opening_rate: isService || isSerialized ? 0 : toBaseRate(rateInputNumber(openingRate), factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService, is_serialized: !isService && isSerialized })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -126,13 +128,14 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
           <div className="space-y-1.5">
             <Label>Category</Label>
             <div className="flex gap-1.5">
-              <SearchableSelect className="min-w-0 flex-1" value={categoryId} onValueChange={setCategoryId} placeholder="Select category" options={itemCategories.filter(category => !category.is_archived).map(category => ({ value: category.id, label: categoryOptionLabel(itemCategories, category.id), searchText: categoryPath(itemCategories, category.id) }))} />
+              <SearchableSelect mode="typeahead" className="min-w-0 flex-1" value={categoryId} onValueChange={setCategoryId} placeholder="Select category" searchPlaceholder="Search item category…" options={itemCategories.filter(category => !category.is_archived).map(category => categorySelectorOption(category, itemCategories))} />
               <Button type="button" variant="outline" size="sm" className="h-9 shrink-0 px-2" aria-label="Create new item category (Alt+N)" title="Create new category (Alt+N)" onClick={() => setCategoryDialogOpen(true)}>
                 <Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" />
               </Button>
             </div>
           </div>
           {allowService && <label className="flex items-center gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isService} onChange={e => setIsService(e.target.checked)} className="h-4 w-4 accent-primary" />This item is a service</label>}
+          {!isService && <label className="flex items-start gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isSerialized} onChange={e => { setIsSerialized(e.target.checked); if (e.target.checked) { setOpeningQty(0); setOpeningRate('0') } }} className="mt-0.5 h-4 w-4 accent-primary" /><span><span className="block font-medium">Track individual serial numbers</span><span className="block text-xs text-muted-foreground">For IMEI, chassis, engine, or device serial tracking. Every stock unit must have a unique identity.</span></span></label>}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {!isService && <div className="space-y-1.5">
               <Label>Main Unit</Label>
@@ -151,11 +154,11 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Opening Stock Qty</Label>
-              <Input type="number" step="any" value={openingQty || ''} onChange={e => setOpeningQty(Number(e.target.value))} placeholder="0" />
+              <Input type="number" step="any" value={openingQty || ''} onChange={e => setOpeningQty(Number(e.target.value))} placeholder="0" disabled={isSerialized} />
             </div>
             <div className="space-y-1.5">
               <Label>Opening Cost / Selected Unit (Rs)</Label>
-              <Input type="number" step="any" value={openingRate} onChange={e => setOpeningRate(e.target.value)} onBlur={() => setOpeningRate(current => formatRateInput(current))} placeholder="0" />
+              <Input type="number" step="any" value={openingRate} onChange={e => setOpeningRate(e.target.value)} onBlur={() => setOpeningRate(current => formatRateInput(current))} placeholder="0" disabled={isSerialized} />
             </div>
           </div>
           {alternateUnit.trim() && alternateConversion > 1 && <div className="space-y-1.5"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: unit.trim() || 'pcs' }, { value: 'alternate', label: alternateUnit.trim() }]} /></div>}
@@ -205,8 +208,8 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
   const [error, setError] = useState('')
   const [allocationWarning, setAllocationWarning] = useState('')
   const [ledgerLineIndex, setLedgerLineIndex] = useState<number | null>(null)
-  const moneyAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
-  const allocationTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const moneyAccountTriggerRef = useRef<HTMLElement | null>(null)
+  const allocationTriggerRefs = useRef<Array<HTMLElement | null>>([])
   const receiptDialogRef = useRef<HTMLDivElement | null>(null)
   const focusedAllocationRef = useRef(0)
   const pendingAllocationFocus = useRef<number | null>(null)
@@ -388,12 +391,12 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
         <DialogHeader><DialogTitle>{isEditing ? 'Edit' : 'New'} {type}</DialogTitle></DialogHeader>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
             <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} />
           </div>
           <div className="space-y-1.5">
             <Label>{isReceipt ? 'Deposit to account' : 'Pay from account'}</Label>
-            <SearchableSelect triggerRef={moneyAccountTriggerRef} autoFocus value={moneyAccountId} onValueChange={setMoneyAccountId} options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, searchText: `${account.name} Bank ${account.type === 'Liability' ? 'Overdraft Bank OD Liability' : 'Current Assets'}`, group: account.type === 'Liability' ? 'Bank OD A/c' : 'Bank Accounts', disabled: !!account.is_archived }))]} />
+            <SearchableSelect mode="typeahead" triggerRef={moneyAccountTriggerRef} value={moneyAccountId} onValueChange={setMoneyAccountId} placeholder={isReceipt ? 'Search deposit account…' : 'Search payment account…'} searchPlaceholder="Search cash or bank account…" options={[{ value: cashAccountId, label: 'Cash', group: 'Cash' }, ...banks.map(account => ({ value: account.id, label: account.name, secondaryText: account.bank_account_no ? `A/C ${account.bank_account_no}` : account.type, searchText: `${account.name} ${account.bank_account_no || ''} Bank ${account.type === 'Liability' ? 'Overdraft Bank OD Liability' : 'Current Assets'}`, group: account.type === 'Liability' ? 'Bank OD A/c' : 'Bank Accounts', disabled: !!account.is_archived }))]} />
             <LedgerBalanceHint account={selectedMoneyAccount} />
           </div>
           <div className="space-y-2">
@@ -404,7 +407,7 @@ export function ReceiptPaymentForm({ type, open, onClose, voucher }: ReceiptPaym
               return <div key={index} onFocusCapture={() => { focusedAllocationRef.current = index }} className="grid grid-cols-[minmax(0,1fr)_7rem_2.25rem] items-start gap-2 sm:grid-cols-[minmax(0,1fr)_10rem_2.25rem]">
                 <div className="min-w-0 space-y-1.5">
                   <div className="flex min-w-0 gap-1.5">
-                    <SearchableSelect triggerRef={element => { allocationTriggerRefs.current[index] = element }} className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger..." options={allocationAccounts.map(account => ({ value: account.id, label: account.name, searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type}`, disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) }))} />
+                    <SearchableSelect mode="typeahead" triggerRef={element => { allocationTriggerRefs.current[index] = element }} className="min-w-0 flex-1" value={allocation.account_id} onValueChange={value => updateAllocation(index, 'account_id', value)} placeholder="Select ledger…" searchPlaceholder="Search ledger by name or group…" options={sortSelectorOptions(allocationAccounts.map(account => ({ ...ledgerSelectorOption(account, accountCategories, parties.find(party => party.account_id === account.id)), disabled: !!account.is_archived || (selectedIds.has(account.id) && account.id !== allocation.account_id) })))} />
                     <Button type="button" variant="outline" size="sm" tabIndex={-1} title="Create ledger (Alt+N)" aria-label="Create ledger (Alt+N)" className="h-9 shrink-0 px-2" onClick={() => setLedgerLineIndex(index)}><Plus className="h-4 w-4" /><CreateShortcutHint className="ml-1" /></Button>
                   </div>
                   <LedgerBalanceHint account={selectedAccount} party={selectedParty} />
@@ -477,7 +480,7 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [dateInvalid, setDateInvalid] = useState(false)
-  const firstAccountTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const firstAccountTriggerRef = useRef<HTMLElement | null>(null)
   const journalDialogRef = useRef<HTMLDivElement | null>(null)
   const focusedJournalLineRef = useRef(0)
   const pendingJournalLineFocus = useRef<number | null>(null)
@@ -658,8 +661,8 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
         </p>
         <div className="space-y-4 py-2">
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
-            {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" tabIndex={-1} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
+            <div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} /></div>
+            {manualJournalNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={journalInvoiceNo} onChange={event => setJournalInvoiceNo(event.target.value)} maxLength={100} placeholder="Enter Journal voucher number" /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}
           </div>
 
           {/* Lines header */}
@@ -669,15 +672,12 @@ export function JournalForm({ open, onClose, voucher }: JournalFormProps) {
           {jLines.map((line, idx) => (
             <div key={idx} data-journal-line={idx} onFocusCapture={() => { focusedJournalLineRef.current = idx }} className="grid grid-cols-2 gap-2 rounded-md border p-2 sm:grid-cols-[2fr_1fr_1fr_auto] sm:items-center sm:border-0 sm:p-0">
               <div className="col-span-2 flex min-w-0 gap-1 sm:col-span-1">
-              <SearchableSelect triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} autoFocus={idx === 0} className="min-w-0 flex-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" options={journalAccounts.sort((a,b) => a.name.localeCompare(b.name)).map(account => {
+              <SearchableSelect mode="typeahead" triggerRef={idx === 0 ? firstAccountTriggerRef : undefined} className="min-w-0 flex-1" value={line.account_id} onValueChange={v => updateLine(idx, 'account_id', v)} placeholder="Select account…" searchPlaceholder="Search ledger by name or group…" options={sortSelectorOptions(journalAccounts.map(account => {
                 const party = partyByAccount.get(account.id)
                 return {
-                  value: account.id,
-                  label: account.name,
-                  group: party ? (party.type === 'customer' ? 'Customers' : 'Suppliers') : account.type,
-                  searchText: `${categoryPath(accountCategories, account.category_id)} ${account.group} ${account.type} ${party?.phone || ''} ${party?.pan_vat || ''} ${party?.address || ''}`,
+                  ...ledgerSelectorOption(account, accountCategories, party),
                 }
-              })} />
+              }))} />
               <Button type="button" variant="outline" size="sm" tabIndex={-1} className="h-9 shrink-0 px-2" aria-label="Create new ledger (Alt+N)" title="Create new ledger (Alt+N)" onClick={() => setLedgerLineIndex(idx)}>
                 <Plus className="h-3.5 w-3.5" /><CreateShortcutHint className="ml-1" />
               </Button>

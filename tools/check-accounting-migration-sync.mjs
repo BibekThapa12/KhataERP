@@ -6,6 +6,7 @@ const migrations = [
   '202609200001_accounting_integrity_manifest.sql',
   '202609210001_company_accounting_snapshot.sql',
   '202609210002_fix_voucher_number_double_increment.sql',
+  '202610170001_serialized_inventory.sql',
 ]
 for (const migration of migrations) {
   const sql = read(`supabase/migrations/${migration}`)
@@ -40,4 +41,11 @@ assert.match(numberingSql, /journal_numbering_mode/)
 assert.match(numberingSql, /allocator_calls <> 1/)
 assert.match(numberingSql, /lpad\(\(highest_number \+ 1\)/)
 assert.doesNotMatch(numberingSql, /update public\.voucher_number_counters\s+set last_number\s*=\s*0/i)
+const serialSql = read(`supabase/migrations/${migrations[3]}`)
+assert.match(serialSql, /create table if not exists public\.inventory_serials/)
+assert.match(serialSql, /create table if not exists public\.inventory_serial_movements/)
+assert.match(serialSql, /apply_voucher_serial_movements/)
+assert.match(serialSql, /public\.is_company_member\(p_company_id\)/)
+assert.match(serialSql, /A serial number linked to an active return cannot be removed/)
+assert.doesNotMatch(read('supabase/migrations/202610080001_paged_company_accounting_snapshot.sql'), /inventory_serial/i)
 console.log('Accounting migration copies and security guard checks passed. SQL was NOT executed.')

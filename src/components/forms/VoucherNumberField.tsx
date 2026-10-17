@@ -5,7 +5,7 @@ import { previewNextVoucherNumber, savedVoucherNumber } from '@/lib/voucherNumbe
 import type { Voucher, VoucherType } from '@/types'
 import { cn } from '@/lib/utils'
 
-export function VoucherNumberField({ type, dateBs, voucher, className }: { type: VoucherType; dateBs: string; voucher?: Voucher | null; className?: string }) {
+export function VoucherNumberField({ type, dateBs, voucher, className, helperText = 'Preview; confirmed when saved.' }: { type: VoucherType; dateBs: string; voucher?: Voucher | null; className?: string; helperText?: string }) {
   const company = useAppStore(state => state.company)
   const vouchers = useAppStore(state => state.vouchers)
   const number = voucher
@@ -15,6 +15,6 @@ export function VoucherNumberField({ type, dateBs, voucher, className }: { type:
   return <div className={cn('space-y-1.5', className)}>
     <Label>Voucher Number</Label>
       <Input value={number} readOnly tabIndex={-1} className="num !bg-[#f6f6f6] font-medium" />
-    {!voucher && <p className="text-[10px] text-muted-foreground">Preview; confirmed when saved.</p>}
+    {!voucher && <p className="text-[10px] text-muted-foreground">{helperText}</p>}
   </div>
 }

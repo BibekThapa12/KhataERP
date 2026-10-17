@@ -1,7 +1,7 @@
 import { lazy, useEffect, useMemo, useRef, useState } from 'react'
 import { useAppStore } from '@/store/useAppStore'
 import { buildContraLines, contraMoneyAccounts, resolveBankChargesAccountId } from '@/lib/contra'
-import { categoryPath } from '@/lib/categoryHierarchy'
+import { ledgerSelectorOption, sortSelectorOptions } from '@/lib/selectorOptions'
 import { selectedFiscalYearEndBs, selectedFiscalYearStartBs } from '@/lib/reports'
 import { publicErrorMessage, safeErrorMessage } from '@/lib/security'
 import { SubmissionLock } from '@/lib/submissionLock'
@@ -54,7 +54,7 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
   const workingDraftIdRef = useRef<string | undefined>(voucher?.status === 'Draft' ? voucher.id : undefined)
   const freshAfterDraftRef = useRef(false)
   const accounts = useMemo(() => company ? contraMoneyAccounts(rawAccounts, accountCategories, company.id) : [], [company, rawAccounts, accountCategories])
-  const options = accounts.map(account => ({ value: account.id, label: account.name, group: categoryPath(accountCategories, account.category_id) || account.group, searchText: `${account.name} ${categoryPath(accountCategories, account.category_id)} ${account.group}` }))
+  const options = sortSelectorOptions(accounts.map(account => ledgerSelectorOption(account, accountCategories)))
 
   useEffect(() => {
     const formIdentity = `Contra:${voucher?.id || 'new'}`
@@ -115,8 +115,8 @@ export function ContraForm({ open, voucher, onClose }: { open: boolean; voucher?
     <DialogHeader><DialogTitle>{voucher && !freshAfterDraftRef.current ? 'Edit' : 'Add'} Contra</DialogTitle></DialogHeader>
     <p className="-mt-2 text-sm text-muted-foreground">Move money seamlessly between your Cash and Bank ledgers.</p>
     <div className="space-y-4 py-2">
-      <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div>{manualNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={invoiceNo} onChange={event => setInvoiceNo(event.target.value)} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}</div>
-      <div className="grid gap-3 sm:grid-cols-2"><div onFocusCapture={() => { focusedLedgerTarget.current = 'source' }} className="space-y-1.5"><Label>Transfer From <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect value={sourceId} onValueChange={setSourceId} placeholder="Select Cash or Bank" options={options} /></div><div onFocusCapture={() => { focusedLedgerTarget.current = 'destination' }} className="space-y-1.5"><Label>Transfer To <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect value={destinationId} onValueChange={setDestinationId} placeholder="Select Cash or Bank" options={options.filter(option => option.value !== sourceId)} /></div></div>
+      <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} /></div>{manualNumbering ? <div className="space-y-1.5"><Label>Voucher Number</Label><Input value={invoiceNo} onChange={event => setInvoiceNo(event.target.value)} /></div> : <VoucherNumberField type="Journal" dateBs={dateBs} voucher={voucher} />}</div>
+      <div className="grid gap-3 sm:grid-cols-2"><div onFocusCapture={() => { focusedLedgerTarget.current = 'source' }} className="space-y-1.5"><Label>Transfer From <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect mode="typeahead" value={sourceId} onValueChange={setSourceId} placeholder="Select Cash or Bank" searchPlaceholder="Search cash or bank account…" options={options} /></div><div onFocusCapture={() => { focusedLedgerTarget.current = 'destination' }} className="space-y-1.5"><Label>Transfer To <span className="text-destructive">*</span><CreateShortcutHint /></Label><SearchableSelect mode="typeahead" value={destinationId} onValueChange={setDestinationId} placeholder="Select Cash or Bank" searchPlaceholder="Search cash or bank account…" options={options.filter(option => option.value !== sourceId)} /></div></div>
       <div className="grid gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Transfer Amount <span className="text-destructive">*</span></Label><Input type="number" min="0" step="0.01" value={amount || ''} onChange={event => setAmount(Number(event.target.value))} placeholder="0.00" /></div><div className="space-y-1.5"><Label>Bank Charge (optional)</Label><Input type="number" min="0" step="0.01" value={charge || ''} onChange={event => setCharge(Number(event.target.value))} placeholder="0.00" /></div></div>
       <div className="space-y-1.5"><Label>Note</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Transfer reference or details" /></div>
       {error && <p className="text-sm text-destructive">{error}</p>}

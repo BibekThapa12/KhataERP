@@ -220,7 +220,7 @@ interface AppState {
   saveJournal: (params: { lines: Omit<VoucherLine, 'id' | 'voucher_id'>[]; narration?: string; date_bs: string; invoice_no?: string; settlement_account_id?: string; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string; contra_charge_amount?: number; draft_payload?: Record<string, unknown> }, status?: Voucher['status']) => Promise<void>
   saveSimpleEntry: (params: SimpleEntrySaveParams, status?: Voucher['status']) => Promise<void>
   saveContra: (params: ContraSaveParams, status?: Voucher['status']) => Promise<void>
-  saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired' }, status?: Voucher['status']) => Promise<void>
+  saveStockAdjustment: (params: { item_id: string; qty_delta: number; rate: number; narration?: string; date_bs: string; stock_condition: StockCondition; transfer_to?: 'damaged' | 'expired'; serial_numbers?: string[] }, status?: Voucher['status']) => Promise<void>
   saveReturnVoucher: (params: ReturnSaveParams, status?: Voucher['status']) => Promise<void>
   saveDraftVoucher: (params: { id?: string; type: Voucher['type']; date_bs: string; narration?: string; party_account_id?: string | null; settlement_account_id?: string | null; simple_entry_type?: Voucher['simple_entry_type']; contra_entry?: boolean; contra_destination_account_id?: string | null; contra_charge_amount?: number; is_cash?: boolean; total?: number; draft_payload: Record<string, unknown> }) => Promise<Voucher>
   updateSalesVoucher: (id: string, params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
@@ -927,7 +927,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
     }
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, opening_qty: 0, opening_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, name: itemName, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
+    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, name: itemName, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
     const nextState = trace.sync('client_stock_recompute', () => {
       const items = [...get().items, newItem]
       return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }
@@ -1547,7 +1547,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
   },
 
-  saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs, stock_condition, transfer_to }, status = 'Completed') => {
+  saveStockAdjustment: async ({ item_id, qty_delta, rate, narration, date_bs, stock_condition, transfer_to, serial_numbers }, status = 'Completed') => {
     const { company } = get()
     if (!company) throw new Error('No company')
     const reconcile = savedCompanyRefresh(company.id)
@@ -1560,6 +1560,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     if (transfer_to && transfer_to === sourceCondition) throw new Error('Select a different destination for the transfer')
     const selectedItem = get().items.find(item => item.id === item_id)
     if (!selectedItem || selectedItem.is_service) throw new Error('Select a stock item for stock adjustments')
+    if (selectedItem.is_serialized && (!Number.isInteger(quantity) || (serial_numbers?.length || 0) !== quantity)) throw new Error(`Assign exactly ${quantity} serial numbers for this serialized stock adjustment`)
     if ((transfer_to || qty_delta < 0) && quantity > stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition) + 0.0001) throw new Error(`Only ${stockConditionQuantity(get().items, get().vouchers, item_id, sourceCondition)} units are available in ${sourceCondition} stock`)
     })
     const quantity = Math.abs(qty_delta)
@@ -1569,10 +1570,10 @@ export const useAppStore = create<AppState>((set, get) => ({
       lines: [],
       stock_lines: transfer_to
         ? [
-            { item_id, qty: quantity, rate, direction: 'out', stock_condition: 'saleable', is_transfer: true },
-            { item_id, qty: quantity, rate, direction: 'in', stock_condition: transfer_to, is_transfer: true },
+            { item_id, qty: quantity, rate, direction: 'out', stock_condition: 'saleable', is_transfer: true, serial_numbers },
+            { item_id, qty: quantity, rate, direction: 'in', stock_condition: transfer_to, is_transfer: true, serial_numbers },
           ]
-        : [{ item_id, qty: quantity, rate, direction: qty_delta > 0 ? 'in' : 'out', stock_condition, is_transfer: false }],
+        : [{ item_id, qty: quantity, rate, direction: qty_delta > 0 ? 'in' : 'out', stock_condition, is_transfer: false, serial_numbers }],
       numbering: voucherNumberingScope(company, 'Stock Adjustment', date_bs),
       audit: { eventType: 'stock_adjustment', metadata: { item_id, qty_delta, rate, stock_condition, transfer_to } },
       trace,
@@ -1819,7 +1820,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const enteredQuantity = draftNumber(payload, 'qtyDelta')
       const quantity = toBaseQty(mode === 'transfer' ? Math.abs(enteredQuantity) : enteredQuantity, factor)
       const rate = mode === 'transfer' ? get().stock.find(entry => entry.id === itemId)?.avg_cost || 0 : toBaseRate(draftNumber(payload, 'rate'), factor)
-      await get().saveStockAdjustment({ item_id: itemId, qty_delta: quantity, rate, narration: draftText(payload, 'narration', current.narration || ''), date_bs: todayBs(), stock_condition: draftText(payload, 'stockCondition', 'saleable') as StockCondition, transfer_to: mode === 'transfer' ? draftText(payload, 'transferTo', 'damaged') as 'damaged' | 'expired' : undefined }, 'Completed')
+      await get().saveStockAdjustment({ item_id: itemId, qty_delta: quantity, rate, narration: draftText(payload, 'narration', current.narration || ''), date_bs: todayBs(), stock_condition: draftText(payload, 'stockCondition', 'saleable') as StockCondition, transfer_to: mode === 'transfer' ? draftText(payload, 'transferTo', 'damaged') as 'damaged' | 'expired' : undefined, serial_numbers: Array.isArray(payload.serialNumbers) ? payload.serialNumbers.map(String) : undefined }, 'Completed')
       await get().deleteDraftVoucher(current.id)
     } else {
       throw new Error(`Bulk completion is not supported for ${current.type} drafts.`)

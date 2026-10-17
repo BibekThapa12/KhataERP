@@ -1,6 +1,6 @@
 export function focusLastSearchableSelect(placeholder: string) {
-  const triggers = Array.from(document.querySelectorAll<HTMLButtonElement>('button[role="combobox"]'))
-    .filter(trigger => trigger.textContent?.trim() === placeholder)
+  const triggers = Array.from(document.querySelectorAll<HTMLElement>('[role="combobox"]'))
+    .filter(trigger => trigger.textContent?.trim() === placeholder || trigger.getAttribute('placeholder') === placeholder || trigger.getAttribute('aria-label') === placeholder)
   triggers.at(-1)?.focus()
 }
 

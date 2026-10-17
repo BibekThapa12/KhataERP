@@ -14,6 +14,7 @@ import { ReportActions } from '@/components/reports/ReportActions'
 import { FormalReportPrintFooter, FormalReportPrintHeader } from '@/components/reports/FormalReportPrint'
 import { ReportDateFilters, type ReportRange } from '@/components/reports/ReportDateFilters'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
+import { itemSelectorOption } from '@/lib/selectorOptions'
 import { VoucherDetail } from '@/components/tables/VoucherTable'
 import { InvoiceForm } from '@/components/forms/InvoiceForm'
 import { ReturnForm } from '@/components/forms/ReturnForm'
@@ -195,7 +196,7 @@ export function StockLedgerPage() {
     <PageContent className="report-content space-y-4">
       <FormalReportPrintHeader company={company} title={isServiceLedger ? 'Service Ledger Statement' : 'Stock Ledger Statement'} periodLabel={`${fmtDate(from)} to ${fmtDate(to)}`} detailLabel={`${item?.name || 'No item selected'} · ${isServiceLedger ? 'Service' : methodLabel}`} />
       <Card className="report-controls"><CardContent className="space-y-4 p-4">
-        <div className="max-w-2xl space-y-1.5"><Label>Item / Service</Label><SearchableSelect value={selectedId} onValueChange={selectItem} placeholder="Select item or service" searchPlaceholder="Search name, SKU, barcode, category or unit…" emptyMessage="No matching items" options={sortedItems.map(candidate => ({ value: candidate.id, label: `${candidate.name}${candidate.is_service ? ' (Service)' : ''}${candidate.is_archived ? ' (Archived)' : ''}`, searchText: `${candidate.sku || ''} ${candidate.barcode || ''} ${categoryPath(itemCategories, candidate.category_id)} ${candidate.unit} ${candidate.alternate_unit || ''} ${candidate.is_service ? 'service' : 'stock'}` }))} /></div>
+        <div className="max-w-2xl space-y-1.5"><Label>Item / Service</Label><SearchableSelect mode="typeahead" value={selectedId} onValueChange={selectItem} placeholder="Select item or service" searchPlaceholder="Search item by name, SKU, or category…" noResultsText="No matching items" options={sortedItems.map(candidate => { const option = itemSelectorOption(candidate); return { ...option, secondaryText: [option.secondaryText, categoryPath(itemCategories, candidate.category_id), candidate.is_archived ? 'Archived' : ''].filter(Boolean).join(' · '), disabled: false } })} /></div>
         <div className="flex flex-wrap items-end justify-between gap-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /><div className="relative min-w-[240px] flex-1 sm:max-w-md"><Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" /><Input value={search} onChange={event => setSearch(event.target.value)} placeholder={isServiceLedger ? 'Search service activity...' : 'Search stock movements...'} className="pl-8" /></div></div>
       </CardContent></Card>
 

@@ -62,6 +62,7 @@ export interface Item {
   barcode?: string
   vat_applicable?: boolean
   is_service?: boolean
+  is_serialized?: boolean
   is_archived?: boolean
   created_at?: string
   // computed
@@ -89,6 +90,8 @@ export interface StockLine {
   direction: 'in' | 'out'
   stock_condition?: StockCondition
   is_transfer?: boolean
+  /** Write payload only. Persisted serial history is loaded on demand. */
+  serial_numbers?: string[]
   item?: Item
 }
 
@@ -114,6 +117,15 @@ export interface InvoiceItem {
   calculated_rate?: number | null
   price_overridden?: boolean
   pricing_snapshot?: PricingSnapshot | null
+  serial_numbers?: string[]
+}
+
+export interface InventorySerialCandidate {
+  id: string
+  serial_number: string
+  item_id: string
+  available: boolean
+  last_voucher_id?: string | null
 }
 
 export type PricingRuleScope = 'ITEM' | 'CATEGORY'

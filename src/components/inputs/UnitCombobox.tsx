@@ -69,6 +69,7 @@ export function UnitCombobox({ value, onValueChange, optional = false, exclude =
 
   return <>
     <SearchableSelect
+      mode="typeahead"
       id={id}
       value={optional && !value ? NO_ALTERNATIVE_UNIT : value}
       onValueChange={next => {

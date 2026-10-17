@@ -20,6 +20,21 @@ describe('searchable selection filtering', () => {
     expect(filterSearchableOptions(options, 'current assets bank').map(option => option.value)).toEqual(['bank-group'])
   })
 
+  it('matches secondary text, trailing metadata, and group names', () => {
+    const richOptions = [
+      { value: 'item', label: 'Coke', secondaryText: 'SKU CK-250 · pcs', trailingText: '24 pcs', group: 'Beverages' },
+      { value: 'ledger', label: 'ABC Bank', secondaryText: 'Asset · A/C 0012', group: 'Assets › Current Assets › Bank Accounts' },
+    ]
+    expect(filterSearchableOptions(richOptions, 'ck-250').map(option => option.value)).toEqual(['item'])
+    expect(filterSearchableOptions(richOptions, '24 pcs').map(option => option.value)).toEqual(['item'])
+    expect(filterSearchableOptions(richOptions, 'bank accounts').map(option => option.value)).toEqual(['ledger'])
+  })
+
+  it('filters a large option set without changing option identity', () => {
+    const large = Array.from({ length: 1000 }, (_, index) => ({ value: `item-${index}`, label: `Inventory Item ${index}`, secondaryText: `SKU-${index}` }))
+    expect(filterSearchableOptions(large, 'SKU-999')).toEqual([large[999]])
+  })
+
   it('retains grouped option metadata and returns all options for a blank query', () => {
     expect(filterSearchableOptions(options, '')).toEqual(options)
     expect(filterSearchableOptions(options, 'cash')[0].group).toBe('Asset')

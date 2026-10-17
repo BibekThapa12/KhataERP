@@ -1,5 +1,5 @@
 import { lazy, useState, useEffect, useMemo, useRef } from 'react'
-import { Plus, Printer, Tag, Trash2 } from 'lucide-react'
+import { CalendarDays, Plus, Printer, Tag, Trash2 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { fmtMoney } from '@/lib/utils'
 import { addDaysToBs } from '@/lib/nepaliDate'
@@ -31,13 +31,31 @@ import { applyInvoiceQuantityInput, releaseInvoicePricingLocks } from '@/lib/inv
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint, ItemCreateShortcutHint } from '@/components/ui/shortcut-hint'
 import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
+import { itemSelectorOption, partySelectorOption } from '@/lib/selectorOptions'
+import { fetchVoucherItemSerials } from '@/lib/supabase'
+import { SerialNumberEditor } from './SerialNumberEditor'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
-interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string; pricing_rule_id?: string; pricing_slab_id?: string; calculated_rate?: number; price_overridden?: boolean; pricing_snapshot?: PricingSnapshot; pricing_warning?: string; pricing_locked?: boolean }
+interface LineItem { item_id: string; qty: number; rate: string | number; unit_mode: UnitMode; entry_unit?: string; conversion_factor?: number; amount_input?: string; serial_numbers?: string[]; pricing_rule_id?: string; pricing_slab_id?: string; calculated_rate?: number; price_overridden?: boolean; pricing_snapshot?: PricingSnapshot; pricing_warning?: string; pricing_locked?: boolean }
 type DiscountMode = 'flat' | 'percent'
 
 function round2Local(n: number) { return Math.round((n + Number.EPSILON) * 1_000_000) / 1_000_000 }
+
+function PartyDetailDisplay({ label, value, emptyText = '—' }: { label: string; value?: string | null; emptyText?: string }) {
+  const displayValue = value?.trim() || emptyText
+  return (
+    <div className="min-w-0">
+      <p className="text-xs font-semibold leading-4 text-foreground">{label}</p>
+      <p
+        className={`mt-2 truncate text-sm leading-5 ${value?.trim() ? 'text-foreground' : 'text-muted-foreground'}`}
+        title={value?.trim() ? value.trim() : undefined}
+      >
+        {displayValue}
+      </p>
+    </div>
+  )
+}
 
 interface InvoiceFormProps {
   type: 'Sales' | 'Purchase'
@@ -67,11 +85,11 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const [showPartyForm, setShowPartyForm] = useState(false)
   const [showItemForm, setShowItemForm] = useState(false)
   const [newItemLineIdx, setNewItemLineIdx] = useState<number | null>(null)
-  const partyTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const partyTriggerRef = useRef<HTMLElement | null>(null)
   const dialogRef = useRef<HTMLDivElement | null>(null)
   const createContextRef = useRef<{ kind: 'party' } | { kind: 'item'; index: number } | null>(null)
   const dateInputRef = useRef<HTMLInputElement | null>(null)
-  const itemTriggerRefs = useRef<Array<HTMLButtonElement | null>>([])
+  const itemTriggerRefs = useRef<Array<HTMLElement | null>>([])
   const pendingLineFocus = useRef<number | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
@@ -86,6 +104,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
   const partyList = parties.filter(p => p.type === partyType && !p.is_archived)
   const selectedParty = parties.find(party => party.account_id === partyAccountId)
   const selectedPartyAccount = accounts.find(account => account.id === partyAccountId)
+  const selectedPartyAddress = selectedParty?.address?.trim() || selectedPartyAccount?.address?.trim() || ''
+  const selectedPartyPhone = selectedParty?.phone?.trim() || selectedPartyAccount?.contact_no?.trim() || ''
+  const selectedPartyPanNo = selectedParty?.pan_vat?.trim() || selectedPartyAccount?.pan_no?.trim() || ''
   const cashAccountId = company ? resolveSystemAccountId(accounts, company.id, 'cash') : ''
   const cashAccount = accounts.find(account => account.id === cashAccountId)
   const isEditing = !!voucher && !freshAfterDraftRef.current
@@ -178,7 +199,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       })) : (voucher.invoice_items || []).map(i => {
         const item = items.find(entry => entry.id === i.item_id)
         const factor = i.conversion_factor || 1
-        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined, pricing_locked: isSales }
+        return { item_id: i.item_id, qty: i.qty, rate: formatRateInput(i.rate), amount_input: i.amount == null ? undefined : String(i.amount), unit_mode: factor > 1 ? 'alternate' : 'main', entry_unit: i.entry_unit || i.unit || item?.unit, conversion_factor: factor, serial_numbers: i.serial_numbers, pricing_rule_id: i.pricing_rule_id || undefined, pricing_slab_id: i.pricing_slab_id || undefined, calculated_rate: i.calculated_rate ?? undefined, price_overridden: i.price_overridden, pricing_snapshot: i.pricing_snapshot || undefined, pricing_locked: isSales }
       }))
       setVatRate(vatEnabled ? (draft?.vatRate ?? voucher.vat_rate ?? 13) : 0)
       setDiscount(draft?.discount ?? voucher.discount ?? 0)
@@ -195,6 +216,22 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
       window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     }
   }, [open, voucher, vatEnabled, items, parties, company, type, isSales])
+
+  useEffect(() => {
+    if (!open || !company || !voucher || voucher.status === 'Draft') return
+    const serialized = (voucher.invoice_items || []).filter(line => items.find(item => item.id === line.item_id)?.is_serialized)
+    if (!serialized.length) return
+    let cancelled = false
+    Promise.all(serialized.map(async line => ({ itemId: line.item_id, serials: await fetchVoucherItemSerials(company.id, voucher.id, line.item_id) })))
+      .then(results => {
+        if (cancelled) return
+        const byItem = new Map(results.map(result => [result.itemId, result.serials]))
+        setLines(current => current.map(line => byItem.has(line.item_id) ? { ...line, serial_numbers: byItem.get(line.item_id) } : line))
+        window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
+      })
+      .catch(cause => { if (!cancelled) setError(publicErrorMessage(cause, 'loading invoice serial numbers')) })
+    return () => { cancelled = true }
+  }, [company, items, open, voucher])
 
   useEffect(() => {
     if (!open) {
@@ -251,7 +288,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     const next = [...lines]
     if (field === 'item_id') {
       const item = items.find(i => i.id === value)
-      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined, price_overridden: false, pricing_rule_id: undefined, pricing_slab_id: undefined, calculated_rate: undefined, pricing_snapshot: undefined, pricing_warning: undefined, pricing_locked: false }
+      next[idx] = { ...next[idx], item_id: value as string, unit_mode: 'main', entry_unit: item?.unit, conversion_factor: 1, amount_input: undefined, serial_numbers: [], price_overridden: false, pricing_rule_id: undefined, pricing_slab_id: undefined, calculated_rate: undefined, pricing_snapshot: undefined, pricing_warning: undefined, pricing_locked: false }
       if (!isSales) {
         const stock = getStockEntry(value as string)
         if (stock.avg_cost > 0) next[idx].rate = formatRateInput(stock.avg_cost)
@@ -352,6 +389,15 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!isCash && !partyAccountId) { setError(`Select a ${partyTerms.singular} or check "Cash".`); return }
     if (!Number.isInteger(creditDays) || creditDays < 0) { setError('Credit Days must be a whole number of 0 or more.'); return }
     if (!isSales && supplierInvoiceNo.trim().length > 100) { setError('Supplier Invoice No. cannot exceed 100 characters.'); return }
+    const serializedLineItems = validLines.filter(line => items.find(item => item.id === line.item_id)?.is_serialized).map(line => line.item_id)
+    if (new Set(serializedLineItems).size !== serializedLineItems.length) { setError('Use one invoice line per serialized item so each serial assignment remains unambiguous.'); return }
+    for (const line of validLines) {
+      const item = items.find(entry => entry.id === line.item_id)
+      if (!item?.is_serialized) continue
+      const baseQuantity = toBaseQty(line.qty, line.conversion_factor || 1)
+      if (!Number.isInteger(baseQuantity)) { setError(`"${item.name}" is serialized. Its base quantity must be a whole number.`); return }
+      if ((line.serial_numbers?.length || 0) !== baseQuantity) { setError(`Assign exactly ${baseQuantity} serial ${baseQuantity === 1 ? 'number' : 'numbers'} to "${item.name}".`); return }
+    }
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
@@ -496,50 +542,65 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
           </DialogHeader>
 
           <div className="invoice-workspace-body invoice-workspace-layout">
-            <section className="invoice-section invoice-document-section space-y-3" aria-labelledby="invoice-document-details">
-              <div>
-                <h3 id="invoice-document-details" className="invoice-section-title">Document details</h3>
-                <p className="mt-0.5 text-[11px] text-muted-foreground">Voucher date, party, and payment terms</p>
+            <section className="invoice-document-section min-h-min overflow-hidden rounded-lg border border-border bg-white shadow-[0_1px_2px_rgba(15,23,42,0.035)]" aria-labelledby="invoice-document-details">
+              <div className="border-b border-border bg-[#fafbfc] px-4 py-2.5">
+                <h3 id="invoice-document-details" className="font-['IBM_Plex_Sans'] text-[15px] font-semibold leading-5 text-foreground">Document details</h3>
               </div>
-            {/* Date + payment mode */}
-            <div className="flex flex-wrap items-start gap-3">
-              <div className="w-full space-y-1.5 sm:w-40">
-                <Label>Date</Label>
-                <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} tabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} />
-              </div>
-              <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} className="w-full sm:w-48" />
-              {!isSales && <div className="w-full space-y-1.5 sm:w-48">
-                <Label>Supplier Invoice No.</Label>
-                <Input value={supplierInvoiceNo} onChange={event => setSupplierInvoiceNo(event.target.value)} maxLength={100} placeholder="Physical bill number" tabIndex={-1} />
-              </div>}
-              <div className="flex h-8 items-center sm:mt-[1.2rem]">
-                <div className="flex items-center gap-2">
-                  <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} tabIndex={-1} className="h-4 w-4 shrink-0 rounded accent-primary" />
-                  <Label htmlFor={`${type.toLowerCase()}-cash-mode`} className="cursor-pointer font-normal">{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
+
+              <div className={`grid items-start gap-x-4 gap-y-3 px-4 py-3.5 sm:grid-cols-2 lg:grid-cols-3 ${isSales ? 'xl:grid-cols-[minmax(9.5rem,1fr)_minmax(10rem,1fr)_minmax(8rem,.7fr)_minmax(7rem,.75fr)_minmax(9.5rem,1fr)]' : '2xl:grid-cols-[minmax(9rem,.9fr)_minmax(9.5rem,1fr)_minmax(9.5rem,1fr)_minmax(8rem,.7fr)_minmax(7rem,.65fr)_minmax(9rem,.9fr)]'}`}>
+                <div className="min-w-0 space-y-1.5">
+                  <Label>Date (BS)</Label>
+                  <NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} error={dateInvalid} showErrorText={false} inputRef={dateInputRef} />
+                </div>
+                <VoucherNumberField type={type} dateBs={dateBs} voucher={voucher} helperText="Assigned on save" className="min-w-0" />
+                {!isSales && <div className="min-w-0 space-y-1.5">
+                  <Label>Supplier Invoice No.</Label>
+                  <Input value={supplierInvoiceNo} onChange={event => setSupplierInvoiceNo(event.target.value)} maxLength={100} placeholder="Physical bill number" />
+                </div>}
+                <div className="min-w-0 space-y-1.5">
+                  <Label>{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
+                  <div className="flex h-8 items-center gap-2">
+                    <input type="checkbox" id={`${type.toLowerCase()}-cash-mode`} checked={isCash} onChange={event => toggleCash(event.target.checked)} className="h-4 w-4 shrink-0 rounded accent-primary" />
+                    <Label htmlFor={`${type.toLowerCase()}-cash-mode`} className="cursor-pointer font-normal">{isSales ? 'Cash sale' : 'Cash purchase'}</Label>
+                  </div>
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <Label>Credit days</Label>
+                  <Input type="number" min="0" step="1" value={isCash ? 0 : creditDays} disabled={isCash} onChange={e => setCreditDays(Number(e.target.value))} className="w-full" />
+                </div>
+                <div className="min-w-0 space-y-1.5">
+                  <Label>Due date</Label>
+                  <div className="relative">
+                    <Input value={dueDateBs} readOnly tabIndex={-1} className="w-full !bg-[#f6f6f6] pr-9" />
+                    <CalendarDays aria-hidden="true" className="pointer-events-none absolute right-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  </div>
                 </div>
               </div>
-            </div>
 
-            {isCash && <LedgerBalanceHint account={cashAccount} />}
-
-            <div className={`grid gap-3 ${isCash ? 'sm:grid-cols-[11rem_12rem]' : 'lg:grid-cols-[minmax(18rem,1fr)_11rem_12rem]'}`}>
-              {!isCash && <div data-create-context="party" className="min-w-0 space-y-1.5">
-                <Label>{partyTerms.singular}</Label>
-                <div className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-2">
-                  <SearchableSelect triggerRef={partyTriggerRef} onTriggerFocus={() => { createContextRef.current = { kind: 'party' } }} autoFocus className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${partyTerms.singular}...`} searchPlaceholder={`Search ${partyTerms.plural}...`} options={partyList.map(p => ({ value: p.account_id, label: p.name, searchText: `${p.phone || ''} ${p.pan_vat || ''} ${p.address || ''} ${p.type} ${partyTerms.searchAliases}` }))} />
-                  <Button type="button" variant="outline" size="sm" tabIndex={-1} className="shrink-0 bg-white hover:bg-white" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New<CreateShortcutHint /></Button>
+              {isCash ? (
+                <div className="border-t border-border px-4 py-2.5">
+                  <LedgerBalanceHint account={cashAccount} />
                 </div>
-                <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
-              </div>}
-              <div className="min-w-0 space-y-1.5">
-                <Label>Credit Days</Label>
-                <Input type="number" min="0" step="1" value={isCash ? 0 : creditDays} disabled={isCash} onChange={e => setCreditDays(Number(e.target.value))} className="w-32" />
-              </div>
-              <div className="min-w-0 space-y-1.5">
-                <Label>Due Date</Label>
-                <Input value={dueDateBs} readOnly tabIndex={-1} className="w-44 !bg-[#f6f6f6]" />
-              </div>
-            </div>
+              ) : (
+                <div className="grid min-w-0 gap-4 border-t border-border px-4 py-3.5 lg:grid-cols-[minmax(22rem,1.15fr)_minmax(18rem,1fr)] lg:gap-5">
+                  <div data-create-context="party" className="min-w-0">
+                    <Label>{isSales ? 'Customer' : 'Supplier'}</Label>
+                    <div className="mt-1.5 grid min-w-0 grid-cols-[minmax(0,1fr)_auto] items-start gap-2.5">
+                      <SearchableSelect mode="typeahead" triggerRef={partyTriggerRef} onTriggerFocus={() => { createContextRef.current = { kind: 'party' } }} className="min-w-0" value={partyAccountId} onValueChange={selectParty} placeholder={`Select ${isSales ? 'customer' : 'supplier'}`} searchPlaceholder={`Search ${isSales ? 'customer' : 'supplier'}…`} options={partyList.map(p => partySelectorOption(p, accounts.find(account => account.id === p.account_id)))} />
+                      <div className="flex flex-col items-center gap-1">
+                        <Button type="button" variant="outline" size="sm" tabIndex={-1} className="shrink-0 bg-white px-3 text-primary hover:bg-primary/5 hover:text-primary" onClick={() => setShowPartyForm(true)}><Plus className="mr-1 h-3.5 w-3.5" />New</Button>
+                        <CreateShortcutHint className="ml-0 text-muted-foreground" />
+                      </div>
+                    </div>
+                    <LedgerBalanceHint account={selectedPartyAccount} party={selectedParty} />
+                  </div>
+                  <div className="grid min-w-0 gap-y-4 sm:grid-cols-3 sm:gap-x-6 lg:border-l lg:border-border lg:pl-5">
+                    <PartyDetailDisplay label="Address" value={selectedPartyAddress} />
+                    <PartyDetailDisplay label="Phone No." value={selectedPartyPhone} />
+                    <PartyDetailDisplay label="PAN No." value={selectedPartyPanNo} />
+                  </div>
+                </div>
+              )}
             </section>
 
             {/* Line items */}
@@ -566,7 +627,7 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   return (
                     <div key={idx} data-create-line={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
                       <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
-                        <SearchableSelect triggerRef={element => { itemTriggerRefs.current[idx] = element }} onTriggerFocus={() => { createContextRef.current = { kind: 'item', index: idx } }} autoFocus={isCash && idx === 0} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search name, SKU or barcode…" options={items.filter(i => !i.is_archived).map(i => ({ value: i.id, label: i.is_service ? `${i.name} (Service)` : `${i.name} (${i.unit}${i.alternate_unit ? ` / ${i.alternate_unit}` : ''})`, searchText: `${i.sku || ''} ${i.barcode || ''} ${i.unit} ${i.alternate_unit || ''} ${i.is_service ? 'service' : ''}` }))} />
+                        <SearchableSelect mode="typeahead" triggerRef={element => { itemTriggerRefs.current[idx] = element }} onTriggerFocus={() => { createContextRef.current = { kind: 'item', index: idx } }} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search item by name or SKU…" options={items.filter(i => !i.is_archived).map(i => itemSelectorOption(i))} />
                         <Button type="button" variant="outline" size="sm" tabIndex={-1} aria-label="Create new item (Alt+I)" className="h-8 flex-shrink-0 bg-white px-2 hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
                           <Plus className="h-3.5 w-3.5" /><ItemCreateShortcutHint className="ml-1" />
                         </Button>
@@ -592,6 +653,10 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
+                      {selectedItem?.is_serialized && company && <div className="col-span-2 flex items-center gap-2 lg:col-span-7 lg:pl-1">
+                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Serialized</span>
+                        <SerialNumberEditor companyId={company.id} itemId={selectedItem.id} itemName={selectedItem.name} quantity={toBaseQty(line.qty, line.conversion_factor || 1)} mode={isSales ? 'sale' : 'purchase'} value={line.serial_numbers} onChange={serial_numbers => setLines(current => current.map((entry, row) => row === idx ? { ...entry, serial_numbers } : entry))} excludeVoucherId={voucher?.status === 'Completed' ? voucher.id : null} />
+                      </div>}
                     </div>
                   )
                 })}

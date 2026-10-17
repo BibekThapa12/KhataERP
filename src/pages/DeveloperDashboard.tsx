@@ -667,7 +667,7 @@ function CompanySelector({ companies, selectedCompanyId, onSelect }: { companies
   return (
     <div className="flex flex-wrap items-center gap-2">
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Selected company</span>
-      <SearchableSelect className="w-full sm:w-72" value={selectedCompanyId || ''} onValueChange={onSelect} options={companies.map(company => ({ value: company.id, label: company.name, searchText: `${company.phone || ''} ${company.address || ''}` }))} />
+      <SearchableSelect mode="typeahead" className="w-full sm:w-72" value={selectedCompanyId || ''} onValueChange={onSelect} placeholder="Select company" searchPlaceholder="Search company…" options={companies.map(company => ({ value: company.id, label: company.name, secondaryText: [company.phone, company.address].filter(Boolean).join(' · '), searchText: `${company.phone || ''} ${company.address || ''}` }))} />
     </div>
   )
 }

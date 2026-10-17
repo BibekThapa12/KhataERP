@@ -23,7 +23,9 @@ import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, useVoucher
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { ItemCreateShortcutHint } from '@/components/ui/shortcut-hint'
 import { ItemForm } from '@/components/forms/OtherForms'
+import { itemSelectorOption } from '@/lib/selectorOptions'
 import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
+import { SerialNumberEditor } from './SerialNumberEditor'
 
 export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean; onClose: () => void; voucher?: Voucher | null }) {
   const { company, items, stock, vouchers, saveStockAdjustment, saveDraftVoucher, deleteDraftVoucher } = useAppStore()
@@ -36,11 +38,12 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
   const [qtyDelta, setQtyDelta] = useState('')
   const [rate, setRate] = useState('')
   const [narration, setNarration] = useState('')
+  const [serialNumbers, setSerialNumbers] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [showItemForm, setShowItemForm] = useState(false)
   const dialogRef = useRef<HTMLDivElement | null>(null)
-  const itemTriggerRef = useRef<HTMLButtonElement | null>(null)
+  const itemTriggerRef = useRef<HTMLElement | null>(null)
   const submissionLock = useRef(new SubmissionLock()).current
   const initializedFormRef = useRef<string | null>(null)
   const baselineRef = useRef('')
@@ -59,7 +62,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     const formIdentity = `StockAdjustment:${voucher?.id || 'new'}`
     if (!open) {
       initializedFormRef.current = null; baselineRef.current = ''; workingDraftIdRef.current = undefined; freshAfterDraftRef.current = false
-      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setSerialNumbers([]); setError('')
       return
     }
     if (initializedFormRef.current === formIdentity) return
@@ -68,7 +71,7 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     workingDraftIdRef.current = voucher?.status === 'Draft' ? voucher.id : undefined
     freshAfterDraftRef.current = false
     if (voucher?.status === 'Draft') {
-      const draft = voucher.draft_payload as Partial<{ dateBs:string; mode:'adjustment'|'transfer'; itemId:string; stockCondition:StockCondition; transferTo:'damaged'|'expired'; unitMode:UnitMode; qtyDelta:string; rate:string; narration:string }> | null
+      const draft = voucher.draft_payload as Partial<{ dateBs:string; mode:'adjustment'|'transfer'; itemId:string; stockCondition:StockCondition; transferTo:'damaged'|'expired'; unitMode:UnitMode; qtyDelta:string; rate:string; narration:string; serialNumbers:string[] }> | null
       setDateBs(draft?.dateBs || voucher.date_bs)
       setMode(draft?.mode || 'adjustment')
       setItemId(draft?.itemId || '')
@@ -78,12 +81,13 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
       setQtyDelta(draft?.qtyDelta || '')
       setRate(draft?.rate || '')
       setNarration(draft?.narration || voucher.narration || '')
+      setSerialNumbers(draft?.serialNumbers || [])
       setError('')
     }
     window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
   }, [open, voucher, company])
 
-  const formSnapshot = stableFormSnapshot({ dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration })
+  const formSnapshot = stableFormSnapshot({ dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration, serialNumbers })
   snapshotRef.current = formSnapshot
   const dirty = open && baselineRef.current !== '' && formSnapshot !== baselineRef.current
   const confirmDiscard = useUnsavedChangesGuard(open, dirty, onClose)
@@ -110,14 +114,15 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     try {
       const baseQuantity = toBaseQty(mode === 'transfer' ? Math.abs(Number(qtyDelta)) : Number(qtyDelta), conversionFactor)
       const baseRate = mode === 'transfer' ? selectedStock?.avg_cost || 0 : toBaseRate(rateInputNumber(rate), conversionFactor)
-      await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: voucher?.status === 'Draft' ? todayBs() : dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined }, status)
+      if (selectedItem?.is_serialized && (!Number.isInteger(Math.abs(baseQuantity)) || serialNumbers.length !== Math.abs(baseQuantity))) throw new Error(`Assign exactly ${Math.abs(baseQuantity)} serial numbers for this adjustment.`)
+      await saveStockAdjustment({ item_id: itemId, qty_delta: baseQuantity, rate: baseRate, narration: narration.trim(), date_bs: voucher?.status === 'Draft' ? todayBs() : dateBs, stock_condition: stockCondition, transfer_to: mode === 'transfer' ? transferTo : undefined, serial_numbers: serialNumbers }, status)
       const draftId = freshAfterDraftRef.current ? undefined : (voucher?.status === 'Draft' ? voucher.id : workingDraftIdRef.current)
       if (draftId) await deleteDraftVoucher(draftId)
       workingDraftIdRef.current = undefined
       completeVoucherPrint(printRequest, 'Stock Adjustment', voucher)
       printRequest = undefined
       onClose()
-      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setSerialNumbers([]); setError('')
     } catch (error: unknown) {
       cancelVoucherPrint(printRequest)
       setError(publicErrorMessage(error, 'saving stock adjustment'))
@@ -141,10 +146,10 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
         date_bs: dateBs,
         narration: narration.trim(),
         total: Math.abs(Number(qtyDelta) || 0) * rateInputNumber(rate),
-        draft_payload: { dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration },
+        draft_payload: { dateBs, mode, itemId, stockCondition, transferTo, unitMode, qtyDelta, rate, narration, serialNumbers },
       })
       workingDraftIdRef.current = undefined; freshAfterDraftRef.current = true; baselineRef.current = ''
-      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setError('')
+      setDateBs(selectedFiscalYearEndBs(company)); setMode('adjustment'); setItemId(''); setStockCondition('saleable'); setTransferTo('damaged'); setUnitMode('main'); setQtyDelta(''); setRate(''); setNarration(''); setSerialNumbers([]); setError('')
       window.setTimeout(() => { baselineRef.current = snapshotRef.current }, 0)
     } catch (error: unknown) {
       setError(publicErrorMessage(error, 'saving stock adjustment draft'))
@@ -169,10 +174,11 @@ export function StockAdjustmentForm({ open, onClose, voucher }: { open: boolean;
     <DialogContent ref={dialogRef} data-selectors-open-on-focus="true" className="voucher-dialog max-w-2xl">
       <DialogHeader><DialogTitle>Stock Adjustment</DialogTitle></DialogHeader>
       <div className="space-y-4 py-2">
-        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} voucher={voucher} /></div>
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="space-y-1.5"><Label>Date</Label><NepaliDateInput value={dateBs} onChange={setDateBs} min={selectedFiscalYearStartBs(company)} max={selectedFiscalYearEndBs(company)} calendarTabIndex={-1} /></div><VoucherNumberField type="Stock Adjustment" dateBs={dateBs} voucher={voucher} /></div>
         <div className="space-y-1.5"><Label>Adjustment Type</Label><SearchableSelect value={mode} onValueChange={value => setMode(value as typeof mode)} options={[{ value: 'adjustment', label: 'Quantity Adjustment' }, { value: 'transfer', label: 'Transfer Stock Condition' }]} /></div>
-        <div className="space-y-1.5"><Label>Item<ItemCreateShortcutHint /></Label><SearchableSelect triggerRef={itemTriggerRef} autoFocus value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate('') }} placeholder="Select item" options={stockItems.filter(item => !item.is_archived).map(item => ({ value: item.id, label: item.name, searchText: `${item.sku || ''} ${item.barcode || ''} ${item.unit} ${item.alternate_unit || ''}` }))} /></div>
+        <div className="space-y-1.5"><Label>Item<ItemCreateShortcutHint /></Label><SearchableSelect mode="typeahead" triggerRef={itemTriggerRef} value={itemId} onValueChange={value => { setItemId(value); setUnitMode('main'); setQtyDelta(''); setRate(''); setSerialNumbers([]) }} placeholder="Select item" searchPlaceholder="Search item by name or SKU…" options={stockItems.filter(item => !item.is_archived).map(item => itemSelectorOption(item))} /></div>
         {mode === 'adjustment' ? <><div className="space-y-1.5"><Label>Stock Condition</Label><SearchableSelect value={stockCondition} onValueChange={value => setStockCondition(value as StockCondition)} options={[{ value: 'saleable', label: 'Saleable' }, { value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-3"><div className="min-w-0 space-y-1.5"><Label>Qty Change</Label><Input type="number" step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="-2 or 5" /></div><div className="min-w-0 space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div><div className="min-w-0 space-y-1.5"><Label>Rate / {selectedUnit || 'Unit'}</Label><Input type="number" step="any" value={rate} onChange={event => setRate(event.target.value)} onBlur={() => setRate(current => formatRateInput(current))} placeholder="Cost rate" /></div></div></> : <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2"><div className="min-w-0 space-y-1.5"><Label>From</Label><Input value="Saleable" disabled /></div><div className="min-w-0 space-y-1.5"><Label>Destination</Label><SearchableSelect value={transferTo} onValueChange={value => setTransferTo(value as typeof transferTo)} options={[{ value: 'damaged', label: 'Damage' }, { value: 'expired', label: 'Expired' }]} /></div></div><div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(8rem,0.7fr)]"><div className="min-w-0 space-y-1.5"><Label>Transfer Quantity</Label><Input type="number" min="0" max={availableInSelectedUnit} step="any" value={qtyDelta} onChange={event => setQtyDelta(event.target.value)} placeholder="Quantity to transfer" /></div><div className="min-w-0 space-y-1.5"><Label>Unit</Label><SearchableSelect value={unitMode} disabled={!selectedItem?.alternate_unit} onValueChange={value => changeUnitMode(value as UnitMode)} options={[{ value: 'main', label: `${selectedItem?.unit || 'Main'} (Main)` }, ...(selectedItem?.alternate_unit && Number(selectedItem.alternate_conversion || 0) > 1 ? [{ value: 'alternate', label: `${selectedItem.alternate_unit} (Alternative)` }] : [])]} /></div></div><p className="text-xs text-muted-foreground">Available: {selectedItem ? formatStockQuantity(availableSaleable, selectedItem) : '0'}. Transferred at {fmtMoney(fromBaseRate(selectedStock?.avg_cost || 0, conversionFactor))} / {selectedUnit || 'unit'}.</p></>}
+        {selectedItem?.is_serialized && company && <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2"><div><p className="text-sm font-medium">Serial-number tracking</p><p className="text-xs text-muted-foreground">Assign one identity per base unit.</p></div><SerialNumberEditor companyId={company.id} itemId={selectedItem.id} itemName={selectedItem.name} quantity={Math.abs(toBaseQty(Number(qtyDelta) || 0, conversionFactor))} mode={mode === 'adjustment' && Number(qtyDelta) > 0 ? 'purchase' : 'sale'} value={serialNumbers} onChange={setSerialNumbers} /></div>}
         <div className="space-y-1.5"><Label>Reason</Label><Textarea value={narration} onChange={event => setNarration(event.target.value)} rows={2} placeholder="Damage, found stock, correction..." /></div>
         {error && <p className="text-sm text-destructive">{error}</p>}
       </div>
