@@ -71,6 +71,10 @@ export interface Item {
   stock_value?: number
 }
 
+export type ItemCreateInput = Omit<Item, 'id' | 'company_id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'> & {
+  opening_serial_numbers?: string[]
+}
+
 export interface VoucherLine {
   id?: string
   voucher_id?: string
@@ -141,12 +145,12 @@ export interface InventorySerialRegisterRow {
   received_date_bs?: string | null
   received_voucher_id?: string | null
   received_voucher_no?: string | null
-  received_voucher_type?: VoucherType | null
+  received_voucher_type?: VoucherType | 'Opening Stock' | null
   received_party?: string | null
   latest_date_bs?: string | null
   latest_voucher_id?: string | null
   latest_voucher_no?: string | null
-  latest_voucher_type?: VoucherType | null
+  latest_voucher_type?: VoucherType | 'Opening Stock' | null
   latest_party?: string | null
 }
 
@@ -196,12 +200,12 @@ export interface InventorySerialItemGroupResult {
 }
 
 export interface InventorySerialMovement {
-  movement_id: string
+  movement_id: string | null
   serial_id: string
-  voucher_id: string
-  date_bs: string
-  date_bs_key: number
-  voucher_type: VoucherType
+  voucher_id: string | null
+  date_bs: string | null
+  date_bs_key: number | null
+  voucher_type: VoucherType | 'Opening Stock'
   voucher_no: string
   direction: 'in' | 'out'
   stock_condition: StockCondition

@@ -349,6 +349,24 @@
     line-height: 1rem;
     color: hsl(var(--foreground));
   }
+  .item-workspace-body {
+    display: flex;
+    align-items: flex-start;
+  }
+  .item-workspace-layout {
+    display: grid;
+    width: 100%;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.75rem;
+  }
+  .item-workspace-section { min-width: 0; }
+  .item-workspace-error {
+    grid-column: 1 / -1;
+    border: 1px solid hsl(var(--destructive) / 0.28);
+    border-radius: 0.375rem;
+    background: hsl(var(--destructive) / 0.06);
+    padding: 0.625rem 0.75rem;
+  }
 }
 
 @media (min-width: 420px) and (max-width: 1023px) {
@@ -407,6 +425,15 @@
   .return-settlement-section textarea { min-height: 2.5rem; height: 2.5rem; }
   .return-summary-section > div:last-child { padding: 0.5rem 0.625rem; }
   .return-summary-section > div:last-child.space-y-2 > :not([hidden]) ~ :not([hidden]) { margin-top: 0.2rem; }
+  .item-workspace-layout {
+    grid-template-columns: minmax(0, 1.55fr) minmax(20rem, 1fr);
+    align-content: start;
+    gap: 0.625rem;
+  }
+  .item-identity-section { grid-column: 1 / -1; }
+  .item-stock-section { grid-column: 1; }
+  .item-reference-section { grid-column: 2; }
+  .item-workspace-section { padding: 0.75rem; }
 }
 
 @layer base {
@@ -477,11 +504,11 @@
 @media print {
   @page { margin: 10mm; }
   @page ledger-report { size: auto; margin: 9mm; }
-  @page balance-sheet-report { size: auto; margin: 8mm; }
   body { background: white; color: black; }
   body > #root > div > aside,
   .app-mobile-nav,
   .app-shortcuts,
+  .app-breadcrumb,
   .report-page > div:first-child,
   .report-controls { display: none !important; }
   body > #root > div,
@@ -639,21 +666,45 @@
   .report-page.transaction-register-report-page .report-content .register-print-table table { width: 100% !important; min-width: 0 !important; table-layout: auto; }
   .report-page.transaction-register-report-page .register-pan-column { white-space: nowrap; }
   .serial-register-report-page .report-table-card { display: none !important; }
+  .serial-register-report-page .serial-register-screen-only { display: none !important; }
   .serial-register-report-page .serial-register-print-table { display: block !important; }
-  .serial-register-report-page .serial-register-print-summary { display: grid; grid-template-columns: repeat(4, 1fr); border: 1px solid #4b5563; border-bottom: 0; padding: 5px 7px; color: #111827; font-family: Arial, sans-serif; font-size: 8px; }
-  .serial-register-report-page .serial-register-table { table-layout: fixed; width: 100% !important; min-width: 0 !important; font-size: 7.5px !important; }
+  .serial-register-report-page .serial-register-print-document { color: #17233b; font-family: 'IBM Plex Sans', Arial, sans-serif; print-color-adjust: exact; -webkit-print-color-adjust: exact; }
+  .serial-register-report-page .serial-register-print-summary { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; border: 1px solid #7d8797; background: #f5f7fa !important; }
+  .serial-register-report-page .serial-register-print-summary > div { min-width: 0; padding: 7px 9px; }
+  .serial-register-report-page .serial-register-print-summary > div + div { border-left: 1px solid #c6ccd4; }
+  .serial-register-report-page .serial-register-print-summary dt { color: #536074; font-size: 7.5px; font-weight: 600; letter-spacing: .055em; line-height: 1.2; text-transform: uppercase; }
+  .serial-register-report-page .serial-register-print-summary dd { margin: 2px 0 0; color: #102347; font-size: 14px; font-weight: 700; line-height: 1.1; }
+  .serial-register-report-page .serial-register-print-summary small { display: block; margin-top: 2px; color: #5f6978; font-size: 6.8px; line-height: 1.25; }
+  .serial-register-report-page .serial-register-print-group { margin-top: 9px; break-inside: auto; }
+  .serial-register-report-page .serial-register-print-group-heading { display: flex; align-items: end; justify-content: space-between; gap: 12px; border: 1px solid #7d8797; border-bottom: 0; background: #edf1f6 !important; padding: 5px 7px; break-after: avoid; page-break-after: avoid; }
+  .serial-register-report-page .serial-register-print-group-heading h3 { margin: 0; color: #102347; font-family: 'IBM Plex Sans', Arial, sans-serif; font-size: 10.5px; font-weight: 700; line-height: 1.25; }
+  .serial-register-report-page .serial-register-print-group-heading p { margin: 1px 0 0; color: #536074; font-size: 7px; line-height: 1.25; }
+  .serial-register-report-page .serial-register-print-group-heading > p { flex-shrink: 0; text-align: right; }
+  .serial-register-report-page .serial-register-print-group-heading strong { color: #17233b; font-weight: 700; }
+  .serial-register-report-page .serial-register-print-group-heading span { padding: 0 2px; color: #8a94a3; }
+  .serial-register-report-page .serial-register-table { width: 100% !important; min-width: 0 !important; table-layout: fixed; border-collapse: collapse; border: 1px solid #7d8797; color: #17233b; font-size: 7.6px !important; }
+  .serial-register-report-page .serial-register-table thead { display: table-header-group; }
+  .serial-register-report-page .serial-register-table tr { break-inside: avoid; page-break-inside: avoid; }
   .serial-register-report-page .serial-register-table th,
-  .serial-register-report-page .serial-register-table td { padding: 3px !important; line-height: 1.2; }
-  .serial-register-report-page .serial-register-table th:nth-child(1) { width: 4%; }
-  .serial-register-report-page .serial-register-table th:nth-child(2) { width: 13%; }
-  .serial-register-report-page .serial-register-table th:nth-child(3) { width: 13%; }
-  .serial-register-report-page .serial-register-table th:nth-child(4) { width: 9%; }
-  .serial-register-report-page .serial-register-table th:nth-child(5) { width: 7%; }
-  .serial-register-report-page .serial-register-table th:nth-child(6) { width: 13%; }
-  .serial-register-report-page .serial-register-table th:nth-child(7) { width: 13%; }
-  .serial-register-report-page .serial-register-table th:nth-child(8) { width: 15%; }
-  .serial-register-report-page .serial-register-table th:nth-child(9) { width: 13%; }
-  .balance-sheet-report-page { page: balance-sheet-report; }
+  .serial-register-report-page .serial-register-table td { border-right: 1px solid #c6ccd4; border-bottom: 1px solid #c6ccd4; padding: 4px 5px !important; overflow-wrap: anywhere; vertical-align: top; line-height: 1.25; }
+  .serial-register-report-page .serial-register-table th:last-child,
+  .serial-register-report-page .serial-register-table td:last-child { border-right: 0; }
+  .serial-register-report-page .serial-register-table tbody tr:last-child td { border-bottom: 0; }
+  .serial-register-report-page .serial-register-table th { background: #f7f8fa !important; color: #3f4b5d !important; font-size: 6.8px !important; font-weight: 700; letter-spacing: .045em; text-align: left; text-transform: uppercase; }
+  .serial-register-report-page .serial-register-table td strong,
+  .serial-register-report-page .serial-register-table td small { display: block; }
+  .serial-register-report-page .serial-register-table td strong { font-weight: 600; }
+  .serial-register-report-page .serial-register-table td small { margin-top: 1.5px; color: #667085; font-size: 6.8px; line-height: 1.25; }
+  .serial-register-report-page .serial-register-table .num { color: #667085; text-align: center; }
+  .serial-register-report-page .serial-register-table .serial-print-value { color: #0f1e38; font-family: 'IBM Plex Mono', monospace; font-size: 7.8px; font-weight: 600; }
+  .serial-register-report-page .serial-register-table .serial-print-no { width: 5%; text-align: center; }
+  .serial-register-report-page .serial-register-table .serial-print-number { width: 18%; }
+  .serial-register-report-page .serial-register-table .serial-print-state { width: 14%; }
+  .serial-register-report-page .serial-register-table .serial-print-received { width: 15%; }
+  .serial-register-report-page .serial-register-table .serial-print-source { width: 20%; }
+  .serial-register-report-page .serial-register-table .serial-print-latest { width: 28%; }
+  .serial-register-report-page .serial-register-print-empty { margin: 0; border: 1px solid #7d8797; padding: 18px; color: #667085; font-size: 9px; text-align: center; }
+  .serial-register-report-page .formal-report-print-footer { margin-top: 9px; border-top: 1px solid #4b5563; }
   .balance-sheet-screen-heading,
   .balance-sheet-status { display: none !important; }
   .balance-sheet-report-page .formal-report-print-header,
@@ -681,7 +732,6 @@
   .balance-sheet-print-total { display: grid; grid-template-columns: minmax(0, 1fr) 34%; border-top: 1px solid #111; border-bottom: 3px double #111; padding: 3px 7px; font-size: 10px; }
   .balance-sheet-print-total strong { letter-spacing: .24em; }
   .balance-sheet-print-total b { text-align: right; white-space: nowrap; }
-  .profit-loss-report-page { page: balance-sheet-report; }
   .profit-loss-report-page .formal-report-print-header,
   .profit-loss-report-page .formal-report-print-footer,
   .profit-loss-screen-statement { display: none !important; }
@@ -700,7 +750,6 @@
   .profit-loss-print-subtotal { display: grid; grid-template-columns: minmax(0, 1fr) 34%; border-top: 1px solid #111; padding: 3px 7px; font-size: 9px; }
   .profit-loss-print-subtotal b { border-bottom: 1px solid #111; text-align: right; white-space: nowrap; }
   .profit-loss-print-columns > .balance-sheet-print-total { border-top: 1px solid #111; }
-  .trial-balance-report-page { page: balance-sheet-report; }
   .trial-balance-report-page .formal-report-print-header,
   .trial-balance-report-page .formal-report-print-footer,
   .trial-balance-screen-statement { display: none !important; }
@@ -788,6 +837,27 @@
    Print CSS cannot read the paper-size name, so the printable width identifies
    A5 and other genuinely narrow sheets without changing A4/Letter output. */
 @media print and (max-width: 160mm) {
+  .serial-register-report-page .serial-register-print-summary > div { padding: 5px 6px; }
+  .serial-register-report-page .serial-register-print-summary dt { font-size: 6.5px; }
+  .serial-register-report-page .serial-register-print-summary dd { font-size: 11px; }
+  .serial-register-report-page .serial-register-print-summary small { font-size: 5.8px; }
+  .serial-register-report-page .serial-register-print-group { margin-top: 7px; }
+  .serial-register-report-page .serial-register-print-group-heading { align-items: start; padding: 4px 5px; }
+  .serial-register-report-page .serial-register-print-group-heading h3 { font-size: 9px; }
+  .serial-register-report-page .serial-register-print-group-heading p { font-size: 6px; }
+  .serial-register-report-page .serial-register-table { font-size: 6.6px !important; }
+  .serial-register-report-page .serial-register-table th,
+  .serial-register-report-page .serial-register-table td { padding: 3px !important; line-height: 1.18; }
+  .serial-register-report-page .serial-register-table th { font-size: 5.8px !important; letter-spacing: .025em; }
+  .serial-register-report-page .serial-register-table td small { font-size: 5.8px; }
+  .serial-register-report-page .serial-register-table .serial-print-value { font-size: 6.7px; }
+  .serial-register-report-page .serial-register-table .serial-print-no { width: 5%; }
+  .serial-register-report-page .serial-register-table .serial-print-number { width: 18%; }
+  .serial-register-report-page .serial-register-table .serial-print-state { width: 15%; }
+  .serial-register-report-page .serial-register-table .serial-print-received { width: 16%; }
+  .serial-register-report-page .serial-register-table .serial-print-source { width: 19%; }
+  .serial-register-report-page .serial-register-table .serial-print-latest { width: 27%; }
+
   .daybook-report-page .daybook-table {
     width: 100% !important;
     min-width: 0 !important;

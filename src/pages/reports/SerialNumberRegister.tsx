@@ -54,11 +54,13 @@ function SerialStatusBadge({ status }: { status: InventorySerialStatus }) {
 }
 
 function movementParty(row: InventorySerialRegisterRow, kind: 'received' | 'latest') {
+  if (kind === 'received' && row.received_voucher_type === 'Opening Stock') return 'Opening Stock'
   return kind === 'received' ? row.received_party || '—' : row.latest_party || '—'
 }
 
 function movementLabel(row: InventorySerialRegisterRow) {
   if (!row.latest_voucher_no) return 'No active movement'
+  if (row.latest_voucher_type === 'Opening Stock') return 'Opening Stock'
   const action = row.latest_voucher_type === 'Sales' ? 'Sold via'
     : row.latest_voucher_type === 'Sales Return' ? 'Returned via'
       : row.latest_voucher_type === 'Purchase Return' ? 'Supplier return via'
@@ -87,7 +89,7 @@ function SerialDetailTable({ rows, onHistory, onVoucher }: { rows: InventorySeri
           <td className="report-td"><SerialStatusBadge status={row.status} /></td>
           <td className="report-td">{row.stock_condition ? CONDITION_LABELS[row.stock_condition] : '—'}</td>
           <td className="report-td whitespace-nowrap">{row.received_date_bs ? fmtDate(row.received_date_bs) : '—'}</td>
-          <td className="report-td">{row.received_voucher_id ? <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={() => onVoucher(row.received_voucher_id!)}>{row.received_voucher_no || 'Open voucher'}</Button> : '—'}{row.received_party && <span className="mt-0.5 block max-w-52 truncate text-xs text-muted-foreground" title={row.received_party}>{row.received_party}</span>}</td>
+          <td className="report-td">{row.received_voucher_id ? <Button type="button" variant="link" className="h-auto p-0 text-sm" onClick={() => onVoucher(row.received_voucher_id!)}>{row.received_voucher_no || 'Open voucher'}</Button> : row.received_voucher_no || '—'}{row.received_party && <span className="mt-0.5 block max-w-52 truncate text-xs text-muted-foreground" title={row.received_party}>{row.received_party}</span>}</td>
           <td className="report-td">{row.latest_voucher_id ? <Button type="button" variant="link" className="h-auto p-0 text-left text-sm" onClick={() => onVoucher(row.latest_voucher_id!)}>{movementLabel(row)}</Button> : <span>{movementLabel(row)}</span>}<span className="mt-0.5 block max-w-52 truncate text-xs text-muted-foreground" title={movementParty(row, 'latest')}>{movementParty(row, 'latest')}</span></td>
           <td className="report-td text-right"><Button type="button" variant="outline" size="sm" onClick={() => onHistory(row)}><History className="mr-1.5 h-4 w-4" />View history</Button></td>
         </tr>)}</tbody>
@@ -96,17 +98,50 @@ function SerialDetailTable({ rows, onHistory, onVoucher }: { rows: InventorySeri
 
     <div className="divide-y md:hidden">{rows.map(row => <article key={row.serial_id} className="space-y-3 px-4 py-4">
       <div className="flex items-start justify-between gap-3"><div><p className="font-mono font-semibold">{row.serial_number}</p><p className="mt-0.5 text-xs text-muted-foreground">{row.stock_condition ? `${CONDITION_LABELS[row.stock_condition]} stock` : 'Outside inventory'}</p></div><SerialStatusBadge status={row.status} /></div>
-      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Received</dt><dd className="mt-0.5 font-medium">{row.received_date_bs ? fmtDate(row.received_date_bs) : '—'}</dd></div><div><dt className="text-muted-foreground">Purchase reference</dt><dd className="mt-0.5 font-medium">{row.received_voucher_id ? <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => onVoucher(row.received_voucher_id!)}>{row.received_voucher_no}</button> : '—'}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Latest movement</dt><dd className="mt-0.5 font-medium">{row.latest_voucher_id ? <button type="button" className="text-left text-primary underline-offset-4 hover:underline" onClick={() => onVoucher(row.latest_voucher_id!)}>{movementLabel(row)}</button> : movementLabel(row)}</dd></div></dl>
+      <dl className="grid grid-cols-2 gap-x-4 gap-y-2 text-xs"><div><dt className="text-muted-foreground">Received</dt><dd className="mt-0.5 font-medium">{row.received_date_bs ? fmtDate(row.received_date_bs) : row.received_voucher_type === 'Opening Stock' ? 'Opening balance' : '—'}</dd></div><div><dt className="text-muted-foreground">Purchase reference</dt><dd className="mt-0.5 font-medium">{row.received_voucher_id ? <button type="button" className="text-primary underline-offset-4 hover:underline" onClick={() => onVoucher(row.received_voucher_id!)}>{row.received_voucher_no}</button> : row.received_voucher_no || '—'}</dd></div><div className="col-span-2"><dt className="text-muted-foreground">Latest movement</dt><dd className="mt-0.5 font-medium">{row.latest_voucher_id ? <button type="button" className="text-left text-primary underline-offset-4 hover:underline" onClick={() => onVoucher(row.latest_voucher_id!)}>{movementLabel(row)}</button> : movementLabel(row)}</dd></div></dl>
       <Button type="button" variant="outline" size="sm" className="w-full" onClick={() => onHistory(row)}><History className="mr-1.5 h-4 w-4" />View serial history</Button>
     </article>)}</div>
   </>
 }
 
-function PrintableSerialTable({ rows }: { rows: InventorySerialRegisterRow[] }) {
-  return <table className="serial-register-table w-full border-collapse text-sm">
-    <thead><tr className="bg-muted/50"><th className="report-th text-left">S.No.</th><th className="report-th text-left">Serial Number</th><th className="report-th text-left">Item</th><th className="report-th text-left">Status</th><th className="report-th text-left">Condition</th><th className="report-th text-left">Received</th><th className="report-th text-left">Supplier / Source</th><th className="report-th text-left">Latest Movement</th><th className="report-th text-left">Party / Particulars</th></tr></thead>
-    <tbody>{rows.map((row, index) => <tr key={row.serial_id} className="border-t"><td className="report-td num">{index + 1}</td><td className="report-td font-mono font-semibold">{row.serial_number}</td><td className="report-td"><span className="block font-medium">{row.item_name}</span>{row.sku && <span className="block text-xs">SKU {row.sku}</span>}</td><td className="report-td">{STATUS_LABELS[row.status]}</td><td className="report-td">{row.stock_condition ? CONDITION_LABELS[row.stock_condition] : '—'}</td><td className="report-td">{row.received_date_bs ? fmtDate(row.received_date_bs) : '—'}<span className="block text-xs">{row.received_voucher_no || '—'}</span></td><td className="report-td">{movementParty(row, 'received')}</td><td className="report-td">{row.latest_date_bs ? fmtDate(row.latest_date_bs) : '—'}<span className="block text-xs">{movementLabel(row)}</span></td><td className="report-td">{movementParty(row, 'latest')}</td></tr>)}</tbody>
-  </table>
+function PrintableSerialRegister({ rows, summary }: { rows: InventorySerialRegisterRow[]; summary: InventorySerialItemGroupResult['summary'] }) {
+  const groups = Array.from(rows.reduce((map, row) => {
+    const current = map.get(row.item_id)
+    if (current) current.rows.push(row)
+    else map.set(row.item_id, { itemName: row.item_name, sku: row.sku, rows: [row] })
+    return map
+  }, new Map<string, { itemName: string; sku?: string | null; rows: InventorySerialRegisterRow[] }>()).values())
+
+  return <div className="serial-register-print-document">
+    <dl className="serial-register-print-summary">
+      <div><dt>Total tracked</dt><dd>{summary.total.toLocaleString('en-NP')}</dd></div>
+      <div><dt>Available</dt><dd>{summary.available.toLocaleString('en-NP')}</dd><small>{summary.saleable} saleable · {summary.damaged} damaged · {summary.expired} expired</small></div>
+      <div><dt>Sold</dt><dd>{summary.sold.toLocaleString('en-NP')}</dd></div>
+      <div><dt>Other outward</dt><dd>{(summary.returned_to_supplier + summary.adjusted_out).toLocaleString('en-NP')}</dd><small>{summary.returned_to_supplier} supplier return · {summary.adjusted_out} adjusted</small></div>
+    </dl>
+    {groups.length ? groups.map((group, groupIndex) => {
+      const available = group.rows.filter(row => row.status === 'available').length
+      const sold = group.rows.filter(row => row.status === 'sold').length
+      const otherOutward = group.rows.filter(row => row.status === 'returned_to_supplier' || row.status === 'adjusted_out').length
+      return <section key={`${group.itemName}-${groupIndex}`} className="serial-register-print-group">
+        <header className="serial-register-print-group-heading">
+          <div><h3>{group.itemName}</h3>{group.sku && <p>SKU {group.sku}</p>}</div>
+          <p><strong>{group.rows.length}</strong> tracked <span>·</span> <strong>{available}</strong> available <span>·</span> <strong>{sold}</strong> sold <span>·</span> <strong>{otherOutward}</strong> other outward</p>
+        </header>
+        <table className="serial-register-table">
+          <thead><tr><th className="serial-print-no">S.No.</th><th className="serial-print-number">Serial Number</th><th className="serial-print-state">Status / Condition</th><th className="serial-print-received">Received</th><th className="serial-print-source">Supplier / Source</th><th className="serial-print-latest">Latest Movement / Particulars</th></tr></thead>
+          <tbody>{group.rows.map((row, index) => <tr key={row.serial_id}>
+            <td className="num">{index + 1}</td>
+            <td className="serial-print-value">{row.serial_number}</td>
+            <td><strong>{STATUS_LABELS[row.status]}</strong><small>{row.stock_condition ? CONDITION_LABELS[row.stock_condition] : 'Outside inventory'}</small></td>
+            <td><strong>{row.received_date_bs ? fmtDate(row.received_date_bs) : row.received_voucher_type === 'Opening Stock' ? 'Opening balance' : '—'}</strong><small>{row.received_voucher_no || '—'}</small></td>
+            <td>{movementParty(row, 'received')}</td>
+            <td><strong>{movementLabel(row)}</strong><small>{row.latest_date_bs ? fmtDate(row.latest_date_bs) : 'No voucher date'}{row.latest_party ? ` · ${row.latest_party}` : ''}</small></td>
+          </tr>)}</tbody>
+        </table>
+      </section>
+    }) : <p className="serial-register-print-empty">No serial numbers match the selected filters.</p>}
+  </div>
 }
 
 function SerialItemGroup({ group, expanded, rows, loading, error, onToggle, onHistory, onVoucher }: { group: InventorySerialItemGroup; expanded: boolean; rows?: InventorySerialRegisterRow[]; loading: boolean; error?: string; onToggle: () => void; onHistory: (row: InventorySerialRegisterRow) => void; onVoucher: (voucherId: string) => void }) {
@@ -287,8 +322,11 @@ export function SerialNumberRegisterPage() {
   const printReport = async () => {
     setOutputBusy('print'); setError('')
     try {
-      setPrintRows(await fetchAllMatching())
-      window.setTimeout(() => window.print(), 50)
+      const rows = await fetchAllMatching()
+      setPrintRows(rows)
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+      await new Promise<void>(resolve => window.requestAnimationFrame(() => resolve()))
+      window.print()
     } catch (cause) { setError(publicErrorMessage(cause, 'preparing the complete serial register for printing')) } finally { setOutputBusy(null) }
   }
 
@@ -329,7 +367,7 @@ export function SerialNumberRegisterPage() {
         <div className="flex flex-wrap items-center justify-end gap-x-5 gap-y-2 text-xs"><span><strong className="text-emerald-700">{result.summary.available}</strong> available</span><span><strong className="text-blue-700">{result.summary.sold}</strong> sold</span><span><strong className="text-amber-700">{result.summary.returned_to_supplier + result.summary.adjusted_out}</strong> other outward</span>{result.groups.length > 0 && <ExpandCollapseControls expanded={visibleItemsExpanded} onToggle={() => void toggleAllItems()} />}</div>
       </div>
 
-      <div className="space-y-3">
+      <div className="serial-register-screen-only space-y-3 print:hidden">
         {loading ? Array.from({ length: 4 }, (_, index) => <div key={index} className="h-24 animate-pulse rounded-lg border bg-muted/30" aria-hidden="true" />)
           : result.groups.length ? result.groups.map(group => <SerialItemGroup key={group.item_id} group={group} expanded={expandedItemIds.has(group.item_id)} rows={itemRows[group.item_id]} loading={itemLoadingIds.has(group.item_id)} error={itemErrors[group.item_id]} onToggle={() => toggleItem(group)} onHistory={setHistoryRow} onVoucher={voucherId => void openVoucher(voucherId)} />)
             : <div className="rounded-lg border bg-card py-16 text-center"><Barcode className="mx-auto mb-3 h-9 w-9 text-muted-foreground/35" /><p className="font-medium">{serializedItems.length ? 'No matching serialized items' : 'No serialized items yet'}</p><p className="mt-1 text-sm text-muted-foreground">{serializedItems.length ? 'Try changing the search or filters.' : 'Enable serial tracking on an item and receive it through a Purchase bill.'}</p></div>}
@@ -337,7 +375,7 @@ export function SerialNumberRegisterPage() {
 
       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border bg-card px-3 py-2 text-sm print:hidden"><p className="text-muted-foreground">{result.total_items ? `${(page - 1) * ITEM_PAGE_SIZE + 1}–${Math.min(page * ITEM_PAGE_SIZE, result.total_items)} of ${result.total_items} items` : '0 items'}</p><div className="flex items-center gap-2"><Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => setPage(value => value - 1)}><ChevronLeft className="mr-1 h-4 w-4" />Previous</Button><span className="min-w-20 text-center tabular-nums">Page {page} of {pageCount}</span><Button variant="outline" size="sm" disabled={page >= pageCount || loading} onClick={() => setPage(value => value + 1)}>Next<ChevronRight className="ml-1 h-4 w-4" /></Button></div></div>
 
-      <div className="serial-register-print-table hidden"><div className="serial-register-print-summary"><span><strong>Tracked:</strong> {result.summary.total}</span><span><strong>Available:</strong> {result.summary.available}</span><span><strong>Sold:</strong> {result.summary.sold}</span><span><strong>Returned / Adjusted:</strong> {result.summary.returned_to_supplier + result.summary.adjusted_out}</span></div><PrintableSerialTable rows={printRows} /></div>
+      <div className="serial-register-print-table hidden"><PrintableSerialRegister rows={printRows} summary={result.summary} /></div>
       <FormalReportPrintFooter />
     </PageContent>
 
@@ -348,7 +386,7 @@ export function SerialNumberRegisterPage() {
         {historyError && <p role="alert" className="text-sm text-destructive">{historyError}</p>}
         {voucherError && <p role="alert" className="text-sm text-destructive">{voucherError}</p>}
         {historyLoading ? <div className="space-y-2">{[0, 1, 2].map(index => <div key={index} className="h-16 animate-pulse rounded-md bg-muted" />)}</div>
-          : history.length ? <ol className="relative ml-2 border-l border-border pl-5">{history.map(movement => <li key={movement.movement_id} className="relative pb-5 last:pb-0"><span className={cn('absolute -left-[1.55rem] top-1 h-3 w-3 rounded-full border-2 border-background', movement.cancelled ? 'bg-slate-400' : movement.direction === 'in' ? 'bg-emerald-500' : 'bg-blue-500')} /><div className={movement.cancelled ? 'opacity-60' : ''}><div className="flex flex-wrap items-center gap-2"><Button type="button" variant="link" className="h-auto gap-1 p-0 font-medium" disabled={voucherLoadingId === movement.voucher_id} onClick={() => void openVoucher(movement.voucher_id)}>{voucherLoadingId === movement.voucher_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}{movement.voucher_type} · {movement.voucher_no}</Button><Badge variant="outline">{movement.direction === 'in' ? 'Inward' : 'Outward'}</Badge>{movement.cancelled && <Badge variant="cancelled">Cancelled</Badge>}</div><p className="mt-1 text-sm text-muted-foreground">{fmtDate(movement.date_bs)} · {CONDITION_LABELS[movement.stock_condition]}{movement.party_name ? ` · ${movement.party_name}` : ''}</p>{movement.narration && <p className="mt-1 text-sm">{movement.narration}</p>}</div></li>)}</ol>
+          : history.length ? <ol className="relative ml-2 border-l border-border pl-5">{history.map(movement => <li key={movement.movement_id || `opening-${movement.serial_id}`} className="relative pb-5 last:pb-0"><span className={cn('absolute -left-[1.55rem] top-1 h-3 w-3 rounded-full border-2 border-background', movement.cancelled ? 'bg-slate-400' : movement.direction === 'in' ? 'bg-emerald-500' : 'bg-blue-500')} /><div className={movement.cancelled ? 'opacity-60' : ''}><div className="flex flex-wrap items-center gap-2">{movement.voucher_id ? <Button type="button" variant="link" className="h-auto gap-1 p-0 font-medium" disabled={voucherLoadingId === movement.voucher_id} onClick={() => void openVoucher(movement.voucher_id!)}>{voucherLoadingId === movement.voucher_id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ExternalLink className="h-3.5 w-3.5" />}{movement.voucher_type} · {movement.voucher_no}</Button> : <span className="font-medium">Opening Stock</span>}<Badge variant="outline">{movement.direction === 'in' ? 'Inward' : 'Outward'}</Badge>{movement.cancelled && <Badge variant="cancelled">Cancelled</Badge>}</div><p className="mt-1 text-sm text-muted-foreground">{movement.date_bs ? fmtDate(movement.date_bs) : 'Opening balance'} · {CONDITION_LABELS[movement.stock_condition]}{movement.party_name ? ` · ${movement.party_name}` : ''}</p>{movement.narration && <p className="mt-1 text-sm">{movement.narration}</p>}</div></li>)}</ol>
             : <div className="py-10 text-center text-sm text-muted-foreground"><PackageX className="mx-auto mb-2 h-8 w-8 opacity-35" />No movement history was found.</div>}
         {!historyLoading && history.length > 0 && <p className="flex items-center gap-2 border-t pt-3 text-xs text-muted-foreground"><PackageCheck className="h-4 w-4" />Only completed, non-cancelled movements determine current availability.</p>}
       </DialogContent>

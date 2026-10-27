@@ -34,6 +34,8 @@ import { beginVoucherPrint, cancelVoucherPrint, completeVoucherPrint, focusVouch
 import { useGlobalSaveShortcut } from '@/lib/globalSaveShortcut'
 import { useGlobalCreateShortcut } from '@/lib/globalCreateShortcut'
 import { CreateShortcutHint } from '@/components/ui/shortcut-hint'
+import { OpeningSerialAssignment } from './OpeningSerialAssignment'
+import { duplicateSerialNumbers } from '@/lib/serialAssignment'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 const CategoryDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.CategoryDialog })))
@@ -79,6 +81,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
   const [vatApplicable, setVatApplicable] = useState(true)
   const [isService, setIsService] = useState(false)
   const [isSerialized, setIsSerialized] = useState(false)
+  const [openingSerialNumbers, setOpeningSerialNumbers] = useState<string[]>([])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const submissionLock = useRef(new SubmissionLock()).current
@@ -86,7 +89,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setIsSerialized(false); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setIsSerialized(false); setOpeningSerialNumbers([]); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
@@ -94,18 +97,21 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
     setName(itemName)
     if (!itemName) { setError('Enter an item name.'); return }
     const mainUnit = isService ? 'Service' : unit.trim()
-    const altUnit = isService ? '' : alternateUnit.trim()
+    const altUnit = isService || isSerialized ? '' : alternateUnit.trim()
     if (!isService) {
       const unitError = validateItemUnits(mainUnit, altUnit)
       if (unitError) { setError(unitError); return }
       if (altUnit && alternateConversion <= 1) { setError('Alternative units per main unit must be greater than 1.'); return }
     }
-    if (isSerialized && openingQty > 0) { setError('Serialized items must start with zero opening stock. Add each serial through a Purchase invoice.'); return }
+    if (isSerialized && (!Number.isInteger(openingQty) || openingQty < 0)) { setError('Serialized opening stock must be a whole number.'); return }
+    if (isSerialized && rateInputNumber(openingRate) < 0) { setError('Opening cost cannot be negative.'); return }
+    if (isSerialized && openingSerialNumbers.filter(serial => serial.trim()).length !== openingQty) { setError(`Assign exactly ${openingQty} opening serial ${openingQty === 1 ? 'number' : 'numbers'}.`); return }
+    if (isSerialized && duplicateSerialNumbers(openingSerialNumbers).size) { setError('Opening serial numbers must be unique.'); return }
     const factor = !isService && openingUnitMode === 'alternate' && altUnit ? alternateConversion : 1
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService || isSerialized ? 0 : toBaseQty(openingQty, factor), opening_rate: isService || isSerialized ? 0 : toBaseRate(rateInputNumber(openingRate), factor), reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService, is_serialized: !isService && isSerialized })
+      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService ? 0 : isSerialized ? openingQty : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : isSerialized ? rateInputNumber(openingRate) : toBaseRate(rateInputNumber(openingRate), factor), opening_serial_numbers: isSerialized ? openingSerialNumbers.map(serial => serial.trim()) : undefined, reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService, is_serialized: !isService && isSerialized })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -117,10 +123,20 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
 
   return (
     <>
-    <Dialog open={open} onOpenChange={o => !o && onClose()}>
-      <DialogContent ref={itemDialogRef} className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>New Item</DialogTitle></DialogHeader>
-        <div className="space-y-4 py-2">
+    <Dialog modal={false} open={open} onOpenChange={o => !o && onClose()}>
+      <DialogContent ref={itemDialogRef} className="voucher-dialog invoice-workspace-dialog item-workspace-dialog">
+        <DialogHeader className="invoice-workspace-header item-workspace-header">
+          <DialogTitle>New Item</DialogTitle>
+          <p className="text-xs text-muted-foreground">Create the item, define how it is measured, and set its opening stock.</p>
+        </DialogHeader>
+        <div className="invoice-workspace-body item-workspace-body">
+          <div className="item-workspace-layout">
+          <section className="invoice-section item-workspace-section item-identity-section" aria-labelledby="item-identity-title">
+          <div className="mb-3">
+            <h3 id="item-identity-title" className="invoice-section-title">Item identity</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Name and classify the item for vouchers and reports.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 lg:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)]">
           <div className="space-y-1.5">
             <Label>Item Name</Label>
             <Input data-dialog-autofocus value={name} onChange={e => setName(e.target.value)} onBlur={() => setName(current => formatMasterName(current))} placeholder="Rice 25kg Bag" />
@@ -134,8 +150,17 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
               </Button>
             </div>
           </div>
+          </div>
+          <div className="mt-3 grid grid-cols-1 gap-2 lg:grid-cols-2">
           {allowService && <label className="flex items-center gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isService} onChange={e => setIsService(e.target.checked)} className="h-4 w-4 accent-primary" />This item is a service</label>}
-          {!isService && <label className="flex items-start gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isSerialized} onChange={e => { setIsSerialized(e.target.checked); if (e.target.checked) { setOpeningQty(0); setOpeningRate('0') } }} className="mt-0.5 h-4 w-4 accent-primary" /><span><span className="block font-medium">Track individual serial numbers</span><span className="block text-xs text-muted-foreground">For IMEI, chassis, engine, or device serial tracking. Every stock unit must have a unique identity.</span></span></label>}
+          {!isService && <label className="flex items-start gap-2 rounded-md border bg-muted/20 p-3 text-sm"><input type="checkbox" checked={isSerialized} onChange={e => { const checked = e.target.checked; setIsSerialized(checked); setOpeningSerialNumbers([]); if (checked) { setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main') } }} className="mt-0.5 h-4 w-4 accent-primary" /><span><span className="block font-medium">Track individual serial numbers</span><span className="block text-xs text-muted-foreground">One main-unit serial is required for every unit held in stock.</span></span></label>}
+          </div>
+          </section>
+          <section className="invoice-section item-workspace-section item-stock-section" aria-labelledby="item-stock-title">
+          <div className="mb-3">
+            <h3 id="item-stock-title" className="invoice-section-title">Stock and pricing</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Set units, rates, and the opening inventory position.</p>
+          </div>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {!isService && <div className="space-y-1.5">
               <Label>Main Unit</Label>
@@ -146,34 +171,47 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
               <Input type="number" step="any" value={sellRate} onChange={e => setSellRate(e.target.value)} onBlur={() => setSellRate(current => formatRateInput(current))} placeholder="0" />
             </div>
           </div>
-          {!isService && <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          {!isService && !isSerialized && <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>Alternative Unit (optional)</Label><UnitCombobox value={alternateUnit} onValueChange={value => { setAlternateUnit(value); if (!value) { setAlternateConversion(0); setOpeningUnitMode('main') } }} optional exclude={[unit]} /></div>
             <div className="space-y-1.5"><Label>Conversion Quantity</Label><Input type="number" min="1.0001" step="any" value={alternateConversion || ''} onChange={e => setAlternateConversion(Number(e.target.value))} placeholder={alternateUnit ? 'Enter manually' : 'Select alternative unit first'} disabled={!alternateUnit} /><p className="text-[11px] text-muted-foreground">Number of alternative units in one main unit</p></div>
           </div>
           {alternateUnit.trim() && alternateConversion > 1 && <p className="text-xs text-muted-foreground">1 {unit.trim() || 'main unit'} = {alternateConversion} {alternateUnit.trim()}</p>}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          </>}
+          {!isService && <><div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
               <Label>Opening Stock Qty</Label>
-              <Input type="number" step="any" value={openingQty || ''} onChange={e => setOpeningQty(Number(e.target.value))} placeholder="0" disabled={isSerialized} />
+              <div className="flex gap-2">
+                <Input type="number" min="0" step={isSerialized ? 1 : 'any'} value={openingQty || ''} onChange={e => setOpeningQty(Number(e.target.value))} placeholder="0" />
+                {isSerialized && <OpeningSerialAssignment itemName={name} quantity={openingQty} unit={unit} value={openingSerialNumbers} onChange={setOpeningSerialNumbers} />}
+              </div>
             </div>
             <div className="space-y-1.5">
               <Label>Opening Cost / Selected Unit (Rs)</Label>
-              <Input type="number" step="any" value={openingRate} onChange={e => setOpeningRate(e.target.value)} onBlur={() => setOpeningRate(current => formatRateInput(current))} placeholder="0" disabled={isSerialized} />
+              <Input type="number" min="0" step="any" value={openingRate} onChange={e => setOpeningRate(e.target.value)} onBlur={() => setOpeningRate(current => formatRateInput(current))} placeholder="0" />
             </div>
           </div>
-          {alternateUnit.trim() && alternateConversion > 1 && <div className="space-y-1.5"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: unit.trim() || 'pcs' }, { value: 'alternate', label: alternateUnit.trim() }]} /></div>}
+          {!isSerialized && alternateUnit.trim() && alternateConversion > 1 && <div className="space-y-1.5"><Label>Opening Stock Unit</Label><SearchableSelect value={openingUnitMode} onValueChange={value => setOpeningUnitMode(value as UnitMode)} options={[{ value: 'main', label: unit.trim() || 'pcs' }, { value: 'alternate', label: alternateUnit.trim() }]} /></div>}
           <div className="space-y-1.5">
             <Label>Reorder Level (optional)</Label>
             <Input type="number" step="any" value={reorderLevel} onChange={e => setReorderLevel(e.target.value)} placeholder="Alert when stock falls below…" />
           </div>
-          </>}<div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          </>}
+          </section>
+          <section className="invoice-section item-workspace-section item-reference-section" aria-labelledby="item-reference-title">
+          <div className="mb-3">
+            <h3 id="item-reference-title" className="invoice-section-title">Identification and tax</h3>
+            <p className="mt-1 text-xs text-muted-foreground">Add optional reference codes and tax treatment.</p>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={e => setSku(e.target.value)} placeholder="Optional" /></div>
             <div className="space-y-1.5"><Label>Barcode</Label><Input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Optional" /></div>
           </div>
           <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={vatApplicable} onChange={e => setVatApplicable(e.target.checked)} className="h-4 w-4 accent-primary" />VAT applicable</label>
-          {error && <p className="text-sm text-destructive">{error}</p>}
+          </section>
+          {error && <p role="alert" className="item-workspace-error text-sm text-destructive">{error}</p>}
+          </div>
         </div>
-        <DialogFooter>
+        <DialogFooter className="invoice-workspace-footer item-workspace-footer">
           <Button variant="outline" onClick={onClose}>Cancel</Button>
           <Button onClick={handleSave} disabled={saving}>{saving ? 'Saving…' : <>Save Item<kbd className="ml-2 rounded border border-current/25 px-1 py-0.5 text-[9px] font-semibold">Alt+S</kbd></>}</Button>
         </DialogFooter>

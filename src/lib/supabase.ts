@@ -911,6 +911,18 @@ export async function insertItem(item: Omit<Item, 'id' | 'created_at' | 'stock_q
   return data as Item
 }
 
+export async function createSerializedItemWithOpeningStock(
+  item: Omit<Item, 'id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'>,
+  openingSerialNumbers: string[],
+) {
+  const { data, error } = await supabase.rpc('create_serialized_item_with_opening_stock', {
+    p_item: item,
+    p_serial_numbers: openingSerialNumbers,
+  })
+  if (error) throw error
+  return data as Item
+}
+
 export async function updateItem(id: string, updates: Partial<Item>) {
   const { error } = await supabase.from('items').update(updates).eq('id', id)
   if (error) throw error

@@ -5,9 +5,9 @@ import { clearCompanySnapshotCache, loadCompanySnapshotCached, writeCompanySnaps
 import { ReconciliationQueue } from '@/lib/reconciliationQueue'
 import { withReadDeadline } from '@/lib/readDeadline'
 import { applyPersistedVoucher } from '@/lib/voucherState'
-import type { Account, AccountCategory, Company, Item, ItemCategory, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput, PricingRule } from '@/types'
+import type { Account, AccountCategory, Company, Item, ItemCategory, ItemCreateInput, Party, StockCondition, StockEntry, Voucher, VoucherLine, StockLine, CompanyModule, ChequePermission, ChequeBank, Cheque, CompanyMembership, CompanyCreationLicense, CompanyCreateInput, PricingRule } from '@/types'
 import {
-  insertAccount, insertParty, createPartyWithLedgerAtomic, insertItem,
+  insertAccount, insertParty, createPartyWithLedgerAtomic, insertItem, createSerializedItemWithOpeningStock,
   insertVoucher, insertDraftVoucher, cancelVoucher, deleteVoucher, updateCompany,
   updateVoucher, updateDraftVoucher, getOrCreateCompany,
   insertAccountCategory, insertItemCategory,
@@ -202,7 +202,7 @@ interface AppState {
   deletePricingRule: (id: string) => Promise<void>
 
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
-  addItem: (data: { name: string; unit: string; alternate_unit?: string | null; alternate_conversion?: number | null; sell_rate?: number; opening_qty?: number; opening_rate?: number; reorder_level?: number | null; category_id?: string; sku?: string; barcode?: string; vat_applicable?: boolean; is_service?: boolean }) => Promise<Item>
+  addItem: (data: ItemCreateInput) => Promise<Item>
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number; address?: string | null; contact_no?: string | null; pan_no?: string | null; credit_days?: number | null; bank_account_no?: string | null; bank_branch?: string | null }) => Promise<Account>
   addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<AccountCategory>
   alterAccountCategory: (id: string, updates: Partial<AccountCategory>) => Promise<void>
@@ -924,19 +924,27 @@ export const useAppStore = create<AppState>((set, get) => ({
     const { company } = get()
     if (!company) throw new Error('No company')
     return measuredWrite({ operation: 'create_item', companyId: company.id, recordType: 'Item', lineItems: 0 }, async trace => {
-    const itemName = formatMasterName(data.name)
+    const { opening_serial_numbers: openingSerialNumbers = [], ...itemData } = data
+    const itemName = formatMasterName(itemData.name)
     if (!itemName) throw new Error('Enter an item name.')
     if (get().items.some(item => masterNameKey(item.name) === masterNameKey(itemName))) throw new Error('Stock item already exist')
-    const isService = !!data.is_service
-    const unit = isService ? 'Service' : (canonicalItemUnit(data.unit) || data.unit.trim())
-    const alternateUnit = isService ? null : (data.alternate_unit ? canonicalItemUnit(data.alternate_unit) || data.alternate_unit.trim() : null)
+    const isService = !!itemData.is_service
+    const isSerialized = !isService && !!itemData.is_serialized
+    const unit = isService ? 'Service' : (canonicalItemUnit(itemData.unit) || itemData.unit.trim())
+    const alternateUnit = isService || isSerialized ? null : (itemData.alternate_unit ? canonicalItemUnit(itemData.alternate_unit) || itemData.alternate_unit.trim() : null)
     if (!isService) {
       const unitError = validateItemUnits(unit, alternateUnit)
       if (unitError) throw new Error(unitError)
-      if (alternateUnit && Number(data.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
+      if (alternateUnit && Number(itemData.alternate_conversion || 0) <= 1) throw new Error('Alternative units per main unit must be greater than 1.')
     }
+    const openingQuantity = Number(itemData.opening_qty || 0)
+    if (isSerialized && (!Number.isInteger(openingQuantity) || openingQuantity < 0)) throw new Error('Serialized opening stock must be a whole number.')
+    if (isSerialized && openingSerialNumbers.length !== openingQuantity) throw new Error(`Assign exactly ${openingQuantity} opening serial numbers.`)
     const generalCategory = get().itemCategories.find(category => category.name === 'General' && !category.is_archived)
-    const newItem = await trace.measure('item_insert', () => insertItem({ company_id: company.id, sell_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...data, name: itemName, is_service: isService, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? data.alternate_conversion : null, opening_qty: isService ? 0 : data.opening_qty || 0, opening_rate: isService ? 0 : data.opening_rate || 0, reorder_level: isService ? null : data.reorder_level }), { category: 'network_database', query: true, dbFunction: 'postgrest:items.insert' })
+    const itemPayload = { company_id: company.id, sell_rate: 0, category_id: generalCategory?.id, vat_applicable: true, is_archived: false, ...itemData, name: itemName, is_service: isService, is_serialized: isSerialized, unit, alternate_unit: alternateUnit, alternate_conversion: alternateUnit ? itemData.alternate_conversion : null, opening_qty: isService ? 0 : openingQuantity, opening_rate: isService ? 0 : itemData.opening_rate || 0, reorder_level: isService ? null : itemData.reorder_level }
+    const newItem = await trace.measure('item_insert', () => isSerialized
+      ? createSerializedItemWithOpeningStock(itemPayload, openingSerialNumbers)
+      : insertItem(itemPayload), { category: 'network_database', query: true, dbFunction: isSerialized ? 'rpc:create_serialized_item_with_opening_stock' : 'postgrest:items.insert' })
     const nextState = trace.sync('client_stock_recompute', () => {
       const items = [...get().items, newItem]
       return { items, stock: recomputeAffectedStock(items, get().stock, get().vouchers, [newItem.id], valuationMethod(company)) }

@@ -7,6 +7,8 @@ const migrations = [
   '202609210001_company_accounting_snapshot.sql',
   '202609210002_fix_voucher_number_double_increment.sql',
   '202610170001_serialized_inventory.sql',
+  '202610190001_allow_manual_serialized_returns.sql',
+  '202610200001_serialized_item_opening_stock.sql',
 ]
 for (const migration of migrations) {
   const sql = read(`supabase/migrations/${migration}`)

@@ -15,7 +15,16 @@
         "rule": "overused-font",
         "value": "arial",
         "createdAt": "2026-10-17T05:49:59.770Z",
-        "reason": "Intentional print-safe fallback used by established accounting report and PDF layouts"
+        "reason": "Agent: Arial is intentionally retained as the cross-platform fallback in formal accounting print styles for predictable printer output."
+      },
+      {
+        "rule": "overused-font",
+        "value": "arial",
+        "files": [
+          "src/index.css"
+        ],
+        "createdAt": "2026-10-20T03:06:35.487Z",
+        "reason": "Intentional print-safe font used only in formal report and accounting print styles; unrelated to the application UI and item workspace."
       }
     ]
   }

@@ -33,7 +33,8 @@ import { CreateShortcutHint, ItemCreateShortcutHint } from '@/components/ui/shor
 import { focusAfterNestedDialogCloses } from '@/lib/searchableSelectFocus'
 import { itemSelectorOption, partySelectorOption } from '@/lib/selectorOptions'
 import { fetchVoucherItemSerials } from '@/lib/supabase'
-import { SerialNumberEditor } from './SerialNumberEditor'
+import { InvoiceSerialAssignment } from './SalesSerialAssignment'
+import { duplicateSerialNumbers, serializedQuantityRequirement } from '@/lib/serialAssignment'
 
 const LedgerDialog = lazy(() => import('@/pages/Masters').then(module => ({ default: module.LedgerDialog })))
 
@@ -152,6 +153,13 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     [lines],
   )
   const totalQuantityLabel = totalQuantity.toLocaleString('en-IN', { maximumFractionDigits: 6 })
+  const showSerialColumn = useMemo(
+    () => lines.some(line => items.some(item => item.id === line.item_id && item.is_serialized)),
+    [items, lines],
+  )
+  const invoiceLineColumns = showSerialColumn
+    ? 'lg:grid-cols-[minmax(0,2.35fr)_minmax(0,.7fr)_minmax(0,.55fr)_minmax(0,.6fr)_minmax(0,.7fr)_minmax(0,.8fr)_minmax(0,.75fr)_2rem]'
+    : 'lg:grid-cols-[minmax(0,2.6fr)_minmax(0,.75fr)_minmax(0,.6fr)_minmax(0,.65fr)_minmax(0,.8fr)_minmax(0,.85fr)_2rem]'
   const discountAmount = round2Local(Math.min(subtotal, Math.max(0, discountMode === 'percent' ? subtotal * (discount / 100) : discount)))
   const taxable = round2Local(subtotal - discountAmount)
   const effectiveVatRate = vatEnabled ? vatRate : 0
@@ -391,13 +399,16 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
     if (!isSales && supplierInvoiceNo.trim().length > 100) { setError('Supplier Invoice No. cannot exceed 100 characters.'); return }
     const serializedLineItems = validLines.filter(line => items.find(item => item.id === line.item_id)?.is_serialized).map(line => line.item_id)
     if (new Set(serializedLineItems).size !== serializedLineItems.length) { setError('Use one invoice line per serialized item so each serial assignment remains unambiguous.'); return }
+    const assignedSerials: string[] = []
     for (const line of validLines) {
       const item = items.find(entry => entry.id === line.item_id)
       if (!item?.is_serialized) continue
-      const baseQuantity = toBaseQty(line.qty, line.conversion_factor || 1)
-      if (!Number.isInteger(baseQuantity)) { setError(`"${item.name}" is serialized. Its base quantity must be a whole number.`); return }
-      if ((line.serial_numbers?.length || 0) !== baseQuantity) { setError(`Assign exactly ${baseQuantity} serial ${baseQuantity === 1 ? 'number' : 'numbers'} to "${item.name}".`); return }
+      const requirement = serializedQuantityRequirement(line.qty, line.conversion_factor || 1)
+      if (!requirement.valid) { setError(`"${item.name}" is serialized. Its base quantity must be a positive whole number.`); return }
+      if ((line.serial_numbers?.length || 0) !== requirement.requiredCount) { setError(`Assign exactly ${requirement.requiredCount} serial ${requirement.requiredCount === 1 ? 'number' : 'numbers'} to "${item.name}".`); return }
+      assignedSerials.push(...(line.serial_numbers || []))
     }
+    if (duplicateSerialNumbers(assignedSerials).size) { setError('A serial number cannot be assigned more than once in the same invoice.'); return }
 
     if (isSales) {
       const requestedByItem = new Map<string, number>()
@@ -611,8 +622,8 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   <p className="mt-0.5 text-[11px] text-muted-foreground">Quantities, units, rates, and line amounts</p>
                 </div>
               </div>
-              <div className="mb-1.5 hidden grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] gap-1.5 lg:grid">
-                {['Item', 'Av. Stock', 'Qty', 'Unit', 'Rate', 'Amount', ''].map(h => (
+              <div className={`mb-1.5 hidden gap-1.5 lg:grid ${invoiceLineColumns}`}>
+                {['Item', 'Av. Stock', 'Qty', 'Unit', 'Rate', ...(showSerialColumn ? ['Serials'] : []), 'Amount', ''].map(h => (
                   <p key={h} className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">{h}</p>
                 ))}
               </div>
@@ -624,8 +635,9 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                   const selectedItem = items.find(item => item.id === line.item_id)
                   const stock = line.item_id ? getStockEntry(line.item_id) : null
                   const isServiceLine = !!selectedItem?.is_service
+                  const otherAssignedSerials = lines.flatMap((entry, row) => row === idx ? [] : (entry.serial_numbers || []))
                   return (
-                    <div key={idx} data-create-line={idx} className="grid grid-cols-2 gap-2 rounded-md border p-2 lg:grid-cols-[minmax(0,2.55fr)_minmax(0,0.75fr)_minmax(0,0.55fr)_minmax(0,0.65fr)_minmax(0,0.75fr)_minmax(0,0.75fr)_2rem] lg:items-start lg:gap-1.5 lg:border-0 lg:p-0">
+                    <div key={idx} data-create-line={idx} className={`grid grid-cols-2 gap-2 rounded-md border p-2 lg:items-start lg:gap-1.5 lg:border-0 lg:p-0 ${invoiceLineColumns}`}>
                       <div className="col-span-2 flex min-w-0 gap-1 lg:col-span-1">
                         <SearchableSelect mode="typeahead" triggerRef={element => { itemTriggerRefs.current[idx] = element }} onTriggerFocus={() => { createContextRef.current = { kind: 'item', index: idx } }} value={line.item_id} onValueChange={v => updateLine(idx, 'item_id', v)} placeholder="Select item…" searchPlaceholder="Search item by name or SKU…" options={items.filter(i => !i.is_archived).map(i => itemSelectorOption(i))} />
                         <Button type="button" variant="outline" size="sm" tabIndex={-1} aria-label="Create new item (Alt+I)" className="h-8 flex-shrink-0 bg-white px-2 hover:bg-white" onClick={() => { setNewItemLineIdx(idx); setShowItemForm(true) }}>
@@ -649,14 +661,27 @@ export function InvoiceForm({ type, open, onClose, voucher }: InvoiceFormProps) 
                           : <div className="invoice-entry-value flex h-8 items-center truncate text-muted-foreground">{line.entry_unit || item?.unit || '-'}</div>
                       })()}</div>
                       <div className="space-y-1"><Label className="text-xs lg:hidden">Rate</Label><div className="relative"><Input type="number" min="0" step="any" value={line.rate === '' ? '' : line.rate} onChange={e => updateLine(idx, 'rate', e.target.value)} onBlur={() => roundLineRate(idx)} onWheel={event => event.currentTarget.blur()} placeholder="Rate" className={`invoice-entry-value h-8 px-2 ${line.pricing_rule_id ? 'pr-7' : ''}`} />{line.pricing_rule_id && <span className="absolute right-1.5 top-1/2 -translate-y-1/2 text-primary" title={line.price_overridden ? `${line.pricing_snapshot?.rule_name || 'Slab rate'} calculated ${formatRateInput(line.calculated_rate || 0)}; manually overridden` : `${line.pricing_snapshot?.rule_name || 'Slab pricing'}: threshold ${line.pricing_snapshot?.min_quantity} ${line.pricing_snapshot?.quantity_unit}`}><Tag className="h-3.5 w-3.5"/></span>}</div>{line.pricing_warning && <p className="text-[10px] text-amber-700">{line.pricing_warning}</p>}</div>
+                      {showSerialColumn && <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Serials</Label>
+                        {selectedItem?.is_serialized && company
+                          ? <InvoiceSerialAssignment
+                              mode={isSales ? 'sale' : 'purchase'}
+                              companyId={company.id}
+                              itemId={selectedItem.id}
+                              itemName={selectedItem.name}
+                              quantity={line.qty}
+                              conversionFactor={line.conversion_factor || 1}
+                              entryUnit={line.entry_unit || selectedItem.unit}
+                              value={line.serial_numbers}
+                              excludedSerials={otherAssignedSerials}
+                              excludeVoucherId={voucher?.status === 'Completed' ? voucher.id : null}
+                              onChange={serial_numbers => setLines(current => current.map((entry, row) => row === idx ? { ...entry, serial_numbers } : entry))}
+                            />
+                          : <div className="flex h-8 items-center text-sm text-muted-foreground">—</div>}
+                      </div>}
                       <div className="min-w-0 space-y-1"><Label className="text-xs lg:hidden">Amount</Label><Input type="number" min="0" step="any" value={amountValue} onChange={event => updateLineAmount(idx, event.target.value)} onWheel={event => event.currentTarget.blur()} placeholder="Amount" className="invoice-entry-value h-8 px-2 num font-semibold" /></div>
                       <Button type="button" variant="ghost" size="icon" tabIndex={-1} className="h-8 w-8 self-end text-muted-foreground hover:text-destructive lg:self-auto" onClick={() => setLines(lines.filter((_, i) => i !== idx))}>
                         <Trash2 className="h-3.5 w-3.5" />
                       </Button>
-                      {selectedItem?.is_serialized && company && <div className="col-span-2 flex items-center gap-2 lg:col-span-7 lg:pl-1">
-                        <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600">Serialized</span>
-                        <SerialNumberEditor companyId={company.id} itemId={selectedItem.id} itemName={selectedItem.name} quantity={toBaseQty(line.qty, line.conversion_factor || 1)} mode={isSales ? 'sale' : 'purchase'} value={line.serial_numbers} onChange={serial_numbers => setLines(current => current.map((entry, row) => row === idx ? { ...entry, serial_numbers } : entry))} excludeVoucherId={voucher?.status === 'Completed' ? voucher.id : null} />
-                      </div>}
                     </div>
                   )
                 })}

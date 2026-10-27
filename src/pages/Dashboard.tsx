@@ -1,7 +1,7 @@
 import { lazy, Suspense, useEffect, useId, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Building2, FileClock, Landmark, Package, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
+  Building2, ChevronRight, FileClock, Landmark, Package, ReceiptText, ShoppingBag, TrendingDown, TrendingUp, Users, Wallet,
 } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { computeProfitAndLoss, computeStockConditionSummary, recomputeAllBalances, recomputeStock, resolveSystemAccountId, round2, type SystemAccountKey } from '@/lib/engine'
@@ -240,23 +240,32 @@ export function Dashboard() {
 
       <Card className="shadow-none"><CardContent className="p-3 sm:p-4"><ReportDateFilters company={company} range={range} from={from} to={to} onRangeChange={setRange} onFromChange={setFrom} onToChange={setTo} /></CardContent></Card>
 
-      <Card onClick={() => navigate('/draft-vouchers')} className="cursor-pointer border-amber-200 bg-amber-50/60 shadow-none transition-colors hover:bg-amber-50">
-        <CardContent className="flex flex-wrap items-center justify-between gap-3 p-4">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md border border-amber-200 bg-white text-amber-700"><FileClock className="h-[18px] w-[18px]" /></div>
-            <div>
-              <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Draft Vouchers</p>
-              <p className="mt-0.5 font-serif text-xl font-bold text-primary">{draftSummary.total}</p>
-            </div>
-          </div>
-          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs text-amber-900 sm:grid-cols-5">
-            <span>Sales {draftSummary.sales}</span>
-            <span>Purchase {draftSummary.purchases}</span>
-            <span>Receipt {draftSummary.receipts}</span>
-            <span>Payment {draftSummary.payments}</span>
-            <span>Journal {draftSummary.journals}</span>
-          </div>
-        </CardContent>
+      <Card className={`overflow-hidden shadow-none transition-[border-color,box-shadow] hover:border-primary/20 hover:shadow-sm ${draftSummary.total > 0 ? 'border-amber-200' : 'border-border/80'}`}>
+        <button type="button" onClick={() => navigate('/draft-vouchers')} aria-label={`Open draft vouchers, ${draftSummary.total} total`} className="group flex w-full flex-col gap-4 px-4 py-3 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring sm:px-5 lg:flex-row lg:items-center">
+          <span className="flex min-w-0 flex-1 items-center gap-3">
+            <span className={`flex h-10 w-10 shrink-0 items-center justify-center rounded-md border ${draftSummary.total > 0 ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-border bg-muted/35 text-muted-foreground'}`} aria-hidden="true"><FileClock className="h-[18px] w-[18px]" /></span>
+            <span className="min-w-0">
+              <span className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
+                <span className="font-serif text-base font-bold text-primary">Draft Vouchers</span>
+                <span className={`num text-sm font-semibold ${draftSummary.total > 0 ? 'text-amber-700' : 'text-muted-foreground'}`}>{draftSummary.total} total</span>
+              </span>
+              <span className="mt-0.5 block text-xs text-muted-foreground">{draftSummary.total > 0 ? 'Saved vouchers awaiting completion' : 'No vouchers awaiting completion'}</span>
+            </span>
+          </span>
+          <dl className="grid w-full grid-cols-3 gap-x-3 gap-y-2 sm:grid-cols-5 lg:w-auto lg:min-w-[31rem]">
+            {[
+              ['Sales', draftSummary.sales],
+              ['Purchase', draftSummary.purchases],
+              ['Receipt', draftSummary.receipts],
+              ['Payment', draftSummary.payments],
+              ['Journal', draftSummary.journals],
+            ].map(([label, count]) => <div key={label} className="flex items-center justify-between gap-3 px-2 py-1.5 sm:block sm:text-center">
+              <dt className="text-xs text-muted-foreground">{label}</dt>
+              <dd className="num text-sm font-semibold text-foreground sm:mt-0.5">{count}</dd>
+            </div>)}
+          </dl>
+          <ChevronRight className="hidden h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 lg:block" aria-hidden="true" />
+        </button>
       </Card>
 
       <section className="space-y-3" aria-labelledby="account-balance-heading">
