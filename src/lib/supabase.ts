@@ -7,6 +7,7 @@ import { setWritePerformanceReporter, type PersistedWritePerformanceSample, type
 import { ClientLogLimiter } from '@/lib/clientLogLimiter'
 import { auditFieldMarkers, publicErrorMessage, redactSensitiveText, safeErrorCode, safeErrorMessage, sanitizeForLogging } from '@/lib/security'
 import { formatMasterName } from '@/lib/nameFormat'
+import type { PortableInventorySerial } from '@/lib/portableBackup'
 
 function requiredPublicEnvironment(name: string, value: string | undefined) {
   if (!value || value.startsWith('your-') || value.includes('your-project-id')) {
@@ -510,7 +511,7 @@ export async function updateUserCompanyLimit(value: {
   return data
 }
 
-async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
+async function getOrCreateCompanyInternal(): Promise<Company> {
   const [{ data: userData }, companyResponse] = await Promise.all([
     supabase.auth.getUser(),
     fetchMyCompanies(),
@@ -583,11 +584,11 @@ async function getOrCreateCompanyInternal(user_id: string): Promise<Company> {
     payment_prefix: 'PAY-',
     sales_return_prefix: 'SR-',
     purchase_return_prefix: 'PR-',
-    journal_numbering_mode: 'auto',
+    journal_numbering_mode: 'auto' as const,
     reset_numbering_fiscal_year: true,
     allow_admin_chronological_bypass: false,
     enforce_sales_invoice_chronology: false,
-    print_format: 'A5',
+    print_format: 'A5' as const,
     show_company_details_on_sales_invoice: true,
     fiscal_year_start: DEFAULT_FISCAL_YEAR_START_AD,
     fiscal_year_configured: true,
@@ -602,7 +603,7 @@ export function getOrCreateCompany(user_id: string): Promise<Company> {
   const pending = companyInitializationPromises.get(user_id)
   if (pending) return pending
 
-  const request = getOrCreateCompanyInternal(user_id)
+  const request = getOrCreateCompanyInternal()
     .finally(() => companyInitializationPromises.delete(user_id))
   companyInitializationPromises.set(user_id, request)
   return request
@@ -629,7 +630,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
       vouchers: [],
       events: [],
       modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
-      companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+      companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as unknown as CompanyModule[],
       pricingRules: [] as PricingRule[],
     }
   }
@@ -678,7 +679,7 @@ export async function fetchDeveloperDashboardData(companyIds?: string[]) {
     vouchers: (vouchersRes.data || []).map(v => normalizeVoucherDates(v) as Voucher),
     events: eventsRes.error ? [] : (eventsRes.data || []),
     modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
-    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as unknown as CompanyModule[],
     pricingRules: pricingRulesRes.error ? [] : (pricingRulesRes.data || []) as PricingRule[],
   }
 }
@@ -723,7 +724,7 @@ export async function fetchDeveloperSystemOverview(): Promise<DeveloperSystemOve
     companies: (companiesRes.data || []) as Company[],
     events: (eventsRes.data || []) as DeveloperSystemOverview['events'],
     modules: modulesRes.error ? [] : (modulesRes.data || []) as AppModule[],
-    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as CompanyModule[],
+    companyModules: companyModulesRes.error ? [] : (companyModulesRes.data || []) as unknown as CompanyModule[],
     counts: {
       vouchers: vouchersCount.error ? null : vouchersCount.count,
       parties: partiesCount.error ? null : partiesCount.count,
@@ -755,7 +756,7 @@ export async function fetchModuleCatalogue(): Promise<AppModule[]> {
 }
 export async function fetchCompanyModules(company_id?:string): Promise<CompanyModule[]> {
   let query=supabase.from('company_modules').select(CLIENT_COMPANY_MODULE_FIELDS); if(company_id) query=query.eq('company_id',company_id)
-  const {data,error}=await query; if(error) throw error; return (data||[]) as CompanyModule[]
+  const {data,error}=await query; if(error) throw error; return (data||[]) as unknown as CompanyModule[]
 }
 export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_id:string;module_id:string}) {
   const {data:old}=await supabase.from('company_modules').select(COMPANY_MODULE_FIELDS).eq('company_id',value.company_id).eq('module_id',value.module_id).maybeSingle()
@@ -769,8 +770,8 @@ export async function upsertCompanyModule(value:Partial<CompanyModule>&{company_
   if(!old||JSON.stringify(old.settings)!==JSON.stringify(data.settings))changedFields.push('settings')
   const snapshot=(entry:CompanyModule|null)=>entry?{is_enabled:entry.is_enabled,status:entry.status,billing_type:entry.billing_type,price:entry.price,payment_status:entry.payment_status,starts_at:entry.starts_at,expires_at:entry.expires_at}:{}
   const action=!old||old.is_enabled!==data.is_enabled?(data.is_enabled?'module_enabled':'module_disabled'):'module_updated'
-  await logChequeEvent(value.company_id,action,undefined,undefined,snapshot(old as CompanyModule|null),{...snapshot(data as CompanyModule),changed_fields:changedFields})
-  return data as CompanyModule
+  await logChequeEvent(value.company_id,action,undefined,undefined,snapshot(old as CompanyModule|null),{...snapshot(data as unknown as CompanyModule),changed_fields:changedFields})
+  return data as unknown as CompanyModule
 }
 export async function fetchChequePermissions(company_id:string):Promise<ChequePermission[]> {
   const {data,error}=await supabase.from('company_user_permissions').select('permission').eq('company_id',company_id); if(error) throw error; return (data||[]).map(row=>row.permission as ChequePermission)
@@ -890,7 +891,7 @@ export async function insertParties(parties: Omit<Party, 'id' | 'created_at' | '
   return (data || []) as Party[]
 }
 
-export async function updateParty(id: string, updates: Partial<Party>) {
+export async function updateParty(id: string, updates: { [K in keyof Party]?: Party[K] | null }) {
   const { error } = await supabase.from('parties').update(updates).eq('id', id)
   if (error) throw error
 }
@@ -921,6 +922,18 @@ export async function createSerializedItemWithOpeningStock(
   })
   if (error) throw error
   return data as Item
+}
+
+export async function fetchCompanyInventorySerialBackup(companyId: string) {
+  const { data, error } = await supabase.rpc('company_inventory_serial_backup', { target_company: companyId })
+  if (error) throw error
+  return (data || []) as PortableInventorySerial[]
+}
+
+export async function restoreCompanyInventorySerials(companyId: string, serials: PortableInventorySerial[]) {
+  const { data, error } = await supabase.rpc('restore_company_inventory_serials', { p_company_id: companyId, p_serials: serials })
+  if (error) throw error
+  return Number(data || 0)
 }
 
 export async function updateItem(id: string, updates: Partial<Item>) {
@@ -1134,7 +1147,7 @@ export async function updateItemCategory(id: string, updates: Partial<ItemCatego
   if (error) throw error
 }
 
-export async function logMasterChange(company_id: string, record_type: string, record_id: string, action: string, old_values: Record<string, unknown>, new_values: Record<string, unknown>) {
+export async function logMasterChange(company_id: string, record_type: string, record_id: string, action: string, old_values: object, new_values: object) {
   const { data: { session } } = await supabase.auth.getSession()
   const user = session?.user
   const { error } = await supabase.from('master_change_logs').insert({
@@ -1308,11 +1321,11 @@ function assembleNormalizedVoucherChildren(raw: NormalizedAccountingSnapshot, vo
     voucher.settlements = []
     return [voucher.id, voucher]
   }))
-  const attach = <T extends { voucher_id: string }>(rows: T[] | undefined, field: 'lines' | 'stock_lines' | 'invoice_items') => {
+  const attach = <T extends { voucher_id?: string }>(rows: T[] | undefined, field: 'lines' | 'stock_lines' | 'invoice_items') => {
     for (const row of rows || []) {
-      const voucher = byVoucherId.get(row.voucher_id)
+      const voucher = row.voucher_id ? byVoucherId.get(row.voucher_id) : undefined
       if (!voucher) throw new Error(`Company accounting snapshot contains an orphaned ${field} row.`)
-      ;(voucher[field] as T[]).push(row)
+      ;(voucher[field] as unknown as T[]).push(row)
     }
   }
   attach(raw.voucher_lines, 'lines')
@@ -1592,33 +1605,30 @@ export async function insertVoucher({ voucher, lines, stock_lines, invoice_items
     }, 5 * 60 * 1000)
     throw error
   }
-  if (trace && data && typeof data === 'object') {
-    const postgresMs = Number((data as Record<string, unknown>)._performance && ((data as Record<string, unknown>)._performance as Record<string, unknown>).postgres_ms)
-    const requestEndedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
-    if (Number.isFinite(postgresMs)) {
-      trace.recordStage('postgres_execution', postgresMs, { category: 'network_database', dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
-      trace.recordStage('network_gateway_transfer', Math.max(0, requestEndedAt - requestStartedAt - postgresMs), { category: 'network_database' })
-    }
-  }
+  recordVoucherServerTiming(trace, data, requestStartedAt)
   voucherIdempotencyKeys.delete(fingerprint)
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 
+/** Splits a voucher RPC's elapsed time into Postgres execution and network transfer. */
+function recordVoucherServerTiming(trace: WritePerformanceTrace | undefined, data: unknown, requestStartedAt: number) {
+  if (!trace || !data || typeof data !== 'object') return
+  const postgresMs = Number((data as Record<string, unknown>)._performance && ((data as Record<string, unknown>)._performance as Record<string, unknown>).postgres_ms)
+  const requestEndedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
+  if (Number.isFinite(postgresMs)) {
+    trace.recordStage('postgres_execution', postgresMs, { category: 'network_database', dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
+    trace.recordStage('network_gateway_transfer', Math.max(0, requestEndedAt - requestStartedAt - postgresMs), { category: 'network_database' })
+  }
+}
+
 export async function updateVoucher({ id, voucher, lines, stock_lines, invoice_items, settlements, audit, trace }: UpdateVoucherPayload): Promise<Voucher> {
-  const request = () => atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit, undefined, trace?.traceId)
+  const request = async () => await atomicVoucherRequest(voucher, lines, stock_lines, invoice_items, settlements, id, undefined, audit, undefined, trace?.traceId)
   const requestStartedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
   const { data, error } = trace
     ? await trace.measure('atomic_voucher_replace', request, { category: 'network_database', query: true, dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
     : await request()
   if (error) throw error
-  if (trace && data && typeof data === 'object') {
-    const postgresMs = Number((data as Record<string, unknown>)._performance && ((data as Record<string, unknown>)._performance as Record<string, unknown>).postgres_ms)
-    const requestEndedAt = typeof performance === 'undefined' ? Date.now() : performance.now()
-    if (Number.isFinite(postgresMs)) {
-      trace.recordStage('postgres_execution', postgresMs, { category: 'network_database', dbFunction: 'rpc:save_voucher_with_performance_timing_atomic' })
-      trace.recordStage('network_gateway_transfer', Math.max(0, requestEndedAt - requestStartedAt - postgresMs), { category: 'network_database' })
-    }
-  }
+  recordVoucherServerTiming(trace, data, requestStartedAt)
   return normalizeVoucherDates(data as Voucher) as Voucher
 }
 

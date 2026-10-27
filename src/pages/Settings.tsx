@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Building2, Database, Download, FileSpreadsheet, ImagePlus, ReceiptText, Trash2, Upload, Users } from 'lucide-react'
 import { useAppStore } from '@/store/useAppStore'
 import { AccountingIntegrityPanel } from '@/components/AccountingIntegrityPanel'
-import { logAppEvent, supabase, supabaseProjectHost } from '@/lib/supabase'
+import { fetchCompanyInventorySerialBackup, logAppEvent, restoreCompanyInventorySerials, supabase, supabaseProjectHost } from '@/lib/supabase'
 import { downloadImportTemplate, executeImport, importModuleOptions, previewImportWorkbook, templateFor, type ImportModule, type ImportPreview } from '@/lib/importData'
 import { adToBs, bsToAd, DEFAULT_FISCAL_YEAR_START_BS, makeBsKey, parseBsDate } from '@/lib/nepaliDate'
 import { todayISO } from '@/lib/utils'
@@ -14,12 +14,12 @@ import { Textarea } from '@/components/ui/misc'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { NepaliDateInput } from '@/components/inputs/NepaliDateInput'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
-import type { CompanyModule, InventoryValuationMethod, InvoiceItem, Voucher } from '@/types'
+import type { Company, CompanyModule, InventoryValuationMethod, InvoiceItem, Voucher } from '@/types'
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
-import { buildPortableCompanyBackup, portableAccountIdMap, portableSystemAccountKey, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup } from '@/lib/portableBackup'
+import { buildPortableCompanyBackup, portableAccountIdMap, portableSystemAccountKey, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup, type PortableInventorySerial } from '@/lib/portableBackup'
 
 type RestoreProgress = {
   active: boolean
@@ -44,7 +44,7 @@ const portableCompanyFields = [
 function cleanCompanyBackup(company: unknown) {
   if (!company || typeof company !== 'object') return null
   const source = company as Record<string, unknown>
-  return Object.fromEntries(portableCompanyFields.filter(field => field in source).map(field => [field, source[field]]))
+  return Object.fromEntries(portableCompanyFields.filter(field => field in source).map(field => [field, source[field]])) as Partial<Company>
 }
 
 function withoutMeta<T extends Record<string, unknown>>(row: T, omit: string[] = []) {
@@ -434,8 +434,16 @@ export function SettingsPage() {
     }
   }
 
-  const handleExport = () => {
+  const handleExport = async () => {
+    let inventorySerials: PortableInventorySerial[] = []
+    try {
+      if (company && items.some(item => item.is_serialized)) inventorySerials = await fetchCompanyInventorySerialBackup(company.id)
+    } catch (e: unknown) {
+      setRestoreMessage(publicErrorMessage(e, 'reading serial numbers for the backup'))
+      return
+    }
     const data = buildPortableCompanyBackup({
+      inventorySerials,
       company,
       accountCategories,
       itemCategories,
@@ -520,26 +528,34 @@ export function SettingsPage() {
 
       const { data: existingVoucherRows, error: existingVoucherError } = await supabase
         .from('vouchers')
-        .select('id,status,lines:voucher_lines(id),stock_lines(id),invoice_items(id)')
+        .select('id,status')
         .eq('company_id', company.id)
       if (existingVoucherError) throw existingVoucherError
       const existingVouchers = existingVoucherRows || []
-      const incompleteRestoreHeaders = existingVouchers.length > 0 && existingVouchers.every(existing =>
-        existing.status === 'Draft' &&
-        (!Array.isArray(existing.lines) || existing.lines.length === 0) &&
-        (!Array.isArray(existing.stock_lines) || existing.stock_lines.length === 0) &&
-        (!Array.isArray(existing.invoice_items) || existing.invoice_items.length === 0)
-      )
+      // A failed restore leaves only Draft vouchers (with or without lines), because statuses are restored last.
+      const incompleteRestoreHeaders = existingVouchers.length > 0 && existingVouchers.every(existing => existing.status === 'Draft')
       if (existingVouchers.length && !incompleteRestoreHeaders) {
         throw new Error('Portable company restore cannot be imported into a company that already has vouchers. Create a new company first, then restore this backup there.')
       }
-      if (!window.confirm('Restore this portable backup into the active company? Existing company settings may be updated. Continue?')) {
+      const backupSerials = Array.isArray(backup.inventorySerials) ? backup.inventorySerials : []
+      const missingSerialItem = (Array.isArray(backup.items) ? backup.items : []).find(item => item.is_serialized && Number(item.opening_qty || 0) !== backupSerials.filter(serial => serial.item_id === item.id && serial.is_opening_stock).length)
+      if (missingSerialItem) {
+        throw new Error(`This backup does not contain the opening serial numbers for "${missingSerialItem.name}". Export a new backup from the original company and restore that file.`)
+      }
+      const confirmMessage = incompleteRestoreHeaders
+        ? `Restore this portable backup into the active company? The ${existingVouchers.length} Draft voucher(s) in this company, left by an earlier restore that did not finish, will be deleted first. Existing company settings may be updated. Continue?`
+        : 'Restore this portable backup into the active company? Existing company settings may be updated. Continue?'
+      if (!window.confirm(confirmMessage)) {
         setRestoreProgress(null)
         return
       }
       if (incompleteRestoreHeaders) {
-        showRestoreProgress('Cleaning incomplete restore', 'Removing orphaned Draft headers left by the previous failed import.')
-        const { error: cleanupError } = await supabase.from('vouchers').delete().in('id', existingVouchers.map(existing => existing.id))
+        showRestoreProgress('Cleaning incomplete restore', 'Removing Draft vouchers left by the previous failed import.')
+        const existingIds = existingVouchers.map(existing => existing.id)
+        // Return links use ON DELETE RESTRICT, so unlink them before deleting the Drafts together.
+        const { error: unlinkError } = await supabase.from('vouchers').update({ original_voucher_id: null }).in('id', existingIds)
+        if (unlinkError) throw unlinkError
+        const { error: cleanupError } = await supabase.from('vouchers').delete().in('id', existingIds)
         if (cleanupError) throw cleanupError
       }
 
@@ -569,11 +585,12 @@ export function SettingsPage() {
         { label: 'Stock lines', value: sourceStockLineCount },
         { label: 'Invoice items', value: sourceInvoiceItemCount },
         { label: 'Pricing rules', value: sourcePricingRules.length },
+        { label: 'Serial numbers', value: Array.isArray(backup.inventorySerials) ? backup.inventorySerials.length : 0 },
         { label: 'Settlements', value: orderedSourceVouchers.reduce((sum, voucher) => sum + (voucher.settlements?.length || 0), 0) },
         { label: 'Cheque banks', value: sourceChequeBanks.length },
         { label: 'Cheques', value: sourceCheques.length },
       ]
-      totalStages = 20
+      totalStages = 21
       finishRestoreStage('Backup read', 'Preparing fresh IDs for the active company.')
       showRestoreProgress('Updating company settings', 'Applying fiscal-year and company settings before importing vouchers.')
       const companyUpdates = cleanCompanyBackup(backup.company)
@@ -733,7 +750,8 @@ export function SettingsPage() {
         const nextId = crypto.randomUUID()
         idMap.set(item.id, nextId)
         itemIdByKey.set(itemKey, nextId)
-        return [{ ...withoutMeta(item as unknown as Record<string, unknown>), id: nextId, company_id: company.id, category_id: item.category_id ? idMap.get(item.category_id) || null : null }]
+        // Serialized opening quantity is set by restore_company_inventory_serials once the serials exist.
+        return [{ ...withoutMeta(item as unknown as Record<string, unknown>), id: nextId, company_id: company.id, category_id: item.category_id ? idMap.get(item.category_id) || null : null, ...(item.is_serialized ? { opening_qty: 0 } : {}) }]
       })
       if (itemRows.length) {
         const { error } = await supabase.from('items').insert(itemRows)
@@ -886,7 +904,7 @@ export function SettingsPage() {
         const sourcePlan = invoiceItemPlans.find(source =>
           source.voucher.id === originalVoucher?.id &&
           source.row.item_id === plan.row.item_id &&
-          Math.abs(portableNumber(source.row.rate, 0) - portableNumber(plan.row.rate, 0)) <= 0.000001
+          Math.abs(portableNumber(source.item.rate, 0) - portableNumber(plan.item.rate, 0)) <= 0.000001
         )
         const sourceIdFromBackup = plan.item.source_invoice_item_id ? invoiceItemIdMap.get(plan.item.source_invoice_item_id) : null
         const sourceInvoiceItemId = sourcePlan?.row.id || sourceIdFromBackup
@@ -931,7 +949,7 @@ export function SettingsPage() {
       for (const sourceBank of sourceChequeBanks) {
         const key = sourceBank.bank_name.trim().toLocaleLowerCase()
         let targetId = bankIdByName.get(key)
-        const bankRow = { ...withoutMeta(sourceBank as unknown as Record<string, unknown>, ['created_by', 'updated_by']), company_id: company.id, ledger_account_id: sourceBank.ledger_account_id ? idMap.get(sourceBank.ledger_account_id) || null : null, created_by: null, updated_by: null }
+        const bankRow: Record<string, unknown> = { ...withoutMeta(sourceBank as unknown as Record<string, unknown>, ['created_by', 'updated_by']), company_id: company.id, ledger_account_id: sourceBank.ledger_account_id ? idMap.get(sourceBank.ledger_account_id) || null : null, created_by: null, updated_by: null }
         if (targetId) {
           delete bankRow.id
           const { error } = await supabase.from('cheque_banks').update(bankRow).eq('id', targetId); if (error) throw error
@@ -943,6 +961,21 @@ export function SettingsPage() {
         idMap.set(sourceBank.id, targetId)
       }
       finishRestoreStage('Cheque banks restored', `${sourceChequeBanks.length} bank record(s) mapped.`)
+
+      showRestoreProgress('Restoring serial numbers', 'Recreating serial numbers and their voucher history.')
+      if (backupSerials.length) {
+        const mappedSerials = backupSerials.map(serial => ({
+          ...serial,
+          item_id: idMap.get(serial.item_id) || serial.item_id,
+          movements: serial.movements.map(movement => {
+            const voucherId = idMap.get(movement.voucher_id)
+            if (!voucherId) throw new Error(`Serial number ${serial.serial_number} refers to a voucher that is not in this backup.`)
+            return { ...movement, voucher_id: voucherId }
+          }),
+        }))
+        await restoreRequestWithRetry(() => restoreCompanyInventorySerials(company.id, mappedSerials), 'restoring serial numbers')
+      }
+      finishRestoreStage('Serial numbers restored', `${backupSerials.length} serial number(s) restored.`)
 
       showRestoreProgress('Restoring voucher status', 'Completing imported vouchers in date and serial order.')
       const completedSourceVouchers = orderedSourceVouchers.filter(voucher => voucher.status !== 'Draft')

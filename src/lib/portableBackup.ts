@@ -1,8 +1,15 @@
-import type { Account, AccountCategory, Cheque, ChequeBank, ChequeEvent, Company, CompanyModule, Item, ItemCategory, Party, PricingRule, Voucher } from '@/types'
+import type { Account, AccountCategory, Cheque, ChequeBank, ChequeEvent, Company, CompanyModule, Item, ItemCategory, Party, PricingRule, StockCondition, Voucher } from '@/types'
 
 export const PORTABLE_BACKUP_FORMAT = 'khataerp-portable-company-v1' as const
 
 export interface PortableBackupCounts { [key: string]: number }
+
+export interface PortableInventorySerial {
+  serial_number: string
+  item_id: string
+  is_opening_stock: boolean
+  movements: { voucher_id: string; direction: 'in' | 'out'; stock_condition: StockCondition }[]
+}
 
 export interface PortableCompanyBackup {
   format: typeof PORTABLE_BACKUP_FORMAT
@@ -21,6 +28,7 @@ export interface PortableCompanyBackup {
   items: Item[]
   vouchers: Voucher[]
   pricingRules?: PricingRule[]
+  inventorySerials?: PortableInventorySerial[]
   chequeBanks?: ChequeBank[]
   cheques?: Cheque[]
   chequeEvents?: ChequeEvent[]
@@ -114,6 +122,7 @@ export function portableBackupCounts(snapshot: PortableBackupSnapshot): Portable
     invoice_items: vouchers.reduce((sum, voucher) => sum + (voucher.invoice_items?.length || 0), 0),
     pricing_rules: rows(snapshot.pricingRules).length,
     pricing_rule_slabs: rows(snapshot.pricingRules).reduce((sum, rule) => sum + (rule.slabs?.length || 0), 0),
+    inventory_serials: rows(snapshot.inventorySerials).length,
     settlements: vouchers.reduce((sum, voucher) => sum + (voucher.settlements?.length || 0), 0),
     cheque_banks: rows(snapshot.chequeBanks).length,
     cheques: rows(snapshot.cheques).length,
@@ -140,6 +149,7 @@ export function buildPortableCompanyBackup(snapshot: PortableBackupSnapshot, met
     itemCategories: rows(cleanSnapshot.itemCategories || cleanSnapshot.item_categories),
     accounts: rows(cleanSnapshot.accounts), parties: rows(cleanSnapshot.parties), items: rows(cleanSnapshot.items), vouchers: rows(cleanSnapshot.vouchers),
     pricingRules: rows(cleanSnapshot.pricingRules),
+    inventorySerials: rows(cleanSnapshot.inventorySerials),
     chequeBanks: rows(cleanSnapshot.chequeBanks), cheques: rows(cleanSnapshot.cheques), chequeEvents: rows(cleanSnapshot.chequeEvents),
     companyModules: rows(cleanSnapshot.companyModules), masterChangeLogs: rows(cleanSnapshot.masterChangeLogs), appEvents: rows(cleanSnapshot.appEvents),
   }

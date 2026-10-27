@@ -23,7 +23,7 @@ import type { Voucher } from '@/types'
 
 const badgeVariant = (type: Voucher['type'], cancelled: boolean) => {
   if (cancelled) return 'cancelled' as const
-  const variants = { Sales: 'sales', Purchase: 'purchase', Receipt: 'receipt', Payment: 'payment', Journal: 'journal' } as const
+  const variants = { Sales: 'sales', Purchase: 'purchase', 'Sales Return': 'sales', 'Purchase Return': 'purchase', Receipt: 'receipt', Payment: 'payment', Journal: 'journal' } as const
   return type === 'Stock Adjustment' ? 'secondary' as const : variants[type]
 }
 

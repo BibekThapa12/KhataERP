@@ -98,7 +98,7 @@ export function isReusableCompanySnapshot(
   companyId: string,
   dataVersion: string | null,
   now = Date.now(),
-) {
+): entry is CachedCompanySnapshot {
   return !!entry
     && !!dataVersion
     && entry.formatVersion === CACHE_FORMAT_VERSION

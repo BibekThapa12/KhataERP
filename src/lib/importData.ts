@@ -58,7 +58,7 @@ export interface ImportExecutionContext {
   parties: Party[]
   items: Item[]
   itemCategories: ItemCategory[]
-  addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<void>
+  addAccountCategory: (data: { name: string; account_type: Account['type']; parent_category_id?: string | null }) => Promise<unknown>
   addAccount: (data: { name: string; type: Account['type']; group: string; category_id?: string; opening_balance?: number; address?: string | null; contact_no?: string | null; pan_no?: string | null; credit_days?: number | null; bank_account_no?: string | null; bank_branch?: string | null }) => Promise<Account>
   addParty: (data: { name: string; type: 'customer' | 'supplier'; phone?: string; pan_vat?: string; address?: string; default_credit_days?: number; opening_balance?: number }) => Promise<Party>
   addItemCategory: (data: { name: string; parent_category_id?: string | null }) => Promise<ItemCategory>
@@ -537,7 +537,7 @@ async function saveDraftGroup(module: ImportModule, rows: Record<string, unknown
     // A non-VAT company must not acquire VAT merely because the spreadsheet
     // contains the template's default VAT rate. Keep the saved draft summary
     // and its editable payload aligned with the voucher form.
-    const vatRate = importedVoucherVatRate(context.company.vat_enabled, first.vat_rate)
+    const vatRate = importedVoucherVatRate(!!context.company.vat_enabled, first.vat_rate)
     const total = Math.round((subtotal - discount + ((subtotal - discount) * vatRate / 100) + Number.EPSILON) * 1_000_000) / 1_000_000
     await context.saveDraftVoucher({ type: isSales ? 'Sales' : 'Purchase', date_bs: dateBs, narration, party_account_id: isCash ? null : party?.account_id || null, is_cash: isCash, total, draft_payload: { dateBs, isCash, partyAccountId: isCash ? '' : party?.account_id || '', creditDays: num(first.credit_days), supplierInvoiceNo: str(first.supplier_invoice_no), lines, vatRate, discount, discountMode: 'flat', narration } })
     return

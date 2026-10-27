@@ -2,7 +2,7 @@ import type { Company, CompanyBillingStatus } from '@/types'
 
 const DAY_MS = 86_400_000
 
-function legacyExpiry(value?: string) {
+function legacyExpiry(value?: string | null) {
   if (!value) return null
   const parsed = new Date(`${value}T23:59:59.999+05:45`)
   return Number.isNaN(parsed.getTime()) ? null : parsed

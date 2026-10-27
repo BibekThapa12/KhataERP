@@ -67,7 +67,7 @@ export function LedgerReportPage() {
   useEffect(() => { if (range === 'fiscal') { setFrom(selectedFiscalYearStartBs(company)); setTo(selectedFiscalYearEndBs(company)) } }, [company, range])
   useEffect(() => {
     if (!targetId) return
-    const next = mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }
+    const next: Record<string, string> = mode === 'ledger' ? { account: targetId } : { mode: 'group', category: targetId }
     setSearchParams(partyStatementPrint ? { ...next, print: 'party-statement', ...(embeddedPartyStatementPrint ? { embedded: '1' } : {}) } : next, { replace: true })
   }, [mode, targetId, setSearchParams, partyStatementPrint, embeddedPartyStatementPrint])
 

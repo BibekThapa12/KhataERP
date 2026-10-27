@@ -78,7 +78,6 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false)
   const [sku, setSku] = useState('')
   const [barcode, setBarcode] = useState('')
-  const [vatApplicable, setVatApplicable] = useState(true)
   const [isService, setIsService] = useState(false)
   const [isSerialized, setIsSerialized] = useState(false)
   const [openingSerialNumbers, setOpeningSerialNumbers] = useState<string[]>([])
@@ -89,7 +88,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
 
   useEffect(() => {
     if (open && !categoryId) setCategoryId(itemCategories.find(category => category.name === 'General' && !category.is_archived)?.id || itemCategories.find(category => !category.is_archived)?.id || '')
-    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setVatApplicable(true); setIsService(false); setIsSerialized(false); setOpeningSerialNumbers([]); setError('') }
+    if (!open) { setName(''); setUnit('Pcs'); setAlternateUnit(''); setAlternateConversion(0); setOpeningUnitMode('main'); setSellRate('0'); setOpeningQty(0); setOpeningRate('0'); setReorderLevel(''); setCategoryId(''); setCategoryDialogOpen(false); setSku(''); setBarcode(''); setIsService(false); setIsSerialized(false); setOpeningSerialNumbers([]); setError('') }
   }, [open, categoryId, itemCategories])
 
   const handleSave = async () => {
@@ -111,7 +110,7 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
     if (!submissionLock.tryAcquire()) return
     setSaving(true)
     try {
-      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService ? 0 : isSerialized ? openingQty : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : isSerialized ? rateInputNumber(openingRate) : toBaseRate(rateInputNumber(openingRate), factor), opening_serial_numbers: isSerialized ? openingSerialNumbers.map(serial => serial.trim()) : undefined, reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), vat_applicable: vatApplicable, is_service: isService, is_serialized: !isService && isSerialized })
+      const item = await addItem({ name: itemName, unit: mainUnit, alternate_unit: altUnit || null, alternate_conversion: altUnit ? alternateConversion : null, sell_rate: rateInputNumber(sellRate), opening_qty: isService ? 0 : isSerialized ? openingQty : toBaseQty(openingQty, factor), opening_rate: isService ? 0 : isSerialized ? rateInputNumber(openingRate) : toBaseRate(rateInputNumber(openingRate), factor), opening_serial_numbers: isSerialized ? openingSerialNumbers.map(serial => serial.trim()) : undefined, reorder_level: isService ? undefined : (reorderLevel ? Number(reorderLevel) : undefined), category_id: categoryId || undefined, sku: sku.trim(), barcode: barcode.trim(), is_service: isService, is_serialized: !isService && isSerialized })
       onCreated?.(item)
       onClose()
     } catch (e: unknown) {
@@ -206,7 +205,6 @@ export function ItemForm({ open, onClose, onCreated, allowService = true }: Item
             <div className="space-y-1.5"><Label>SKU</Label><Input value={sku} onChange={e => setSku(e.target.value)} placeholder="Optional" /></div>
             <div className="space-y-1.5"><Label>Barcode</Label><Input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="Optional" /></div>
           </div>
-          <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={vatApplicable} onChange={e => setVatApplicable(e.target.checked)} className="h-4 w-4 accent-primary" />VAT applicable</label>
           </section>
           {error && <p role="alert" className="item-workspace-error text-sm text-destructive">{error}</p>}
           </div>

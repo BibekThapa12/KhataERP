@@ -5,9 +5,9 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build",
+    "build": "tsc -p tsconfig.app.json && vite build",
     "lint": "oxlint",
-    "test": "vitest run",
+    "test": "vitest run && node tools/check-accounting-migration-sync.mjs",
     "test:watch": "vitest",
     "preview": "vite preview"
   },

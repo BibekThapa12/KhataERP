@@ -71,7 +71,7 @@ export interface Item {
   stock_value?: number
 }
 
-export type ItemCreateInput = Omit<Item, 'id' | 'company_id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'> & {
+export type ItemCreateInput = Pick<Item, 'name' | 'unit'> & Partial<Omit<Item, 'id' | 'company_id' | 'created_at' | 'stock_qty' | 'avg_cost' | 'stock_value'>> & {
   opening_serial_numbers?: string[]
 }
 
@@ -299,7 +299,7 @@ export interface Voucher {
   due_date_bs?: string
   due_date_bs_key?: number
   narration?: string
-  original_voucher_id?: string
+  original_voucher_id?: string | null
   return_reason?: string
   settlement_mode?: 'party' | 'cash' | 'bank'
   settlement_account_id?: string | null

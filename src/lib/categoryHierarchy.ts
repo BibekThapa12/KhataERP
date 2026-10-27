@@ -93,6 +93,6 @@ export function buildCategoryTree<C extends CategoryLike, R extends CategorizedR
   return categories.filter(category => !category.parent_category_id || !categories.some(parent => parent.id === category.parent_category_id)).sort((a, b) => a.name.localeCompare(b.name)).map(category => build(category, 1, ''))
 }
 
-export function flattenCategoryTree<C extends CategoryLike, R extends CategorizedRecord>(nodes: CategoryTreeNode<C, R>[]): CategoryTreeNode<C, R>[] {
+export function flattenCategoryTree<N extends { children: N[] }>(nodes: N[]): N[] {
   return nodes.flatMap(node => [node, ...flattenCategoryTree(node.children)])
 }

@@ -120,10 +120,11 @@ const DialogContent = React.forwardRef<
         nestedReturnFocusRef.current = selectorReturnFocus || (activeElement && parentDialog?.contains(activeElement) ? activeElement : parentDialog)
         onOpenAutoFocus?.(event)
         if (event.defaultPrevented) return
-        const target = event.currentTarget.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
+        const dialog = event.currentTarget as HTMLElement
+        const target = dialog.querySelector<HTMLElement>('[data-dialog-autofocus]:not(:disabled)')
         if (!target && isVoucherDialog) {
           event.preventDefault()
-          event.currentTarget.focus({ preventScroll: true })
+          dialog.focus({ preventScroll: true })
           return
         }
         if (!target) return

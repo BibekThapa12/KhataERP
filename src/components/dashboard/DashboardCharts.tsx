@@ -2,7 +2,7 @@ import { Bar, BarChart, CartesianGrid, Legend, Line, LineChart, ResponsiveContai
 import type { DashboardSeriesPoint } from '@/lib/dashboard'
 
 const compactMoney = (value: number) => new Intl.NumberFormat('en-NP', { notation: 'compact', maximumFractionDigits: 1 }).format(value)
-const tooltipMoney = (value: number | string | undefined) => `Rs ${Number(value || 0).toLocaleString('en-NP', { maximumFractionDigits: 2 })}`
+const tooltipMoney = (value: unknown) => `Rs ${Number(value || 0).toLocaleString('en-NP', { maximumFractionDigits: 2 })}`
 
 export function SalesPurchaseChart({ data }: { data: DashboardSeriesPoint[] }) {
   return <ResponsiveContainer width="100%" height="100%">

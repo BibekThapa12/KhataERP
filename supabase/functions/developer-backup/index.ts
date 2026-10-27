@@ -65,7 +65,14 @@ async function runBackup() {
   const previousEntries = new Map<string, ManifestEntry>()
   const { data: previousManifest } = await admin.storage.from(BUCKET).download('_manifest.json')
   if (previousManifest) try { for (const entry of (JSON.parse(await previousManifest.text()).entries || []) as ManifestEntry[]) previousEntries.set(entry.company_id, entry) } catch { /* first or legacy manifest */ }
-  const manifest: ManifestEntry[] = []; let successful = 0; let failed = 0
+  let successful = 0; let failed = 0
+  // Rewritten after every company so a run cut off by the function time limit leaves a manifest that matches the stored files.
+  const manifestEntries = new Map(previousEntries)
+  const writeManifest = async () => {
+    const entries = companyRows.flatMap(company => manifestEntries.get(company.id) || [])
+    const manifestText = JSON.stringify({ format: 'khataerp-backup-manifest-v1', generated_at: new Date().toISOString(), run_id: run.id, entries }, null, 2)
+    const { error } = await admin.storage.from(BUCKET).upload('_manifest.json', manifestText, { contentType: 'application/json', upsert: true }); if (error) throw error
+  }
   for (const company of companyRows) {
     try {
       const { data: raw, error } = await admin.rpc('system_export_company_backup', { target_company: company.id }); if (error) throw error
@@ -76,7 +83,8 @@ async function runBackup() {
       const companyName = companyNamesByUser.get(company.user_id)?.get(company.id) || `Company (${String(company.id).slice(0, 8)})`
       const path = `${userName}/${companyName}/company-backup.json`
       const { error: uploadError } = await admin.storage.from(BUCKET).upload(path, content, { contentType: 'application/json', upsert: true }); if (uploadError) throw uploadError
-      manifest.push({ path, company_id: company.id, user_name: userName, company_name: company.name, sha256: await sha256(content), size: new TextEncoder().encode(content).length, exported_at: exportedAt })
+      manifestEntries.set(company.id, { path, company_id: company.id, user_name: userName, company_name: company.name, sha256: await sha256(content), size: new TextEncoder().encode(content).length, exported_at: exportedAt })
+      await writeManifest()
       const { data: existing } = await admin.from('developer_company_backup_status').select('company_id').eq('company_id', company.id).maybeSingle()
       const status = { company_id: company.id, last_exported_at: exportedAt, last_attempted_at: exportedAt, last_export_status: 'successful', last_exported_by: null, last_error: null }
       const statusError = existing ? (await admin.from('developer_company_backup_status').update(status).eq('company_id', company.id)).error : (await admin.from('developer_company_backup_status').insert(status)).error
@@ -84,7 +92,6 @@ async function runBackup() {
       successful += 1
     } catch (error) {
       failed += 1; const attemptedAt = new Date().toISOString(); const message = error instanceof Error ? error.message.slice(0, 1000) : 'Automated export failed'
-      const previous = previousEntries.get(company.id); if (previous) manifest.push(previous)
       const { data: existing } = await admin.from('developer_company_backup_status').select('company_id').eq('company_id', company.id).maybeSingle()
       const failure = { last_attempted_at: attemptedAt, last_export_status: 'failed', last_error: message }
       if (existing) await admin.from('developer_company_backup_status').update(failure).eq('company_id', company.id)
@@ -92,8 +99,7 @@ async function runBackup() {
     }
   }
   const completedAt = new Date().toISOString(); const status = failed === 0 ? 'successful' : successful === 0 ? 'failed' : 'partial'
-  const manifestText = JSON.stringify({ format: 'khataerp-backup-manifest-v1', generated_at: completedAt, run_id: run.id, entries: manifest }, null, 2)
-  const { error: manifestError } = await admin.storage.from(BUCKET).upload('_manifest.json', manifestText, { contentType: 'application/json', upsert: true }); if (manifestError) throw manifestError
+  await writeManifest()
   await admin.from('developer_backup_runs').update({ completed_at: completedAt, successful_companies: successful, failed_companies: failed, status }).eq('id', run.id)
   return { run_id: run.id, total: companyRows.length, successful, failed, status }
 }

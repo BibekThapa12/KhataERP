@@ -4,7 +4,7 @@ import { AlertTriangle, Boxes, ChevronDown, ChevronRight, Layers3, Search, Trend
 import { useNavigate } from 'react-router-dom'
 import { useAppStore } from '@/store/useAppStore'
 import { computeTrialBalance, computeProfitAndLoss, computeBalanceSheet, computeStockConditionSummary, computeVatReport, computeStockSummary, normalSide, recomputeAllBalances, recomputeFiscalTrialAccounts, recomputeStock, round2 } from '@/lib/engine'
-import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, groupReportAccounts, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
+import { buildAccountReportTree, computeDetailedProfitLoss, fiscalYearStartBs, selectedFiscalYearEndBs, selectedFiscalYearStartBs, type AccountReportTreeNode } from '@/lib/reports'
 import { dashboardVouchersInRange, dashboardVouchersThrough, isPostedDashboardVoucher } from '@/lib/dashboard'
 import { fmtDate, fmtMoney } from '@/lib/utils'
 import { downloadCsv } from '@/lib/csv'
@@ -47,19 +47,6 @@ type ExpansionCommand = { version: number; expand: boolean }
 
 function GroupButton({ groupKey, name, count, type, expanded, toggle }: { groupKey: string; name: string; count: number; type?: string; expanded: boolean; toggle: (key: string) => void }) {
   return <button type="button" aria-expanded={expanded} aria-label={`${expanded ? 'Collapse' : 'Expand'} ${name}`} onClick={() => toggle(groupKey)} className="flex max-w-full items-center gap-2 text-left"><span className="flex h-6 w-6 shrink-0 items-center justify-center rounded hover:bg-muted">{expanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}</span><span className="truncate">{name}</span><span className="shrink-0 text-xs font-normal text-muted-foreground">{type ? `${type} · ` : ''}{count}</span></button>
-}
-
-function GroupedTrialTable({ accounts, totalDebit, totalCredit }: { accounts: Account[]; totalDebit: number; totalCredit: number }) {
-  const groups = useMemo(() => groupReportAccounts(accounts.filter(account => Math.abs(account.balance || 0) >= 0.005)), [accounts])
-  const { expanded, toggle } = useExpandedGroups()
-  return <div className="overflow-x-auto"><table className="w-full min-w-[520px] border-collapse text-sm"><thead><tr className="bg-muted/50"><th className="report-th text-left">Account Group</th><th className="report-th text-right">Debit</th><th className="report-th text-right">Credit</th></tr></thead><tbody>{groups.map(group => <Fragment key={group.key}><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td"><GroupButton groupKey={group.key} name={group.name} count={group.accounts.length} type={group.type} expanded={expanded.has(group.key)} toggle={toggle} /></td><td className="report-td text-right num debit-amt">{group.debit ? fmtMoney(group.debit) : '—'}</td><td className="report-td text-right num credit-amt">{group.credit ? fmtMoney(group.credit) : '—'}</td></tr>{expanded.has(group.key) && group.accounts.map(account => { const side = normalSide(account.type); const balance = account.balance || 0; const debit = (side === 'debit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; const credit = (side === 'credit' ? balance > 0 : balance < 0) ? Math.abs(balance) : 0; return <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><LedgerLink account={account} /></td><td className="report-td text-right num">{debit ? <span className="debit-amt">{fmtMoney(debit)}</span> : '—'}</td><td className="report-td text-right num">{credit ? <span className="credit-amt">{fmtMoney(credit)}</span> : '—'}</td></tr> })}</Fragment>)}</tbody><tfoot><tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">Total</td><td className="report-td text-right num">{fmtMoney(totalDebit)}</td><td className="report-td text-right num">{fmtMoney(totalCredit)}</td></tr></tfoot></table></div>
-}
-
-function GroupedAmountTable({ accounts, total, emptyLabel, totalLabel = 'Total', adjustments = [] }: { accounts: Account[]; total: number; emptyLabel: string; totalLabel?: string; adjustments?: { label: string; amount: number; className?: string }[] }) {
-  const groups = useMemo(() => groupReportAccounts(accounts), [accounts])
-  const { expanded, toggle } = useExpandedGroups()
-  if (!groups.length && !adjustments.length) return <p className="px-4 py-3 text-sm text-muted-foreground">{emptyLabel}</p>
-  return <table className="w-full border-collapse text-sm"><tbody>{groups.map(group => <Fragment key={group.key}><tr className="border-t bg-muted/10 font-semibold hover:bg-muted/30"><td className="report-td"><GroupButton groupKey={group.key} name={group.name} count={group.accounts.length} expanded={expanded.has(group.key)} toggle={toggle} /></td><td className="report-td text-right num">{fmtMoney(group.balance)}</td></tr>{expanded.has(group.key) && group.accounts.map(account => <tr key={account.id} className="border-t hover:bg-muted/20"><td className="report-td pl-12"><LedgerLink account={account} /></td><td className="report-td text-right num">{fmtMoney(account.balance)}</td></tr>)}</Fragment>)}{adjustments.map(row => <tr key={row.label} className={`border-t hover:bg-muted/20 ${row.className || ''}`}><td className="report-td italic">{row.label}</td><td className="report-td text-right num">{fmtMoney(row.amount)}</td></tr>)}<tr className="border-t-2 bg-muted/30 font-semibold"><td className="report-td">{totalLabel}</td><td className="report-td text-right num">{fmtMoney(total)}</td></tr></tbody></table>
 }
 
 interface TrialPeriodValues {
