@@ -68,6 +68,8 @@ export function PosPage() {
     return items.filter(item => !item.is_archived && normalizeSearch(itemSelectorOption(item).searchText || item.name).includes(wanted)).slice(0, 8)
   }, [items, query])
   const customers = useMemo(() => parties.filter(party => party.type === 'customer' && !party.is_archived), [parties])
+  const [searchFocused, setSearchFocused] = useState(false)
+  const showResults = searchFocused && results.length > 0
 
   const addItem = (item: Item) => {
     const result = addPosItem(lines, item, availableQty)
@@ -87,6 +89,7 @@ export function PosPage() {
   const onSearchKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
     if (event.key === 'ArrowDown') { event.preventDefault(); setHighlight(index => Math.min(index + 1, Math.max(results.length - 1, 0))) }
     if (event.key === 'ArrowUp') { event.preventDefault(); setHighlight(index => Math.max(index - 1, 0)) }
+    if (event.key === 'Escape' && query) { event.stopPropagation(); setQuery(''); setHighlight(0) }
     if (event.key !== 'Enter') return
     event.preventDefault()
     if (!query.trim()) return
@@ -194,10 +197,10 @@ export function PosPage() {
           <div className="relative">
             <div className="flex h-12 items-center gap-2.5 rounded-lg border-2 border-primary/70 bg-card px-3 transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40">
               <ScanBarcode className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-              <input ref={searchRef} value={query} onChange={event => { setQuery(event.target.value); setHighlight(0) }} onKeyDown={onSearchKeyDown} disabled={!!paying} aria-label="Scan barcode or search item" aria-controls="pos-search-results" placeholder={paying ? 'Finish or cancel the payment to add items' : 'Scan barcode or type item name or SKU'} className="h-full w-full bg-transparent text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed" />
+              <input ref={searchRef} value={query} onChange={event => { setQuery(event.target.value); setHighlight(0) }} onKeyDown={onSearchKeyDown} onFocus={() => setSearchFocused(true)} onBlur={() => setSearchFocused(false)} disabled={!!paying} role="combobox" aria-expanded={showResults} aria-autocomplete="list" aria-label="Scan barcode or search item" aria-controls="pos-search-results" placeholder={paying ? 'Finish or cancel the payment to add items' : 'Scan barcode or type item name or SKU'} className="h-full w-full bg-transparent text-base outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed" />
             </div>
-            {results.length > 0 && (
-              <ul id="pos-search-results" className="mt-1.5 overflow-hidden rounded-lg border bg-card shadow-sm" role="listbox" aria-label="Matching items">
+            {showResults && (
+              <ul id="pos-search-results" className="absolute inset-x-0 top-full z-30 mt-1.5 max-h-[min(60vh,26rem)] overflow-y-auto overscroll-contain rounded-lg border bg-card shadow-[0_12px_32px_-12px_hsl(var(--primary)/0.28),0_2px_6px_-2px_hsl(var(--primary)/0.12)]" role="listbox" aria-label="Matching items">
                 {results.map((item, index) => (
                   <li key={item.id} role="option" aria-selected={index === highlight}>
                     <button type="button" onMouseDown={event => event.preventDefault()} onMouseEnter={() => setHighlight(index)} onClick={() => addItem(item)} className={`flex w-full items-center justify-between gap-3 border-t px-3 py-2 text-left text-sm first:border-t-0 ${index === highlight ? 'bg-accent' : ''}`}>
