@@ -40,6 +40,10 @@ describe('secret-safe logging', () => {
     expect(message).not.toContain('Reference:')
   })
 
+  it('shows the POS QR bill edit block as written', () => {
+    expect(userFacingErrorMessage(new Error('POS QR bill. Cancel it and re-ring it at the POS.'))).toBe('POS QR bill. Cancel it and re-ring it at the POS.')
+  })
+
   it('turns invoice integrity errors into actionable messages', () => {
     const error = { code: 'P0001', message: 'Invoice totals do not match server-calculated values' }
     expect(userFacingErrorMessage(error)).toBe('The invoice total could not be verified. Check the item quantities, rates, discount, and VAT, then save again.')

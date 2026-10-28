@@ -137,6 +137,7 @@ export type CompanyRefreshResource = 'accounts' | 'account_categories' | 'partie
 interface InvoiceSaveParams {
   party_account_id: string | null
   is_cash: boolean
+  settlement_account_id?: string | null
   items: InvoiceEntryInput[]
   vat_rate: number
   credit_days: number
@@ -214,7 +215,7 @@ interface AppState {
   alterParty: (id: string, updates: Partial<Party>) => Promise<void>
   alterItem: (id: string, updates: Partial<Item>) => Promise<void>
 
-  saveSalesVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
+  saveSalesVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<Voucher>
   savePurchaseVoucher: (params: InvoiceSaveParams, status?: Voucher['status']) => Promise<void>
   saveReceipt: (params: { allocations: TransactionAllocation[]; deposit_to_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
   savePayment: (params: { allocations: TransactionAllocation[]; paid_from_account_id: string; narration?: string; date_bs: string }, status?: Voucher['status']) => Promise<Voucher>
@@ -1262,7 +1263,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     reconcile.assertCurrent()
     const creditFields = invoiceCreditFields(effectiveParams.date_bs, effectiveParams.credit_days, effectiveParams.is_cash)
     const newVoucher = await insertVoucher({
-      voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
+      voucher: { company_id: company.id, type: 'Sales', numbering_period: voucherNumberingPeriod(company, effectiveParams.date_bs), ...dateFields, ...creditFields, narration: effectiveParams.narration, party_account_id: effectiveParams.is_cash ? undefined : (effectiveParams.party_account_id ?? undefined), is_cash: effectiveParams.is_cash, settlement_account_id: effectiveParams.settlement_account_id ?? undefined, subtotal: data.subtotal, discount: data.discount, vat_rate: data.vat_rate, vat_amount: data.vat_amount, total: data.total, cancelled: false, status },
       lines: data.lines as Omit<VoucherLine, 'id' | 'voucher_id'>[],
       stock_lines: data.stock_lines as Omit<StockLine, 'id' | 'voucher_id'>[],
       invoice_items: invoiceItemSnapshots(data.invoice_items, get().items, get().stock, true),
@@ -1272,6 +1273,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     })
     await reconcile(newVoucher)
     notifySuccess(status === 'Draft' ? 'Sales draft saved' : 'Sales invoice completed', newVoucher.invoice_no)
+    return newVoucher
     })
   },
 
@@ -1466,6 +1468,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const existing = get().vouchers.find(v => v.id === id)
     const company = get().company
     if (!existing) throw new Error('Voucher not found')
+    // Invoice editing rebuilds lines without the QR settlement ledger, which would silently move the debit to Cash.
+    if (existing.status === 'Completed' && existing.settlement_account_id) throw new Error('POS QR bill. Cancel it and re-ring it at the POS.')
     if (!company) throw new Error('No company')
     const reconcile = savedCompanyRefresh(company.id)
     if (existing.status === 'Draft' && status === 'Completed') {
