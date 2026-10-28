@@ -1,87 +1,159 @@
-# Khata ERP — Full-Stack
+# KhataERP
 
-A full-stack double-entry accounting ERP for small retail/trading businesses in Nepal.
-React + TypeScript + Tailwind + shadcn/ui frontend, Supabase backend.
+**Double-entry accounting, billing and inventory for small businesses in Nepal.**
 
-## Stack
-- **Frontend:** React 19, TypeScript, Vite, Tailwind CSS v3, shadcn/ui, Zustand, React Router
-- **Backend:** Supabase (PostgreSQL + Auth + Row-Level Security)
+KhataERP replaces the paper khata and the spreadsheet next to it. Billing staff enter invoices quickly from the keyboard, and every entry posts balanced ledger lines and stock movements behind the scenes. Owners and accountants get Bikram Sambat dates, NPR formatting, VAT and PAN details, and the reports a Nepali business actually files.
 
-## Quick Setup
+It is a React web app on a Supabase (PostgreSQL) backend. Accounting rules are enforced in the database itself, not only in the browser.
 
-### 1. Create a Supabase project at supabase.com
+---
 
-### 2. Run the schema
-SQL Editor → paste `supabase-schema.sql` → Run.
+## Features
 
-### 3. Set environment variables
-Apply `supabase-integrity-migration.sql` after the base schema to enable database-level numbering and journal-balance guards.
-Apply `supabase-fiscal-voucher-numbering-migration.sql` to allow voucher prefixes and numbers to restart independently in each fiscal year.
-Apply `supabase-stock-condition-migration.sql` to track saleable, damaged, and expired stock and condition transfers.
-Apply `supabase-alternative-units-migration.sql` to enable main and alternative item units.
-Apply `supabase-category-hierarchy-migration.sql` to seed editable account roots and enforce three-level account and item category trees.
-Apply `supabase-sundry-parties-migration.sql` afterwards to migrate party ledgers into Sundry Debtors and Sundry Creditors.
-Apply `supabase-multiple-bank-accounts-migration.sql` to add the Bank category and exact settlement-account tracking.
-Apply `supabase-system-account-groups-migration.sql` afterwards to seed and protect the canonical account-group hierarchy, consolidate VAT, and enable Bank OD accounts.
-Apply `supabase-retained-earnings-ledger-migration.sql` to create the protected Retained Earnings ledger under Reserves & Surplus.
-Apply `supabase-single-company-per-user-migration.sql` to safely remove unused signup duplicates and enforce one company per login account.
-Apply `supabase-credit-days-migration.sql` to add party credit defaults and invoice due-date snapshots.
-Apply `supabase-ledger-details-migration.sql` to enable conditional contact, tax, credit-term, and bank fields in the unified ledger form.
-Apply `supabase-inventory-valuation-migration.sql` to enable company-wide Weighted Average, FIFO, or LIFO stock valuation.
-Apply `supabase-production-security-migration.sql` before launch so operational error details remain developer-only.
-Apply `supabase-critical-security-hardening-migration.sql` last to enforce protected company fields, suspension at the database boundary, server-calculated voucher integrity, return limits, cheque/receipt linkage, and restricted internal function execution.
-Apply `supabase-zero-value-invoices-migration.sql` afterwards to permit zero-rate and zero-total Sales, Purchase, Sales Return, and Purchase Return documents while retaining compulsory item and positive-quantity validation.
-Apply `supabase-journal-supplier-invoice-migration.sql` to configure automatic/manual Journal voucher numbers and store supplier invoice numbers from physical Purchase bills.
-Apply `supabase-simple-income-expense-migration.sql` to enable beginner-friendly Income and Expense entries backed by validated Journal vouchers.
-Apply `supabase-contra-voucher-migration.sql` to enable validated Cash and Bank Contra transfers.
-Apply `supabase-identity-validation-migration.sql` to enforce phone, PAN/VAT, name, address, bank-account, and cheque identity rules in PostgreSQL.
-For a brand-new staging Supabase project, run only `supabase-complete-staging-bootstrap.sql`; it contains the base schema and every required migration in dependency order. Do not run the individual migration files afterwards.
+**Billing and vouchers**
+- Sales, Purchase, Sales Return and Purchase Return invoices with 13% VAT, discounts and credit days
+- Receipts, Payments, Journal, Contra, Income, Expense and Stock Adjustment vouchers
+- Drafts that never touch the books until they are completed
+- Cancellation that reverses every effect and keeps the voucher in history
+- Fiscal-year voucher numbering with custom prefixes
+- A4 and A5 invoice printing, with an optional payment QR
+- Keyboard shortcuts for daily entry: F5 Payment, F6 Receipt, F7 Journal, F8 Sales, F9 Purchase, F2 calculator
+
+**Inventory**
+- Main and alternate units (for example, case and pieces)
+- Weighted Average, FIFO or LIFO valuation
+- Saleable, damaged and expired stock conditions
+- Serial and IMEI tracking for serialized items
+- Slab pricing rules by quantity
+- Low-stock alerts, Stock Summary and Stock Ledger
+
+**Parties, banks and cheques**
+- Customers and suppliers as Sundry Debtors and Creditors, with PAN/VAT and credit terms
+- Multiple bank accounts, Nepal bank list and Cash and Bank Book
+- Debtors and creditors ageing
+
+**Reports**
+- Day Book, ledger and group statements, transaction registers
+- Trial Balance, Profit and Loss, Balance Sheet and Cash Flow
+- VAT report for VAT-registered companies, hidden for internal-bookkeeping companies
+
+**Optional modules** (switched on per company by the administrator)
+- **Cheque Management:** received and issued cheques, clearing, bouncing and bank linkage
+- **POS Counter:** a full-screen retail counter with barcode scanning, VAT-inclusive shelf prices, cash, QR and credit payment, and 80mm thermal receipts
+
+**Data and administration**
+- Import masters and opening data from Excel templates
+- Company backup and restore, plus an optional Windows agent that syncs cloud backups to a local drive
+- Developer dashboard for companies, licenses, modules, backups and diagnostics
+
+---
+
+## Built with
+
+| Layer | Technology |
+|---|---|
+| Frontend | React 19, TypeScript, Vite, Tailwind CSS, shadcn/ui, Zustand, React Router |
+| Backend | Supabase: PostgreSQL, Auth, Row-Level Security, Edge Functions |
+| Testing | Vitest, plus a check that keeps SQL migration copies in sync |
+| Hosting | Any static host (the project ships a `vercel.json`) |
+
+---
+
+## Getting started
+
+You need Node.js 20.19 or newer and a free [Supabase](https://supabase.com) project.
+
+### 1. Set up the database
+
+**New Supabase project:** open the SQL Editor, paste the contents of [`supabase/bootstrap.sql`](supabase/bootstrap.sql), and run it once. It contains the base schema and every migration in the right order, so you don't run the individual files afterwards.
+
+**Existing project:** apply the files in [`supabase/migrations/`](supabase/migrations) that are newer than your last applied one, in filename order.
+
+### 2. Configure the app
 
 ```bash
 cp .env.example .env.local
-# Fill in the Supabase public values. The hCaptcha site key is optional while CAPTCHA is disabled.
 ```
 
-### 4. Run locally
+Fill in `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY` from **Supabase → Settings → API**. Use the public anon key only. See [Security](#security) below.
+
+### 3. Run it
+
 ```bash
 npm install
-npm run dev        # http://localhost:5173
+npm run dev
 ```
 
-### 5. Deploy
+The app opens at http://localhost:5173. Sign up, create your company, and start entering vouchers.
+
+---
+
+## Scripts
+
+| Command | What it does |
+|---|---|
+| `npm run dev` | Start the development server |
+| `npm run build` | Type-check and build for production into `dist/` |
+| `npm run preview` | Serve the production build locally |
+| `npm test` | Run the test suite and the migration sync check |
+| `npm run lint` | Lint the code with oxlint |
+
+---
+
+## Project structure
+
+```text
+src/
+  pages/          Screens: vouchers, masters, reports, settings, POS
+  components/     Forms, tables, layout and shared UI
+  lib/            Accounting engine, reports, pricing, dates and validation
+  store/          Application state (Zustand)
+supabase/
+  bootstrap.sql   Complete install for a new database, run once
+  migrations/     Database migrations, applied in filename order
+  standalone/     Earlier one-off scripts, the full schema and the security audit
+  functions/      Edge Functions (scheduled backups)
+  tests/          SQL tests
+windows-backup-agent/  Optional Windows task that syncs backups to a local drive
+docs/             Security, data-flow and setup notes
+```
+
+---
+
+## Deployment
+
 ```bash
-npm run build      # output in dist/ — deploy to Vercel, Netlify, Cloudflare Pages, etc.
+npm run build
 ```
 
-## Security and secrets
+Deploy the `dist/` folder to Vercel, Netlify, Cloudflare Pages or any static host, and set the same `VITE_*` variables there.
 
-- Only `VITE_SUPABASE_URL`, the public Supabase anon/publishable key, and the public hCaptcha site key belong in the frontend environment. Every `VITE_*` value is embedded in the browser bundle and is public.
-- Never place a Supabase service-role/secret key, database connection string, Stripe secret key, OAuth client secret, JWT signing secret, or third-party private API key in this repository or in a `VITE_*` variable.
-- Keep local and deployment credentials in `.env.local` or the hosting provider's encrypted environment settings. Environment files are ignored by Git; `.env.example` contains placeholders only.
-- All application tables defined by the supplied SQL files have Row Level Security enabled and tenant-scoped policies. After applying migrations, verify the deployed database with `supabase-security-audit.sql` before exposing the anon key publicly.
-- If a real secret was ever committed, pasted into an issue/build log, or included in a deployed client bundle, removing it from the latest commit is insufficient. Rotate/revoke it immediately and then purge it from Git history where required.
-- The personal-data flow and retention audit is in [docs/personal-data-flow.md](docs/personal-data-flow.md). Apply `supabase-personal-data-protection-migration.sql` to minimize historical audit payloads. Company deletion is restricted to developer administrators.
-- The production pass/fail review and mandatory Supabase/Vercel launch checks are in [docs/production-security-audit.md](docs/production-security-audit.md).
-- The authentication, authorization, accounting-tampering, paid-module, input, XSS, and upload review is in [docs/critical-path-security-audit.md](docs/critical-path-security-audit.md).
-
-## Features
-- Multi-user auth (Supabase email/password), data isolated per user via Row-Level Security
-- Sales & purchase invoicing with 13% VAT (NPR, Nepali digit grouping)
-- Receipts, payments, journal entries
-- Inventory at weighted-average cost with low-stock alerts
-- Trial Balance, P&L (with closing-stock adjustment), Balance Sheet, VAT Report, Stock Summary
-- Voucher cancellation with full reversal
-- JSON backup export from Settings
-
-### Password recovery deployment
-
-Add both the production and local recovery URLs to Supabase **Authentication → URL Configuration → Redirect URLs**:
+For password reset to work, add your recovery URLs in **Supabase → Authentication → URL Configuration → Redirect URLs**:
 
 ```text
 https://your-domain.example/reset-password
 http://localhost:5173/reset-password
 ```
 
-Password-reset requests always show a non-enumerating response. The hCaptcha integration is retained in comments for future re-enablement.
+Before going live, work through the launch checklist in [docs/production-security-audit.md](docs/production-security-audit.md).
 
-Made with love ❤
+---
+
+## Security
+
+- **Only public values go in the frontend.** Every `VITE_*` variable is bundled into the browser, so it holds just the Supabase URL, the anon key and the optional hCaptcha site key. Never put a service-role key, database password or any other secret there or in this repository.
+- **Each company's data is isolated** by Row-Level Security policies on every table. After applying migrations, run [`supabase-security-audit.sql`](supabase/standalone/supabase-security-audit.sql) to confirm the deployed database.
+- **The server checks the accounting.** Invoice totals, return limits, voucher numbering and protected company fields are validated in PostgreSQL, so a modified browser can't post unbalanced or tampered entries.
+- **If a secret is ever exposed,** rotate it immediately. Deleting it from the latest commit is not enough.
+
+More detail: [personal-data flow](docs/personal-data-flow.md) · [critical-path security audit](docs/critical-path-security-audit.md)
+
+---
+
+## Backups
+
+Administrators can export and restore a company backup from Settings. For scheduled cloud backups that sync to a local Windows drive, follow [docs/automated-backup-setup.md](docs/automated-backup-setup.md) and the [Windows backup agent guide](windows-backup-agent/README.md).
+
+---
+
+Built by [Bibek Thapa](https://github.com/BibekThapa12) for businesses in Nepal.

@@ -13,7 +13,7 @@ const migrations = [
 ]
 for (const migration of migrations) {
   const sql = read(`supabase/migrations/${migration}`)
-  for (const file of ['db migration files/supabase-schema.sql', 'supabase-complete-staging-bootstrap.sql']) {
+  for (const file of ['supabase/standalone/supabase-schema.sql', 'supabase/bootstrap.sql']) {
     const full = read(file)
     const start = `-- BEGIN SYNCED MIGRATION: ${migration}`
     const end = `-- END SYNCED MIGRATION: ${migration}`
@@ -67,10 +67,10 @@ const knownDrift = new Set([
   '202610060001_optimize_company_accounting_snapshot.sql',
 ])
 const drift = []
-for (const file of ['db migration files/supabase-schema.sql', 'supabase-complete-staging-bootstrap.sql']) {
+for (const file of ['supabase/standalone/supabase-schema.sql', 'supabase/bootstrap.sql']) {
   for (const [, kind, name, body] of read(file).matchAll(/-- BEGIN SYNCED (DB FILE|MIGRATION): (\S+)\n([\s\S]*?)\n-- END SYNCED \1: \2/g)) {
     if (knownDrift.has(name)) continue
-    const source = read(kind === 'MIGRATION' ? `supabase/migrations/${name}` : `db migration files/${name}`)
+    const source = read(kind === 'MIGRATION' ? `supabase/migrations/${name}` : `supabase/standalone/${name}`)
     if (body.trim() !== source) drift.push(`${file}: ${name}`)
   }
 }

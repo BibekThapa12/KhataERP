@@ -60,7 +60,7 @@ KhataERP is a Nepal-first, double-entry accounting ERP. Its distinguishing mecha
 - Product overview, setup, feature, deployment, and security documentation: `README.md`.
 - Existing production interface and navigation: `src/App.tsx`, `src/components/layout/AppShell.tsx`, and `src/pages/`.
 - Accounting, stock, pricing, settlement, reporting, and voucher behavior: `src/lib/engine.ts`, `src/lib/reports.ts`, `src/lib/managementReports.ts`, and related tests.
-- Database integrity, company isolation, atomic posting, and migration history: `supabase/migrations/`, `db migration files/supabase-schema.sql`, and `supabase-complete-staging-bootstrap.sql`.
+- Database integrity, company isolation, atomic posting, and migration history: `supabase/migrations/`, `supabase/standalone/supabase-schema.sql`, and `supabase/bootstrap.sql`.
 - Existing print layouts and export behavior: `src/components/reports/`, `src/components/tables/VoucherTable.tsx`, and report pages under `src/pages/reports/`.
 - No testimonials, market-share claims, customer counts, or independently verified business-performance claims are established in the repository; future work must not invent them.
 

@@ -4,7 +4,7 @@ This setup creates a cloud backup every two hours and lets a Windows Scheduled T
 
 ## 1. Apply database changes
 
-Apply `db migration files/supabase-automated-backup-agent-migration.sql`, or use the synchronized complete staging bootstrap for a new environment.
+Apply `supabase/standalone/supabase-automated-backup-agent-migration.sql`, or use the synchronized complete staging bootstrap for a new environment.
 
 ## 2. Configure the Edge Function
 

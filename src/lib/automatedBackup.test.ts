@@ -3,11 +3,11 @@ import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 
 const root = process.cwd()
-const migration = readFileSync(join(root, 'db migration files', 'supabase-automated-backup-agent-migration.sql'), 'utf8')
+const migration = readFileSync(join(root, 'supabase', 'standalone', 'supabase-automated-backup-agent-migration.sql'), 'utf8')
 const agent = readFileSync(join(root, 'windows-backup-agent', 'KhataERPBackupAgent.ps1'), 'utf8')
 const installer = readFileSync(join(root, 'windows-backup-agent', 'Install-KhataERPBackupAgent.ps1'), 'utf8')
 const uninstaller = readFileSync(join(root, 'windows-backup-agent', 'Uninstall-KhataERPBackupAgent.ps1'), 'utf8')
-const deletionMigration = readFileSync(join(root, 'db migration files', 'supabase-delete-backup-agent-migration.sql'), 'utf8')
+const deletionMigration = readFileSync(join(root, 'supabase', 'standalone', 'supabase-delete-backup-agent-migration.sql'), 'utf8')
 
 describe('automated backup security and scheduling', () => {
   it('schedules the cloud exporter every two hours and limits the system RPC to service_role', () => {

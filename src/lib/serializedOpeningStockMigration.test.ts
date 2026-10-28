@@ -35,7 +35,7 @@ describe('serialized opening-stock migration', () => {
   })
 
   it('is synchronized with the base schema and staging bootstrap', () => {
-    expect(syncedMigration(join('db migration files', 'supabase-schema.sql'))).toBe(migration)
-    expect(syncedMigration('supabase-complete-staging-bootstrap.sql')).toBe(migration)
+    expect(syncedMigration(join('supabase', 'standalone', 'supabase-schema.sql'))).toBe(migration)
+    expect(syncedMigration(join('supabase', 'bootstrap.sql'))).toBe(migration)
   })
 })
