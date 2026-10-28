@@ -156,4 +156,10 @@ Administrators can export and restore a company backup from Settings. For schedu
 
 ---
 
+## License
+
+KhataERP is proprietary software. The code is visible here for viewing only; it may not be used, copied, modified, deployed or redistributed without written permission. See [LICENSE](LICENSE) for the full terms. For licensing or a subscription, contact [Bibek Thapa](https://github.com/BibekThapa12).
+
+---
+
 Built by [Bibek Thapa](https://github.com/BibekThapa12) for businesses in Nepal.
