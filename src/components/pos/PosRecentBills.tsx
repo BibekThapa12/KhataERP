@@ -19,7 +19,7 @@ export function usePosPaymentLabel() {
   const getAccount = useAppStore(s => s.getAccount)
   const getPartyByAccountId = useAppStore(s => s.getPartyByAccountId)
   return (voucher: Voucher) => {
-    if (voucher.settlement_account_id) return getAccount(voucher.settlement_account_id)?.name || 'QR'
+    if (voucher.settlement_account_id) return `QR · ${getAccount(voucher.settlement_account_id)?.name || 'ledger'}`
     if (!voucher.is_cash) return `Credit · ${voucher.party_account_id ? getPartyByAccountId(voucher.party_account_id)?.name || 'Customer' : 'Customer'}`
     return 'Cash'
   }
@@ -52,7 +52,7 @@ export function PosRecentBills({ bills, onReprint, onError }: { bills: Voucher[]
   }
 
   return (
-    <section aria-labelledby="pos-recent-bills" className="mt-6">
+    <section aria-labelledby="pos-recent-bills" className="mt-2 md:mt-0">
       <div className="mb-1.5 flex items-baseline justify-between">
         <h2 id="pos-recent-bills" className="text-sm font-semibold">Today's POS bills</h2>
         {bills.length > 0 && <span className="text-xs text-muted-foreground">Last {bills.length}</span>}
@@ -104,7 +104,7 @@ export function PosRecentBills({ bills, onReprint, onError }: { bills: Voucher[]
           <AlertDialogHeader>
             <AlertDialogTitle>Cancel this bill?</AlertDialogTitle>
             <AlertDialogDescription>
-              This reverses <strong>{cancelTarget ? savedVoucherNumber(cancelTarget) : ''}</strong> for Rs {fmtMoney(cancelTarget?.total)}. Stock and ledger balances are reversed, and the bill stays in history marked cancelled.
+              This reverses <strong>{cancelTarget ? savedVoucherNumber(cancelTarget) : ''}</strong> for {fmtMoney(cancelTarget?.total)}. Stock and ledger balances are reversed, and the bill stays in history marked cancelled.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

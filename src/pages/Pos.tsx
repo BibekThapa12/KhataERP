@@ -19,6 +19,7 @@ import { SubmissionLock } from '@/lib/submissionLock'
 import { useUnsavedChangesGuard } from '@/lib/unsavedChanges'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { fmtMoney } from '@/lib/utils'
+import { formatStockQuantity } from '@/lib/units'
 import type { Item, Voucher } from '@/types'
 
 type PaymentMode = 'cash' | 'qr' | 'credit'
@@ -187,8 +188,9 @@ export function PosPage() {
       </header>
       {billDate.error && <p role="alert" className="border-b bg-destructive/10 px-4 py-2 text-sm text-destructive">{billDate.error}</p>}
 
-      <main className="grid flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1.4fr)_minmax(360px,1fr)]">
-        <section className="border-b p-4 lg:border-b-0 lg:border-r lg:p-5">
+      {/* DOM order is search, bill, recent bills so phones reach the bill before history; md+ places history under search. */}
+      <main className="grid flex-1 grid-cols-1 md:grid-cols-[minmax(0,1.35fr)_minmax(340px,1fr)] md:grid-rows-[auto_1fr]">
+        <section className="p-4 md:col-start-1 md:row-start-1 md:border-r lg:p-5">
           <div className="relative">
             <div className="flex h-12 items-center gap-2.5 rounded-lg border-2 border-primary/70 bg-card px-3 transition-colors focus-within:border-primary focus-within:ring-2 focus-within:ring-ring/40">
               <ScanBarcode className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
@@ -201,9 +203,9 @@ export function PosPage() {
                     <button type="button" onMouseDown={event => event.preventDefault()} onMouseEnter={() => setHighlight(index)} onClick={() => addItem(item)} className={`flex w-full items-center justify-between gap-3 border-t px-3 py-2 text-left text-sm first:border-t-0 ${index === highlight ? 'bg-accent' : ''}`}>
                       <span className="min-w-0">
                         <span className="block truncate font-medium">{item.name}</span>
-                        <span className="block truncate text-xs text-muted-foreground">{item.sku ? `SKU ${item.sku} · ` : ''}{item.is_service ? 'Service' : `${getStockEntry(item.id).qty} ${item.unit} in stock`}</span>
+                        <span className="block truncate text-xs text-muted-foreground">{item.sku ? `SKU ${item.sku} · ` : ''}{item.is_service ? 'Service' : `${formatStockQuantity(getStockEntry(item.id).qty, item)} in stock`}</span>
                       </span>
-                      <span className="shrink-0 font-semibold tabular-nums">Rs {fmtMoney(item.sell_rate)}</span>
+                      {Number(item.sell_rate) > 0 ? <span className="shrink-0 font-semibold tabular-nums">{fmtMoney(item.sell_rate)}</span> : <span className="shrink-0 text-xs text-muted-foreground">No price set</span>}
                     </button>
                   </li>
                 ))}
@@ -211,12 +213,10 @@ export function PosPage() {
             )}
           </div>
           {error && <p role="alert" className="mt-2.5 rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">{error}</p>}
-          <p className="mt-2.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted-foreground"><Kbd>↑</Kbd><Kbd>↓</Kbd> choose <Kbd>Enter</Kbd> add. A scan adds the item; scanning again adds one more.</p>
-
-          <PosRecentBills bills={recentBills} onReprint={reprint} onError={message => { setError(message); window.scrollTo({ top: 0 }) }} />
+          <p className="mt-2.5 hidden flex-wrap items-center gap-x-1.5 md:flex gap-y-1 text-xs text-muted-foreground"><Kbd>↑</Kbd><Kbd>↓</Kbd> choose · <Kbd>Enter</Kbd> add · scan again for one more</p>
         </section>
 
-        <section aria-label="Current bill" className="flex flex-col bg-card/60 p-4 lg:p-5">
+        <section aria-label="Current bill" className="flex flex-col border-y bg-card/60 p-4 md:col-start-2 md:row-span-2 md:row-start-1 md:border-y-0 lg:p-5">
           <div className="mb-1 flex items-baseline justify-between">
             <h1 className="text-base font-semibold">Current bill</h1>
             <span className="text-xs text-muted-foreground">{lines.length ? `${lines.length} line${lines.length === 1 ? '' : 's'} · ${itemCount} qty` : 'Walk-in customer'}</span>
@@ -225,7 +225,7 @@ export function PosPage() {
           <div className="flex-1">
             {pricedLines.map(line => (
               <div key={line.item_id} className="grid grid-cols-[minmax(0,1fr)_112px_80px_28px] items-center gap-2 border-b py-2 text-sm">
-                <div className="min-w-0"><div className="truncate font-medium">{line.name}</div><div className="text-xs tabular-nums text-muted-foreground">Rs {fmtMoney(line.shelf_rate)} × {line.qty}</div></div>
+                <div className="min-w-0"><div className="truncate font-medium">{line.name}</div><div className="text-xs tabular-nums text-muted-foreground">{fmtMoney(line.shelf_rate)} × {line.qty}</div></div>
                 <div className="flex h-8 items-center overflow-hidden rounded-md border bg-background focus-within:ring-2 focus-within:ring-ring/50">
                   <button type="button" tabIndex={-1} aria-label={`Decrease ${line.name}`} className="flex h-full w-8 items-center justify-center text-muted-foreground hover:bg-muted hover:text-foreground" onClick={() => changeQty(line, line.qty - 1)}><Minus className="h-3.5 w-3.5" /></button>
                   <input type="number" min="0" step="any" aria-label={`Quantity of ${line.name}`} value={qtyDrafts[line.item_id] ?? line.qty} onChange={event => { const text = event.target.value; setQtyDrafts(drafts => ({ ...drafts, [line.item_id]: text })); const qty = qtyFromInput(text); if (qty !== null) changeQty(line, qty) }} onBlur={() => setQtyDrafts(({ [line.item_id]: _done, ...rest }) => rest)} onWheel={event => event.currentTarget.blur()} className="h-full w-full min-w-0 border-x bg-transparent text-center tabular-nums outline-none [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none" />
@@ -247,7 +247,7 @@ export function PosPage() {
             <div className="flex justify-between text-sm text-muted-foreground"><span>Items total</span><span className="tabular-nums">{fmtMoney(totals.shelfTotal)}</span></div>
             <label className="flex items-center justify-between gap-3 text-sm text-muted-foreground"><span>Discount (Rs)</span><Input type="number" min="0" step="any" value={discountInput} onChange={event => setDiscountInput(event.target.value)} onWheel={event => event.currentTarget.blur()} className="h-8 w-28 text-right tabular-nums" placeholder="0" /></label>
             {vatRate > 0 && <div className="flex justify-between text-sm text-muted-foreground"><span>Includes VAT {vatRate}%</span><span className="tabular-nums">{fmtMoney(totals.vat)}</span></div>}
-            <div className="flex items-baseline justify-between border-t-2 border-primary pt-2"><span className="text-base font-semibold">Total</span><span className="font-serif text-4xl font-bold tabular-nums tracking-tight text-primary">Rs {fmtMoney(totals.total)}</span></div>
+            <div className="flex items-baseline justify-between border-t-2 border-primary pt-2"><span className="text-base font-semibold">Total</span><span className="font-serif text-4xl font-bold tabular-nums tracking-tight text-primary">{fmtMoney(totals.total)}</span></div>
           </div>
 
           <div className="mt-3">
@@ -256,10 +256,10 @@ export function PosPage() {
                 <div className="flex items-center justify-between"><span className="font-semibold">{PAYMENT_LABEL[paying]} payment</span><button type="button" aria-label="Cancel payment (Esc)" onClick={cancelPayment} className="flex items-center gap-1.5 rounded px-1.5 py-0.5 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"><Kbd>Esc</Kbd><X className="h-4 w-4" /></button></div>
                 {paying === 'cash' && <>
                   <label className="block text-xs text-muted-foreground" htmlFor="pos-tendered">Tendered (leave empty for exact amount)</label>
-                  <Input id="pos-tendered" autoFocus type="number" min="0" step="any" inputMode="decimal" value={tendered} onChange={event => setTendered(event.target.value)} placeholder={fmtMoney(totals.total)} className="h-12 text-xl font-semibold tabular-nums" />
-                  {change !== null && <div className="flex justify-between rounded-md bg-emerald-50 px-3 py-2 text-lg font-bold text-emerald-800"><span>Change</span><span className="tabular-nums">Rs {fmtMoney(change)}</span></div>}
+                  <Input id="pos-tendered" autoFocus type="number" min="0" step="any" inputMode="decimal" value={tendered} onChange={event => setTendered(event.target.value)} placeholder={fmtMoney(totals.total)} className="h-12 text-xl font-semibold tabular-nums [appearance:textfield] [&::-webkit-inner-spin-button]:appearance-none" />
+                  {change !== null && <div className="flex justify-between rounded-md bg-emerald-50 px-3 py-2 text-lg font-bold text-emerald-800"><span>Change</span><span className="tabular-nums">{fmtMoney(change)}</span></div>}
                 </>}
-                {paying === 'qr' && <p className="text-sm">Check that Rs {fmtMoney(totals.total)} has arrived on <strong>{qrLedgerName || 'QR'}</strong>, then press <Kbd>F8</Kbd> again or confirm.</p>}
+                {paying === 'qr' && <p className="text-sm">Check that {fmtMoney(totals.total)} has arrived on <strong>{qrLedgerName || 'QR'}</strong>, then press <Kbd>F8</Kbd> again or confirm.</p>}
                 {paying === 'credit' && <SearchableSelect autoFocus value={customerId} onValueChange={setCustomerId} placeholder="Select customer" searchPlaceholder="Search customer…" options={customers.map(party => partySelectorOption(party, accounts.find(account => account.id === party.account_id)))} />}
                 <Button type="submit" disabled={saving} className="h-11 w-full text-base">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving bill…</> : <>Confirm and print <span className="ml-2 opacity-80"><Kbd>{paying === 'qr' ? 'F8' : 'Enter'}</Kbd></span></>}</Button>
               </form>
@@ -270,9 +270,13 @@ export function PosPage() {
                 <Button variant="outline" className="h-14 flex-col gap-1 text-base" onClick={() => startPayment('credit')}>Credit<span className="text-[10px] font-semibold text-muted-foreground">F7</span></Button>
               </div>
             )}
-            {lastBill && !paying && <button type="button" onClick={() => reprint(lastBill)} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"><Printer className="h-3.5 w-3.5" />Reprint {savedVoucherNumber(lastBill)} · Rs {fmtMoney(lastBill.total)} <Kbd>F4</Kbd></button>}
+            {lastBill && !paying && <button type="button" onClick={() => reprint(lastBill)} className="mt-2.5 inline-flex items-center gap-1.5 rounded-md px-1.5 py-1 text-xs text-muted-foreground hover:bg-muted hover:text-foreground"><Printer className="h-3.5 w-3.5" />Reprint {savedVoucherNumber(lastBill)} · {fmtMoney(lastBill.total)} <Kbd>F4</Kbd></button>}
           </div>
         </section>
+
+        <div className="px-4 pb-6 md:col-start-1 md:row-start-2 md:border-r lg:px-5">
+          <PosRecentBills bills={recentBills} onReprint={reprint} onError={message => { setError(message); window.scrollTo({ top: 0 }) }} />
+        </div>
       </main>
     </div>
   )
