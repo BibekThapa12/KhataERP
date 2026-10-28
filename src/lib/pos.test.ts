@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CompanyModule, Item } from '@/types'
 import { buildSalesVoucherData } from './engine'
-import { addPosItem, exclusiveDiscount, findPosItemByCode, posModuleAccess, posTotals, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
+import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posModuleAccess, posTotals, qtyFromInput, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
 
 const item = (id: string, overrides: Partial<Item> = {}): Item => ({ id, company_id: 'A', name: id, unit: 'pcs', sell_rate: 100, opening_qty: 0, opening_rate: 0, ...overrides })
 const stock = (qty: number) => () => qty
@@ -56,6 +56,46 @@ describe('setPosLineQty', () => {
 
   it('blocks a qty above stock', () => {
     expect(setPosLineQty([line('coke', 2, 70)], 'coke', 5, item('coke'), stock(3)).ok).toBe(false)
+  })
+})
+
+describe('checkTendered', () => {
+  it('accepts the exact displayed amount when the total has sub-paisa drift', () => {
+    const total = posTotals([line('a', 3, 1)], 0, 13).total
+    expect(total).not.toBe(3)
+    expect(checkTendered('3', total)).toEqual({ tendered: 3, change: 0 })
+  })
+
+  it('treats an empty box as exact', () => {
+    expect(checkTendered('', 99.004)).toEqual({ change: 0 })
+  })
+
+  it('refuses less than the total', () => {
+    expect(checkTendered('98', 99)).toEqual({ error: 'Tendered is less than the total' })
+  })
+
+  it('refuses a scanned barcode typed into tendered', () => {
+    expect(checkTendered('8901725121259', 99).error).toBe('That amount looks like a barcode. Check the tendered amount.')
+  })
+})
+
+describe('qtyFromInput', () => {
+  it('ignores text that is still being typed', () => {
+    expect(['', '0', '0.', '1.', '-', 'abc'].map(qtyFromInput)).toEqual([null, null, null, null, null, null])
+  })
+
+  it('reads a finished positive quantity', () => {
+    expect(['12', '0.5', '1.25'].map(qtyFromInput)).toEqual([12, 0.5, 1.25])
+  })
+})
+
+describe('posBillDate', () => {
+  it('uses today inside the selected fiscal year', () => {
+    expect(posBillDate('2083-07-10', '2083-04-01')).toEqual({ dateBs: '2083-07-10' })
+  })
+
+  it('refuses to back-date into a different fiscal year', () => {
+    expect(posBillDate('2083-07-10', '2082-04-01')).toEqual({ error: 'Today is outside the fiscal year selected in KhataERP. Switch to the current fiscal year first.' })
   })
 })
 

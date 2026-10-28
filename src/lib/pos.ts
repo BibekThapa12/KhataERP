@@ -1,6 +1,7 @@
 import type { CompanyModule, Item } from '@/types'
 import { buildSalesVoucherData, round6 } from '@/lib/engine'
 import { formatStockQuantity } from '@/lib/units'
+import { makeBsKey } from '@/lib/nepaliDate'
 
 export const POS_MODULE_KEY = 'pos_counter'
 
@@ -62,6 +63,34 @@ export function toInvoiceItems(lines: PosLine[], vatRate: number) {
 
 export function exclusiveDiscount(discount: number, vatRate: number) {
   return exclusive(Math.max(0, discount || 0), vatRate)
+}
+
+const paisa = (amount: number) => Math.round((amount + Number.EPSILON) * 100) / 100
+
+/** Cash tendered check against the total the cashier sees (rounded to paisa); an empty box means exact. */
+export function checkTendered(text: string, total: number): { tendered?: number; change?: number; error?: string } {
+  const due = paisa(total)
+  if (!text.trim()) return { change: 0 }
+  const tendered = Number(text)
+  if (!Number.isFinite(tendered) || tendered < due) return { error: 'Tendered is less than the total' }
+  // shortcut: catches a barcode scanned into the tendered box by size alone; replace with scanner-burst detection if real tenders reach Rs 1 lakh over the bill
+  if (tendered - due >= 100_000) return { error: 'That amount looks like a barcode. Check the tendered amount.' }
+  return { tendered, change: paisa(tendered - due) }
+}
+
+/** Quantity typed into a cart row, or null while it is empty, zero or half-typed (e.g. "0." on the way to "0.5"). */
+export function qtyFromInput(text: string): number | null {
+  if (!/^\d*\.?\d+$/.test(text.trim())) return null
+  const qty = Number(text)
+  return qty > 0 ? qty : null
+}
+
+/** POS bills are always dated today; never back-dated into another fiscal year selected in the ERP. */
+export function posBillDate(todayBs: string, fiscalYearStartBs: string): { dateBs?: string; error?: string } {
+  const nextStart = `${Number(fiscalYearStartBs.slice(0, 4)) + 1}-${fiscalYearStartBs.slice(5)}`
+  const key = makeBsKey(todayBs)
+  if (key >= makeBsKey(fiscalYearStartBs) && key < makeBsKey(nextStart)) return { dateBs: todayBs }
+  return { error: 'Today is outside the fiscal year selected in KhataERP. Switch to the current fiscal year first.' }
 }
 
 /** Totals computed by the same builder that posts the voucher, so the cart and the saved bill can't disagree. */

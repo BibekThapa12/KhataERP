@@ -5,11 +5,12 @@ import { useAppStore } from '@/store/useAppStore'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
-import { addPosItem, exclusiveDiscount, findPosItemByCode, posTotals, setPosLineQty, toInvoiceItems, type PosLine } from '@/lib/pos'
+import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posTotals, qtyFromInput, setPosLineQty, toInvoiceItems, type PosLine } from '@/lib/pos'
 import { renderPosReceiptHtml } from '@/lib/posReceipt'
 import { repriceSalesLines } from '@/lib/pricing'
 import { printHtmlDocument } from '@/lib/voucherPrinterRegistry'
-import { selectedFiscalYearEndBs } from '@/lib/reports'
+import { selectedFiscalYearStartBs } from '@/lib/reports'
+import { todayBs } from '@/lib/nepaliDate'
 import { itemSelectorOption, partySelectorOption } from '@/lib/selectorOptions'
 import { normalizeSearch } from '@/lib/search'
 import { publicErrorMessage } from '@/lib/security'
@@ -36,7 +37,9 @@ export function PosPage() {
   const searchRef = useRef<HTMLInputElement>(null)
   const lockRef = useRef(new SubmissionLock())
   const vatRate = (company?.vat_enabled ?? true) ? 13 : 0
-  const today = selectedFiscalYearEndBs(company)
+  const billDate = posBillDate(todayBs(), selectedFiscalYearStartBs(company))
+  const today = billDate.dateBs || todayBs()
+  const [qtyDrafts, setQtyDrafts] = useState<Record<string, string>>({})
   useUnsavedChangesGuard(true, lines.length > 0)
 
   const itemById = useMemo(() => new Map(items.map(item => [item.id, item])), [items])
@@ -97,9 +100,11 @@ export function PosPage() {
 
   const complete = async () => {
     if (!company || !paying || !lines.length) return
+    if (billDate.error) { setError(billDate.error); return }
     if (discount > totals.shelfTotal) { setError('The discount cannot be more than the items total'); return }
-    const tenderedAmount = paying === 'cash' && tendered.trim() ? Number(tendered) : undefined
-    if (tenderedAmount !== undefined && !(tenderedAmount >= totals.total)) { setError('Tendered is less than the total'); return }
+    const cash = paying === 'cash' ? checkTendered(tendered, totals.total) : {}
+    if (cash.error) { setError(cash.error); return }
+    const tenderedAmount = cash.tendered
     if (paying === 'credit' && !customerId) { setError('Select a customer for a credit bill'); return }
     if (!lockRef.current.tryAcquire()) return
     setSaving(true)
@@ -138,7 +143,9 @@ export function PosPage() {
   keyHandler.current = event => {
     if (event.altKey || event.ctrlKey || event.metaKey) return
     const keys: Record<string, () => void> = {
-      F9: () => startPayment('cash'), F8: () => startPayment('qr'), F7: () => startPayment('credit'),
+      F9: () => startPayment('cash'), F7: () => startPayment('credit'),
+      // QR is confirmed with a second F8, never Enter: a scanner's trailing Enter must not mark a bill as paid.
+      F8: () => { if (paying === 'qr') void complete(); else startPayment('qr') },
       F4: () => { if (lastBill) printHtmlDocument(lastBill.html) },
       Escape: () => { if (paying) cancelPayment() },
     }
@@ -154,7 +161,7 @@ export function PosPage() {
   }, [])
   useEffect(() => { searchRef.current?.focus() }, [])
 
-  const change = paying === 'cash' && tendered.trim() ? Number(tendered) - totals.total : null
+  const change = paying === 'cash' && tendered.trim() ? checkTendered(tendered, totals.total).change ?? null : null
 
   return (
     <div className="flex min-h-screen flex-col bg-background text-foreground">
@@ -195,7 +202,7 @@ export function PosPage() {
                 <div className="min-w-0"><div className="truncate">{line.name}</div><div className="text-xs text-muted-foreground">Rs {fmtMoney(line.shelf_rate)} × {line.qty}</div></div>
                 <div className="flex items-center overflow-hidden rounded-md border bg-background">
                   <button type="button" tabIndex={-1} aria-label={`Decrease ${line.name}`} className="px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => changeQty(line, line.qty - 1)}><Minus className="h-3.5 w-3.5" /></button>
-                  <input type="number" min="0" step="any" aria-label={`Quantity of ${line.name}`} value={line.qty} onChange={event => changeQty(line, Number(event.target.value))} onWheel={event => event.currentTarget.blur()} className="w-full min-w-0 border-x bg-transparent py-1 text-center outline-none" />
+                  <input type="number" min="0" step="any" aria-label={`Quantity of ${line.name}`} value={qtyDrafts[line.item_id] ?? line.qty} onChange={event => { const text = event.target.value; setQtyDrafts(drafts => ({ ...drafts, [line.item_id]: text })); const qty = qtyFromInput(text); if (qty !== null) changeQty(line, qty) }} onBlur={() => setQtyDrafts(({ [line.item_id]: _done, ...rest }) => rest)} onWheel={event => event.currentTarget.blur()} className="w-full min-w-0 border-x bg-transparent py-1 text-center outline-none" />
                   <button type="button" tabIndex={-1} aria-label={`Increase ${line.name}`} className="px-2 py-1 text-muted-foreground hover:bg-muted" onClick={() => changeQty(line, line.qty + 1)}><Plus className="h-3.5 w-3.5" /></button>
                 </div>
                 <div className="text-right tabular-nums">{fmtMoney(line.qty * line.shelf_rate)}</div>
@@ -217,9 +224,9 @@ export function PosPage() {
                 <Input autoFocus type="number" min="0" step="any" value={tendered} onChange={event => setTendered(event.target.value)} placeholder={`Tendered (empty = exact ${fmtMoney(totals.total)})`} className="h-11 text-lg" />
                 {change !== null && change >= 0 && <div className="flex justify-between rounded-md bg-emerald-50 px-3 py-2 text-lg font-bold text-emerald-700"><span>Change</span><span>Rs {fmtMoney(change)}</span></div>}
               </>}
-              {paying === 'qr' && <p className="text-sm">Payment received on {accounts.find(account => account.id === company?.pos_qr_account_id)?.name || 'QR'}?</p>}
+              {paying === 'qr' && <p className="text-sm">Payment received on {accounts.find(account => account.id === company?.pos_qr_account_id)?.name || 'QR'}? Press F8 again or click Confirm.</p>}
               {paying === 'credit' && <SearchableSelect autoFocus value={customerId} onValueChange={setCustomerId} placeholder="Select customer" searchPlaceholder="Search customer…" options={customers.map(party => partySelectorOption(party, accounts.find(account => account.id === party.account_id)))} />}
-              <Button type="submit" autoFocus={paying === 'qr'} disabled={saving} className="w-full">{saving ? 'Saving…' : 'Confirm and print (Enter)'}</Button>
+              <Button type="submit" disabled={saving} className="w-full">{saving ? 'Saving…' : paying === 'qr' ? 'Confirm and print (F8)' : 'Confirm and print (Enter)'}</Button>
             </form>
           ) : (
             <div className="grid grid-cols-3 gap-2">
