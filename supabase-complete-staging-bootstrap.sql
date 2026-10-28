@@ -13543,3 +13543,14 @@ insert into public.modules(key,name,description,default_price,is_active)
 values ('pos_counter','POS Counter','Full-screen retail counter: barcode scanning, cash/QR/credit bills, 80mm receipts',0,true)
 on conflict(key) do update set name=excluded.name, description=excluded.description;
 -- END SYNCED MIGRATION: 202610280001_pos_module.sql
+
+-- BEGIN SYNCED MIGRATION: 202610280002_pos_settings.sql
+-- POS counter settings: QR payment ledger and receipt footer.
+begin;
+alter table public.companies add column if not exists pos_qr_account_id uuid references public.accounts(id) on delete set null;
+alter table public.companies add column if not exists pos_receipt_footer text;
+alter table public.companies drop constraint if exists companies_pos_receipt_footer_length;
+alter table public.companies add constraint companies_pos_receipt_footer_length check (pos_receipt_footer is null or length(pos_receipt_footer) <= 200);
+notify pgrst,'reload schema';
+commit;
+-- END SYNCED MIGRATION: 202610280002_pos_settings.sql

@@ -373,6 +373,8 @@ export interface Company {
   invoice_terms?: string
   payment_qr_text?: string
   payment_qr_url?: string
+  pos_qr_account_id?: string | null
+  pos_receipt_footer?: string | null
   logo_url?: string
   plan_status?: 'free' | 'trial' | 'paid' | 'expired'
   trial_ends_at?: string | null

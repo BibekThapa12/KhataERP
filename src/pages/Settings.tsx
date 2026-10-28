@@ -18,6 +18,8 @@ import type { Company, CompanyModule, InventoryValuationMethod, InvoiceItem, Vou
 import { backupFileValidationError, isSafePublicImageUrl, publicErrorMessage } from '@/lib/security'
 import { fiscalYearStartBs as currentFiscalYearStartBs } from '@/lib/reports'
 import { formatMasterName } from '@/lib/nameFormat'
+import { contraMoneyAccounts } from '@/lib/contra'
+import { usePosModuleAccess } from '@/components/pos/PosModuleGuard'
 import { IDENTITY_LIMITS, identityDatabaseError, normalizePanInput, normalizePhoneInput, validateAddress, validateName, validatePan, validatePhone } from '@/lib/identityValidation'
 import { buildPortableCompanyBackup, portableAccountIdMap, portableSystemAccountKey, serializePortableBackup, validatePortableCompanyBackup, type PortableCompanyBackup, type PortableInventorySerial } from '@/lib/portableBackup'
 
@@ -37,7 +39,7 @@ const portableCompanyFields = [
   'name', 'address', 'pan_vat', 'phone', 'vat_enabled', 'inventory_valuation_method',
   'sales_prefix', 'purchase_prefix', 'receipt_prefix', 'payment_prefix', 'sales_return_prefix',
   'purchase_return_prefix', 'journal_numbering_mode', 'reset_numbering_fiscal_year',
-  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'show_company_details_on_sales_invoice', 'invoice_terms', 'payment_qr_text', 'payment_qr_url', 'logo_url', 'fiscal_year_start',
+  'allow_admin_chronological_bypass', 'enforce_sales_invoice_chronology', 'print_format', 'show_company_details_on_sales_invoice', 'invoice_terms', 'payment_qr_text', 'payment_qr_url', 'pos_receipt_footer', 'logo_url', 'fiscal_year_start',
   'fiscal_year_configured',
 ] as const
 
@@ -262,6 +264,9 @@ export function SettingsPage() {
   const [invoiceTerms, setInvoiceTerms] = useState(company?.invoice_terms ?? '')
   const [paymentQrText, setPaymentQrText] = useState(company?.payment_qr_text ?? '')
   const [paymentQrUrl, setPaymentQrUrl] = useState(company?.payment_qr_url ?? '')
+  const [posQrAccountId, setPosQrAccountId] = useState(company?.pos_qr_account_id ?? '')
+  const [posReceiptFooter, setPosReceiptFooter] = useState(company?.pos_receipt_footer ?? '')
+  const posAccess = usePosModuleAccess()
   const [paymentQrSaving, setPaymentQrSaving] = useState(false)
   const [logoUrl, setLogoUrl] = useState(company?.logo_url ?? '')
   const [saving, setSaving] = useState(false)
@@ -327,6 +332,8 @@ export function SettingsPage() {
     setInvoiceTerms(company?.invoice_terms ?? '')
     setPaymentQrText(company?.payment_qr_text ?? '')
     setPaymentQrUrl(company?.payment_qr_url ?? '')
+    setPosQrAccountId(company?.pos_qr_account_id ?? '')
+    setPosReceiptFooter(company?.pos_receipt_footer ?? '')
     setLogoUrl(company?.logo_url ?? '')
   }, [company, effectiveFiscalYearStartBs])
 
@@ -423,6 +430,7 @@ export function SettingsPage() {
         invoice_terms: invoiceTerms.trim(),
         payment_qr_text: paymentQrText.trim(),
         payment_qr_url: paymentQrUrl.trim(),
+        ...(posAccess.enabled ? { pos_qr_account_id: posQrAccountId || null, pos_receipt_footer: posReceiptFooter.trim() || null } : {}),
         logo_url: logoUrl.trim(),
       })
       setSaved(true)
@@ -1322,6 +1330,20 @@ export function SettingsPage() {
                 {paymentQrUrl && <Button type="button" variant="outline" size="sm" disabled={paymentQrSaving} onClick={() => void handlePaymentQrRemove()}><Trash2 className="mr-1.5 h-4 w-4" />Remove QR</Button>}
               </div>
             </div>
+            {posAccess.enabled && company && (
+              <div className="space-y-2 rounded-md border border-border p-3">
+                <Label>POS counter</Label>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">QR payment ledger</Label>
+                  <SearchableSelect value={posQrAccountId} onValueChange={setPosQrAccountId} placeholder="Select Cash or Bank ledger" options={contraMoneyAccounts(accounts, accountCategories, company.id).map(account => ({ value: account.id, label: account.name }))} />
+                  <p className="text-xs text-muted-foreground">QR bills at the POS are posted to this ledger instead of Cash.</p>
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Receipt footer</Label>
+                  <Input value={posReceiptFooter} onChange={e => setPosReceiptFooter(e.target.value)} maxLength={200} placeholder="Thank you, visit again" />
+                </div>
+              </div>
+            )}
             </div>
             <Button onClick={handleSave} disabled={saving}>
               {saving ? 'Saving…' : saved ? 'Saved ✓' : 'Save Changes'}
