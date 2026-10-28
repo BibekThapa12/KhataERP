@@ -7,9 +7,10 @@ import { cn } from '@/lib/utils'
 import {
   LayoutDashboard, TrendingUp, TrendingDown, ArrowDownCircle, ArrowUpCircle,
   BookOpen, Users, Package, Scale, BarChart2, FileText,
-  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator, SlidersHorizontal, HardDrive, ShieldCheck, Activity, Search, PanelLeftClose, PanelLeftOpen, UserCircle2, PlusCircle, Building2, Barcode
+  Percent, Boxes, Settings, LogOut, ChevronDown, Code2, CalendarDays, Library, Database, Undo2, Redo2, Menu, X, ListTree, WalletCards, Clock3, Files, Landmark, Plus, CheckCircle2, ArrowLeftRight, Calculator, SlidersHorizontal, HardDrive, ShieldCheck, Activity, Search, PanelLeftClose, PanelLeftOpen, UserCircle2, PlusCircle, Building2, Barcode, ScanBarcode
 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
+import { usePosModuleAccess } from '@/components/pos/PosModuleGuard'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/misc'
@@ -84,6 +85,7 @@ const NAV_SECTIONS: {
   {
     label: 'Transactions',
     items: [
+      { to: '/pos', label: 'POS counter', Icon: ScanBarcode, keywords: ['pos', 'counter', 'retail', 'billing'] },
       { to: '/sales', label: 'Sales Invoices', Icon: TrendingUp },
       { to: '/purchase', label: 'Purchase Bills', Icon: TrendingDown },
       { to: '/receipts', label: 'Receipts', Icon: ArrowDownCircle },
@@ -453,6 +455,7 @@ export function AppShell() {
   const chequePermissions = useAppStore(s => s.chequePermissions)
   const chequeAccess = chequeEntitlement(companyModules.find(entry => entry.module?.key === 'cheque_management'))
   const showChequeNavigation = chequeAccess.canRead && chequePermissions.includes('cheque.view')
+  const posEnabled = usePosModuleAccess().enabled
   const [developerAdmin, setDeveloperAdmin] = useState(false)
   const billingStatus = companyBillingStatus(company)
   const planInactive = billingStatus === 'expired'
@@ -541,10 +544,11 @@ export function AppShell() {
       : item).filter(item => {
         if (item.kind === 'group') return item.children.length > 0
         if (!vatEnabled && item.to === '/vat-report') return false
+        if (!posEnabled && item.to === '/pos') return false
         return section.label !== 'Cheque Management' || chequeItemVisible(item)
       })
     return { ...section, items }
-  }).filter(Boolean) as typeof NAV_SECTIONS, [chequeAccess.canWrite, chequePermissions, showChequeNavigation, vatEnabled])
+  }).filter(Boolean) as typeof NAV_SECTIONS, [chequeAccess.canWrite, chequePermissions, showChequeNavigation, vatEnabled, posEnabled])
 
   const searchDestinations = useMemo(() => [
     ...visibleNavSections.flatMap(section => section.items.flatMap(item => item.kind === 'group'
@@ -565,6 +569,17 @@ export function AppShell() {
     window.addEventListener('keydown', openCalculator, true)
     return () => window.removeEventListener('keydown', openCalculator, true)
   }, [])
+
+  useEffect(() => {
+    if (!posEnabled) return
+    const openPos = (event: KeyboardEvent) => {
+      if (event.key !== 'F10' || event.altKey || event.ctrlKey || event.metaKey || event.shiftKey) return
+      event.preventDefault()
+      if (!event.repeat) void navigateFromShell('/pos')
+    }
+    window.addEventListener('keydown', openPos, true)
+    return () => window.removeEventListener('keydown', openPos, true)
+  }, [navigateFromShell, posEnabled])
 
   useEffect(() => {
     if (!userId) return

@@ -20,7 +20,7 @@ const row = (label: string, value: string, strong = false) => `<div class="l${st
 export function renderPosReceiptHtml({ company, voucher, lines, paymentLabel, discount, tendered, customerName }: PosReceiptInput): string {
   const time = new Date().toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' })
   const items = lines.map(line => `<div>${esc(line.name)}</div>${row(`  ${line.qty} x ${fmtMoney(line.shelf_rate)}`, fmtMoney(round2(line.qty * line.shelf_rate)))}`).join('')
-  const taxable = round2(voucher.subtotal - voucher.discount)
+  const taxable = round2((voucher.subtotal ?? 0) - (voucher.discount ?? 0))
   return `<!doctype html><html><head><meta charset="utf-8"><title>${esc(voucher.invoice_no)}</title><style>
 @page { size: 80mm auto; margin: 0 }
 body { width: 72mm; margin: 0 auto; padding: 3mm 0; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #000 }

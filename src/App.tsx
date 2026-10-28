@@ -7,6 +7,7 @@ import { useAppStore, type CompanyRefreshResource } from '@/store/useAppStore'
 import { reconcileCompanyOnResume } from '@/lib/resumeReconciliation'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
+import { PosModuleGuard } from '@/components/pos/PosModuleGuard'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
 import { AppToaster } from '@/components/AppToaster'
 import { VoucherTable } from '@/components/tables/VoucherTable'
@@ -17,6 +18,7 @@ const ResetPasswordPage = lazy(() => import('@/pages/ResetPassword').then(m => (
 const loadDashboard = () => import('@/pages/Dashboard')
 const Dashboard = lazy(() => loadDashboard().then(m => ({ default: m.Dashboard })))
 const SalesPage = lazy(() => import('@/pages/Sales').then(m => ({ default: m.SalesPage })))
+const PosPage = lazy(() => import('@/pages/Pos').then(m => ({ default: m.PosPage })))
 const PurchasePage = lazy(() => import('@/pages/Purchase').then(m => ({ default: m.PurchasePage })))
 const SalesReturnPage = lazy(() => import('@/pages/SalesReturn').then(m => ({ default: m.SalesReturnPage })))
 const PurchaseReturnPage = lazy(() => import('@/pages/PurchaseReturn').then(m => ({ default: m.PurchaseReturnPage })))
@@ -305,6 +307,7 @@ export default function App() {
         <Routes>
           <Route path="/login" element={!authReady ? <FullPageStatus message="Checking session..." /> : userId ? <Navigate to="/" replace /> : <LoginPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/pos" element={<ProtectedRoute authReady={authReady}><PosModuleGuard><PosPage /></PosModuleGuard></ProtectedRoute>} />
           <Route path="/" element={<ProtectedRoute authReady={authReady}><AppShell /></ProtectedRoute>}>
             <Route index element={<Dashboard />} />
             <Route path="sales" element={<SalesPage />} />
