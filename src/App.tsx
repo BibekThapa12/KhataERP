@@ -8,6 +8,7 @@ import { reconcileCompanyOnResume } from '@/lib/resumeReconciliation'
 import { AppShell } from '@/components/layout/AppShell'
 import { ChequeModuleGuard } from '@/components/cheques/ChequeModuleGuard'
 import { PosModuleGuard } from '@/components/pos/PosModuleGuard'
+import { shouldHydrateOnSignIn } from '@/lib/authHydration'
 import { createCorrelationId, type ClientErrorReport } from '@/lib/security'
 import { AppToaster } from '@/components/AppToaster'
 import { VoucherTable } from '@/components/tables/VoucherTable'
@@ -138,6 +139,7 @@ export default function App() {
     const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
       if (!active || event === 'INITIAL_SESSION') return
       const uid = session?.user?.id ?? null
+      const { userId: previousUserId, dataReady } = useAppStore.getState()
       setUserId(uid)
       // TOKEN_REFRESHED happens periodically in the background. Reloading all
       // vouchers, masters, stock and optional-module data for it caused the
@@ -145,7 +147,7 @@ export default function App() {
       if (event === 'PASSWORD_RECOVERY') {
         try { window.sessionStorage.setItem('khataerp:password-recovery', '1') } catch { /* unavailable */ }
       }
-      if (uid && event === 'SIGNED_IN' && window.location.pathname !== '/reset-password') {
+      if (uid && shouldHydrateOnSignIn({ event, userId: uid, previousUserId, dataReady, pathname: window.location.pathname })) {
         void loadDashboard()
         void loadAll(uid)
       }
