@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { SearchableSelect } from '@/components/inputs/SearchableSelect'
 import { PosRecentBills, usePosPaymentLabel } from '@/components/pos/PosRecentBills'
-import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posTotals, qtyFromInput, receiptLinesFromVoucher, recentPosBills, setPosLineQty, toInvoiceItems, type PosLine } from '@/lib/pos'
+import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posCustomerName, posNarration, posTotals, qtyFromInput, receiptLinesFromVoucher, recentPosBills, setPosLineQty, toInvoiceItems, type PosLine } from '@/lib/pos'
 import { renderPosReceiptHtml } from '@/lib/posReceipt'
 import { repriceSalesLines } from '@/lib/pricing'
 import { printHtmlDocument } from '@/lib/voucherPrinterRegistry'
@@ -38,6 +38,7 @@ export function PosPage() {
   const [paying, setPaying] = useState<PaymentMode | null>(null)
   const [tendered, setTendered] = useState('')
   const [customerId, setCustomerId] = useState('')
+  const [walkInName, setWalkInName] = useState('')
   const [saving, setSaving] = useState(false)
   const searchRef = useRef<HTMLInputElement>(null)
   const lockRef = useRef(new SubmissionLock())
@@ -112,7 +113,7 @@ export function PosPage() {
   const reprint = (voucher: Voucher) => {
     if (!company) return
     const factor = 1 + (Number(voucher.vat_rate) || 0) / 100
-    const customerName = !voucher.is_cash && voucher.party_account_id ? parties.find(party => party.account_id === voucher.party_account_id)?.name : undefined
+    const customerName = !voucher.is_cash && voucher.party_account_id ? parties.find(party => party.account_id === voucher.party_account_id)?.name : posCustomerName(voucher.narration)
     printHtmlDocument(renderPosReceiptHtml({ company, voucher, lines: receiptLinesFromVoucher(voucher, id => getItem(id)?.name || 'Item'), discount: Math.round((voucher.discount || 0) * factor * 100) / 100, paymentLabel: paymentLabel(voucher).replace(/^Credit · .*/, 'Credit'), customerName }))
   }
 
@@ -136,14 +137,15 @@ export function PosPage() {
         discount: exclusiveDiscount(discount, vatRate),
         vat_rate: vatRate,
         credit_days: customer?.default_credit_days ?? 0,
-        narration: 'POS',
+        narration: posNarration(paying === 'credit' ? '' : walkInName),
         date_bs: today,
       }, 'Completed')
-      printHtmlDocument(renderPosReceiptHtml({ company, voucher, lines: pricedLines, discount, paymentLabel: paying === 'qr' ? qrLedgerName || 'QR' : PAYMENT_LABEL[paying], tendered: cash.tendered, customerName: customer?.name }))
+      printHtmlDocument(renderPosReceiptHtml({ company, voucher, lines: pricedLines, discount, paymentLabel: paying === 'qr' ? qrLedgerName || 'QR' : PAYMENT_LABEL[paying], tendered: cash.tendered, customerName: customer?.name ?? (posCustomerName(voucher.narration)) }))
       setLines([])
       setQtyDrafts({})
       setDiscountInput('')
       setCustomerId('')
+      setWalkInName('')
       setPaying(null)
       focusSearch()
     } catch (saveError) {
@@ -263,6 +265,13 @@ export function PosPage() {
                   {change !== null && <div className="flex justify-between rounded-md bg-emerald-50 px-3 py-2 text-lg font-bold text-emerald-800"><span>Change</span><span className="tabular-nums">{fmtMoney(change)}</span></div>}
                 </>}
                 {paying === 'qr' && <p className="text-sm">Check that {fmtMoney(totals.total)} has arrived on <strong>{qrLedgerName || 'QR'}</strong>, then press <Kbd>F8</Kbd> again or confirm.</p>}
+                {paying !== 'credit' && (
+                  <div>
+                    <label className="mb-1 block text-xs text-muted-foreground" htmlFor="pos-walkin-name">Customer name on bill <span className="opacity-75">(optional)</span></label>
+                    {/* Enter never confirms a QR bill from here: only F8 or the button can. */}
+                    <Input id="pos-walkin-name" value={walkInName} maxLength={80} autoComplete="off" onChange={event => setWalkInName(event.target.value)} onKeyDown={event => { if (event.key === 'Enter' && paying === 'qr') event.preventDefault() }} placeholder="Walk-in customer" className="h-9" />
+                  </div>
+                )}
                 {paying === 'credit' && <SearchableSelect autoFocus value={customerId} onValueChange={setCustomerId} placeholder="Select customer" searchPlaceholder="Search customer…" options={customers.map(party => partySelectorOption(party, accounts.find(account => account.id === party.account_id)))} />}
                 <Button type="submit" disabled={saving} className="h-11 w-full text-base">{saving ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Saving bill…</> : <>Confirm and print <span className="ml-2 opacity-80"><Kbd>{paying === 'qr' ? 'F8' : 'Enter'}</Kbd></span></>}</Button>
               </form>

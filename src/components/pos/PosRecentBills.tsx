@@ -10,6 +10,7 @@ import { printPersistedVoucher } from '@/lib/voucherPrinterRegistry'
 import { savedVoucherNumber } from '@/lib/voucherNumbers'
 import { publicErrorMessage } from '@/lib/security'
 import { fmtMoney } from '@/lib/utils'
+import { posCustomerName } from '@/lib/pos'
 import type { Voucher } from '@/types'
 
 const QR_EDIT_BLOCK = 'POS QR bill. Cancel it and re-ring it at the POS.'
@@ -69,7 +70,7 @@ export function PosRecentBills({ bills, onReprint, onError }: { bills: Voucher[]
                   {voucher.cancelled && <span className="rounded bg-destructive/10 px-1.5 py-px text-[11px] font-medium text-destructive">Cancelled</span>}
                 </div>
                 <div className="truncate text-xs text-muted-foreground">
-                  {voucher.created_at ? new Date(voucher.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) + ' · ' : ''}{paymentLabel(voucher)}
+                  {voucher.created_at ? new Date(voucher.created_at).toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' }) + ' · ' : ''}{paymentLabel(voucher)}{posCustomerName(voucher.narration) ? ` · ${posCustomerName(voucher.narration)}` : ''}
                 </div>
               </div>
               <span className={`tabular-nums font-medium ${voucher.cancelled ? 'line-through' : ''}`}>{fmtMoney(voucher.total)}</span>

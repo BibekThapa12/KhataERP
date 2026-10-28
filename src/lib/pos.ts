@@ -93,10 +93,24 @@ export function posBillDate(todayBs: string, fiscalYearStartBs: string): { dateB
   return { error: 'Today is outside the fiscal year selected in KhataERP. Switch to the current fiscal year first.' }
 }
 
+// POS bills are marked by their note; a walk-in customer's name rides along ("POS · Ram Sharma") since cash sales have no party.
+const POS_NOTE = 'POS'
+const POS_NAME_SEPARATOR = ' · '
+const isPosNarration = (narration?: string) => narration === POS_NOTE || !!narration?.startsWith(POS_NOTE + POS_NAME_SEPARATOR)
+
+export function posNarration(customerName: string): string {
+  const name = customerName.trim().replace(/\s+/g, ' ').slice(0, 80)
+  return name ? POS_NOTE + POS_NAME_SEPARATOR + name : POS_NOTE
+}
+
+export function posCustomerName(narration?: string): string | undefined {
+  return narration?.startsWith(POS_NOTE + POS_NAME_SEPARATOR) ? narration.slice(POS_NOTE.length + POS_NAME_SEPARATOR.length) || undefined : undefined
+}
+
 /** Completed POS bills (cancelled ones too) dated `dateBs`, newest first. */
 export function recentPosBills(vouchers: Voucher[], dateBs: string, limit = 10): Voucher[] {
   return vouchers
-    .filter(voucher => voucher.type === 'Sales' && voucher.status !== 'Draft' && voucher.narration === 'POS' && voucher.date_bs === dateBs)
+    .filter(voucher => voucher.type === 'Sales' && voucher.status !== 'Draft' && isPosNarration(voucher.narration) && voucher.date_bs === dateBs)
     .sort((a, b) => (b.seq || 0) - (a.seq || 0))
     .slice(0, limit)
 }

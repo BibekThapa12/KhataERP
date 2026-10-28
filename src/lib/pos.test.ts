@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { CompanyModule, Item, Voucher } from '@/types'
 import { buildSalesVoucherData } from './engine'
-import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posModuleAccess, posTotals, qtyFromInput, receiptLinesFromVoucher, recentPosBills, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
+import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posCustomerName, posModuleAccess, posNarration, posTotals, qtyFromInput, receiptLinesFromVoucher, recentPosBills, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
 
 const item = (id: string, overrides: Partial<Item> = {}): Item => ({ id, company_id: 'A', name: id, unit: 'pcs', sell_rate: 100, opening_qty: 0, opening_rate: 0, ...overrides })
 const stock = (qty: number) => () => qty
@@ -107,8 +107,29 @@ describe('recentPosBills', () => {
     expect(recentPosBills(vouchers, '2083-07-10').map(entry => entry.id)).toEqual(['3', '2', '1'])
   })
 
+  it('includes bills that carry a customer name', () => {
+    expect(recentPosBills([bill('1', { narration: 'POS · Ram Sharma' })], '2083-07-10').map(entry => entry.id)).toEqual(['1'])
+  })
+
   it('keeps only the newest ten', () => {
     expect(recentPosBills(Array.from({ length: 12 }, (_, index) => bill(String(index + 1))), '2083-07-10')).toHaveLength(10)
+  })
+})
+
+describe('POS customer name in the bill note', () => {
+  it('writes and reads back a walk-in customer name', () => {
+    expect(posNarration('  Ram   Sharma ')).toBe('POS · Ram Sharma')
+    expect(posCustomerName('POS · Ram Sharma')).toBe('Ram Sharma')
+  })
+
+  it('stays plain POS without a name', () => {
+    expect(posNarration('   ')).toBe('POS')
+    expect(posCustomerName('POS')).toBeUndefined()
+    expect(posCustomerName('Counter sale')).toBeUndefined()
+  })
+
+  it('caps the name at 80 characters', () => {
+    expect(posCustomerName(posNarration('x'.repeat(120)))).toHaveLength(80)
   })
 })
 
