@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { Item } from '@/types'
+import type { CompanyModule, Item } from '@/types'
 import { buildSalesVoucherData } from './engine'
-import { addPosItem, exclusiveDiscount, findPosItemByCode, posTotals, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
+import { addPosItem, exclusiveDiscount, findPosItemByCode, posModuleAccess, posTotals, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
 
 const item = (id: string, overrides: Partial<Item> = {}): Item => ({ id, company_id: 'A', name: id, unit: 'pcs', sell_rate: 100, opening_qty: 0, opening_rate: 0, ...overrides })
 const stock = (qty: number) => () => qty
@@ -56,6 +56,31 @@ describe('setPosLineQty', () => {
 
   it('blocks a qty above stock', () => {
     expect(setPosLineQty([line('coke', 2, 70)], 'coke', 5, item('coke'), stock(3)).ok).toBe(false)
+  })
+})
+
+describe('posModuleAccess', () => {
+  const today = '2026-10-28'
+  const entitlement = (overrides: Partial<CompanyModule> = {}, key = 'pos_counter'): CompanyModule => ({ id: 'e', company_id: 'A', module_id: 'm', is_enabled: true, status: 'active', billing_type: 'included', price: 0, payment_status: 'pending', settings: {}, module: { id: 'm', key, name: 'POS Counter', default_price: 0, is_active: true }, ...overrides })
+
+  it('is off without an entitlement', () => {
+    expect(posModuleAccess(undefined, today)).toEqual({ enabled: false, reason: 'POS Counter is not enabled for this company.' })
+  })
+
+  it('is on for an active included module', () => {
+    expect(posModuleAccess(entitlement(), today).enabled).toBe(true)
+  })
+
+  it('is off when read-only', () => {
+    expect(posModuleAccess(entitlement({ status: 'read_only' }), today).enabled).toBe(false)
+  })
+
+  it('is off once expired', () => {
+    expect(posModuleAccess(entitlement({ expires_at: '2026-10-27' }), today)).toEqual({ enabled: false, reason: 'The module has expired.' })
+  })
+
+  it('ignores a cheque entitlement', () => {
+    expect(posModuleAccess(entitlement({}, 'cheque_management'), today).enabled).toBe(false)
   })
 })
 

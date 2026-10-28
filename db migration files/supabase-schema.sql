@@ -5641,3 +5641,10 @@ grant execute on function public.restore_company_inventory_serials(uuid,jsonb) t
 notify pgrst,'reload schema';
 commit;
 -- END SYNCED MIGRATION: 202610270001_serial_integrity_and_backups.sql
+
+-- BEGIN SYNCED MIGRATION: 202610280001_pos_module.sql
+-- POS Counter optional module, toggled per company by the developer.
+insert into public.modules(key,name,description,default_price,is_active)
+values ('pos_counter','POS Counter','Full-screen retail counter: barcode scanning, cash/QR/credit bills, 80mm receipts',0,true)
+on conflict(key) do update set name=excluded.name, description=excluded.description;
+-- END SYNCED MIGRATION: 202610280001_pos_module.sql

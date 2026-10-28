@@ -389,7 +389,8 @@ function DeveloperKpiStrip({
 }
 
 function CompanyModulesDialog({ company, modules, entitlements, open, onClose, onSaved }: { company: Company; modules: AppModule[]; entitlements: CompanyModule[]; open: boolean; onClose: () => void; onSaved: () => void }) {
-  const module = modules.find(entry => entry.key === 'cheque_management')
+  const [moduleId, setModuleId] = useState(() => (modules.find(entry => entry.key === 'cheque_management') || modules[0])?.id || '')
+  const module = modules.find(entry => entry.id === moduleId)
   const existing = entitlements.find(entry => entry.module_id === module?.id)
   const [enabled, setEnabled] = useState(existing?.is_enabled || false)
   const [status, setStatus] = useState(existing?.status || 'disabled')
@@ -449,8 +450,9 @@ function CompanyModulesDialog({ company, modules, entitlements, open, onClose, o
     <Dialog open={open} onOpenChange={value => !value && onClose()}>
       <DialogContent className="max-w-2xl">
         <DialogHeader><DialogTitle>{company.name} · Modules</DialogTitle></DialogHeader>
-        {!module ? <p className="text-sm text-destructive">Run the Cheque Management migration to create the module catalogue.</p> : (
+        {!module ? <p className="text-sm text-destructive">Run the module migrations to create the module catalogue.</p> : (
           <div className="grid gap-3 sm:grid-cols-2">
+            <div className="sm:col-span-2"><Label>Module</Label><SearchableSelect value={moduleId} onValueChange={setModuleId} options={modules.map(entry => ({ value: entry.id, label: entry.name }))} /></div>
             <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={enabled} onChange={e => { setEnabled(e.target.checked); if (e.target.checked && status === 'disabled') setStatus('active') }} />Enable Cheque Management</label>
             <div />
             <div><Label>Status</Label><SearchableSelect value={status} onValueChange={value => setStatus(value as CompanyModule['status'])} options={['active', 'trial', 'grace_period', 'read_only', 'disabled'].map(value => ({ value, label: value.replaceAll('_', ' ') }))} /></div>

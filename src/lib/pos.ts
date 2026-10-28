@@ -1,6 +1,19 @@
-import type { Item } from '@/types'
+import type { CompanyModule, Item } from '@/types'
 import { buildSalesVoucherData, round6 } from '@/lib/engine'
 import { formatStockQuantity } from '@/lib/units'
+
+export const POS_MODULE_KEY = 'pos_counter'
+
+// shortcut: duplicates chequeEntitlement's write rule; extract a shared moduleEntitlement(key) if a third module appears
+export function posModuleAccess(entitlement?: CompanyModule | null, today = new Date().toISOString().slice(0, 10)): { enabled: boolean; reason: string } {
+  if (!entitlement?.is_enabled || entitlement.module?.key !== POS_MODULE_KEY || entitlement.module?.is_active === false) return { enabled: false, reason: 'POS Counter is not enabled for this company.' }
+  if (entitlement.starts_at && entitlement.starts_at > today) return { enabled: false, reason: 'The module start date has not arrived.' }
+  if (entitlement.expires_at && entitlement.expires_at < today) return { enabled: false, reason: 'The module has expired.' }
+  if (entitlement.payment_status === 'cancelled') return { enabled: false, reason: 'Module payment is cancelled.' }
+  const paid = entitlement.status === 'trial' || entitlement.billing_type === 'included' || ['paid', 'waived'].includes(entitlement.payment_status)
+  if (!['active', 'trial'].includes(entitlement.status) || !paid) return { enabled: false, reason: 'The module is disabled.' }
+  return { enabled: true, reason: '' }
+}
 
 /** One cart row. `shelf_rate` is the VAT-inclusive price per main unit. */
 export interface PosLine { item_id: string; name: string; qty: number; shelf_rate: number }
