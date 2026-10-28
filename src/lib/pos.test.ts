@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
-import type { CompanyModule, Item } from '@/types'
+import type { CompanyModule, Item, Voucher } from '@/types'
 import { buildSalesVoucherData } from './engine'
-import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posModuleAccess, posTotals, qtyFromInput, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
+import { addPosItem, checkTendered, exclusiveDiscount, findPosItemByCode, posBillDate, posModuleAccess, posTotals, qtyFromInput, receiptLinesFromVoucher, recentPosBills, setPosLineQty, toInvoiceItems, type PosLine } from './pos'
 
 const item = (id: string, overrides: Partial<Item> = {}): Item => ({ id, company_id: 'A', name: id, unit: 'pcs', sell_rate: 100, opening_qty: 0, opening_rate: 0, ...overrides })
 const stock = (qty: number) => () => qty
@@ -96,6 +96,31 @@ describe('posBillDate', () => {
 
   it('refuses to back-date into a different fiscal year', () => {
     expect(posBillDate('2083-07-10', '2082-04-01')).toEqual({ error: 'Today is outside the fiscal year selected in KhataERP. Switch to the current fiscal year first.' })
+  })
+})
+
+describe('recentPosBills', () => {
+  const bill = (id: string, overrides: Partial<Voucher> = {}) => ({ id, type: 'Sales', status: 'Completed', narration: 'POS', date_bs: '2083-07-10', seq: Number(id), total: 1, cancelled: false, ...overrides }) as Voucher
+
+  it('lists today\'s POS bills newest first, including cancelled ones', () => {
+    const vouchers = [bill('1'), bill('3', { cancelled: true }), bill('2'), bill('4', { narration: 'Counter sale' }), bill('5', { date_bs: '2083-07-09' }), bill('6', { status: 'Draft' }), bill('7', { type: 'Purchase' })]
+    expect(recentPosBills(vouchers, '2083-07-10').map(entry => entry.id)).toEqual(['3', '2', '1'])
+  })
+
+  it('keeps only the newest ten', () => {
+    expect(recentPosBills(Array.from({ length: 12 }, (_, index) => bill(String(index + 1))), '2083-07-10')).toHaveLength(10)
+  })
+})
+
+describe('receiptLinesFromVoucher', () => {
+  it('turns saved exclusive rates back into shelf prices', () => {
+    const voucher = { vat_rate: 13, invoice_items: [{ item_id: 'coke', item_name: 'Coke 500ml', qty: 2, rate: 61.946903 }] } as Voucher
+    expect(receiptLinesFromVoucher(voucher, () => 'unused')).toEqual([{ name: 'Coke 500ml', qty: 2, shelf_rate: 70 }])
+  })
+
+  it('falls back to the item name lookup and keeps rates when VAT is 0', () => {
+    const voucher = { vat_rate: 0, invoice_items: [{ item_id: 'tea', qty: 1, rate: 25 }] } as Voucher
+    expect(receiptLinesFromVoucher(voucher, id => `Item ${id}`)).toEqual([{ name: 'Item tea', qty: 1, shelf_rate: 25 }])
   })
 })
 

@@ -1,4 +1,4 @@
-import type { CompanyModule, Item } from '@/types'
+import type { CompanyModule, Item, Voucher } from '@/types'
 import { buildSalesVoucherData, round6 } from '@/lib/engine'
 import { formatStockQuantity } from '@/lib/units'
 import { makeBsKey } from '@/lib/nepaliDate'
@@ -91,6 +91,20 @@ export function posBillDate(todayBs: string, fiscalYearStartBs: string): { dateB
   const key = makeBsKey(todayBs)
   if (key >= makeBsKey(fiscalYearStartBs) && key < makeBsKey(nextStart)) return { dateBs: todayBs }
   return { error: 'Today is outside the fiscal year selected in KhataERP. Switch to the current fiscal year first.' }
+}
+
+/** Completed POS bills (cancelled ones too) dated `dateBs`, newest first. */
+export function recentPosBills(vouchers: Voucher[], dateBs: string, limit = 10): Voucher[] {
+  return vouchers
+    .filter(voucher => voucher.type === 'Sales' && voucher.status !== 'Draft' && voucher.narration === 'POS' && voucher.date_bs === dateBs)
+    .sort((a, b) => (b.seq || 0) - (a.seq || 0))
+    .slice(0, limit)
+}
+
+/** Receipt lines for a saved bill: exclusive rates are turned back into the shelf prices the customer saw. */
+export function receiptLinesFromVoucher(voucher: Voucher, itemName: (itemId: string) => string) {
+  const factor = 1 + (Number(voucher.vat_rate) || 0) / 100
+  return (voucher.invoice_items || []).map(entry => ({ name: entry.item_name || itemName(entry.item_id), qty: entry.qty, shelf_rate: paisa(entry.rate * factor) }))
 }
 
 /** Totals computed by the same builder that posts the voucher, so the cart and the saved bill can't disagree. */
