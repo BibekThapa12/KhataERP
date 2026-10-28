@@ -1,0 +1,176 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>KhataERP POS samples</title>
+<style>
+  :root { --bg:#f4f6f9; --card:#fff; --text:#0f172a; --muted:#64748b; --line:#e2e8f0; --primary:#1d4ed8; --primary-soft:#eff6ff; --ok:#15803d; --ok-soft:#f0fdf4; --warn:#b45309; --warn-soft:#fffbeb; --danger:#b91c1c; --danger-soft:#fef2f2; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .page { max-width:1180px; margin:0 auto; padding:24px 16px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; } h2 { font-size:16px; margin:32px 0 10px; }
+  .lead { color:var(--muted); margin:0 0 8px; }
+  .screen { background:var(--card); border:1px solid var(--line); border-radius:12px; overflow:hidden; }
+  .top { display:flex; align-items:center; gap:12px; padding:10px 16px; border-bottom:1px solid var(--line); background:#0f172a; color:#e2e8f0; }
+  .top b { color:#fff; } .top .sp { margin-left:auto; } .top a { color:#bfdbfe; text-decoration:none; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; background:#1e293b; color:#cbd5e1; }
+  .grid { display:grid; grid-template-columns:minmax(0,1.45fr) minmax(0,1fr); min-height:520px; }
+  .left { padding:16px; border-right:1px solid var(--line); }
+  .right { padding:16px; display:flex; flex-direction:column; gap:8px; background:#fbfcfe; }
+  .search { display:flex; align-items:center; gap:8px; border:2px solid var(--primary); border-radius:10px; padding:10px 12px; font-size:16px; }
+  .search .ph { color:var(--muted); } .kbd { font:600 11px ui-monospace,monospace; background:#e2e8f0; color:#334155; border-radius:4px; padding:1px 5px; }
+  .results { margin-top:6px; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .res { display:flex; justify-content:space-between; padding:9px 12px; border-top:1px solid var(--line); } .res:first-child { border-top:0; }
+  .res.on { background:var(--primary-soft); color:var(--primary); } .res small { color:var(--muted); }
+  .msg { margin-top:10px; padding:8px 12px; border-radius:8px; font-size:13px; }
+  .msg.err { background:var(--danger-soft); color:var(--danger); } .msg.warn { background:var(--warn-soft); color:var(--warn); }
+  .chips { display:flex; gap:6px; flex-wrap:wrap; margin:14px 0 8px; color:var(--muted); font-size:12px; }
+  .tiles { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:8px; }
+  .tile { border:1px solid var(--line); border-radius:10px; padding:10px; background:#fff; } .tile b { display:block; } .tile small { color:var(--muted); }
+  .cart-h { display:flex; justify-content:space-between; align-items:center; }
+  .row { display:grid; grid-template-columns:minmax(0,1fr) 108px 70px 18px; gap:8px; align-items:center; padding:8px 0; border-bottom:1px solid var(--line); }
+  .row .n small { display:block; color:var(--muted); font-size:12px; }
+  .qty { display:flex; align-items:center; border:1px solid var(--line); border-radius:8px; overflow:hidden; } .qty span { width:28px; text-align:center; color:var(--muted); } .qty b { flex:1; text-align:center; border-left:1px solid var(--line); border-right:1px solid var(--line); padding:3px 0; }
+  .amt { text-align:right; font-variant-numeric:tabular-nums; } .x { color:var(--muted); }
+  .sum { display:flex; justify-content:space-between; color:var(--muted); font-variant-numeric:tabular-nums; }
+  .total { display:flex; justify-content:space-between; font-size:28px; font-weight:700; padding:6px 0; border-top:2px solid var(--text); margin-top:4px; font-variant-numeric:tabular-nums; }
+  .pay { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .btn { border:1px solid var(--line); background:#fff; border-radius:10px; padding:12px 8px; text-align:center; font-weight:600; } .btn small { display:block; font-weight:400; color:var(--muted); font-size:12px; }
+  .btn.primary { background:var(--primary); border-color:var(--primary); color:#fff; } .btn.primary small { color:#dbeafe; }
+  .minor { display:flex; gap:8px; color:var(--muted); font-size:12px; }
+  .minor span { border:1px solid var(--line); border-radius:8px; padding:4px 8px; background:#fff; }
+  .overlay { position:relative; background:rgba(15,23,42,.45); display:flex; align-items:center; justify-content:center; padding:40px 16px; }
+  .modal { background:#fff; border-radius:14px; width:100%; max-width:380px; padding:20px; }
+  .modal h3 { margin:0 0 12px; font-size:16px; }
+  .field { border:2px solid var(--primary); border-radius:10px; padding:10px 12px; font-size:22px; font-weight:600; }
+  .quick { display:flex; gap:6px; margin:8px 0 14px; } .quick span { flex:1; text-align:center; border:1px solid var(--line); border-radius:8px; padding:6px; }
+  .change { display:flex; justify-content:space-between; background:var(--ok-soft); color:var(--ok); border-radius:10px; padding:10px 12px; font-size:20px; font-weight:700; margin-bottom:14px; }
+  .pair { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:16px; align-items:start; }
+  .receipt { background:#fff; width:302px; margin:0 auto; padding:16px 14px; font:12px/1.5 ui-monospace, Consolas, monospace; border:1px dashed #94a3b8; }
+  .receipt .c { text-align:center; } .receipt hr { border:0; border-top:1px dashed #94a3b8; margin:6px 0; }
+  .receipt .l { display:flex; justify-content:space-between; } .receipt .big { font-weight:700; font-size:14px; }
+  .settings { padding:18px; }
+  .settings .lbl { font-size:13px; color:var(--muted); margin:12px 0 4px; }
+  .input { border:1px solid var(--line); border-radius:8px; padding:8px 10px; background:#fff; display:flex; justify-content:space-between; }
+  .hint { font-size:12px; color:var(--muted); margin-top:4px; }
+  .nav { width:200px; border-right:1px solid var(--line); padding:12px; font-size:13px; line-height:2; background:#fbfcfe; }
+  .nav .g { color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; margin-top:6px; }
+  .nav .new { background:var(--primary-soft); color:var(--primary); border-radius:6px; padding:0 8px; font-weight:600; }
+  .note { font-size:13px; color:var(--muted); margin:8px 0 0; }
+  @media (max-width: 820px) { .grid { grid-template-columns:1fr; } .left { border-right:0; border-bottom:1px solid var(--line); } .tiles { grid-template-columns:repeat(2,1fr); } .nav { display:none; } }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>KhataERP POS: sample screens</h1>
+  <p class="lead">Design mockups for the POS counter (static, nothing is clickable). Prices include VAT, matching what's on the shelf.</p>
+
+  <h2>1. POS counter screen (opens with F10 or Transactions → POS counter)</h2>
+  <div class="screen">
+    <div class="top"><b>KhataERP POS</b><span class="pill">Bibek Kirana Pasal</span><span class="pill">2083/07/10</span><span class="sp"></span><a href="#">← Back to ERP</a></div>
+    <div class="grid">
+      <div class="left">
+        <div class="search"><span>▮▯▮</span><span>sug</span><span class="ph">| scan barcode or type name / SKU</span></div>
+        <div class="results">
+          <div class="res on"><span>Sugar 1kg <small>· SKU SUG1 · 40 pcs</small></span><b>Rs 110</b></div>
+          <div class="res"><span>Sugar loose <small>· kg · 18.5 kg</small></span><b>Rs 105</b></div>
+          <div class="res"><span>Sugar cube box <small>· 6 pcs</small></span><b>Rs 180</b></div>
+        </div>
+        <div class="msg err">Not enough stock for "Real juice 1L": have 2 pcs, selling 3 pcs.</div>
+        <div class="msg warn">Sell serialized items from the Sales Invoice</div>
+        <div class="chips"><span><span class="kbd">↑↓</span> choose</span><span><span class="kbd">Enter</span> add</span><span>A scanned barcode adds instantly. Scanning again adds 1 more.</span></div>
+        <div class="tiles">
+          <div class="tile"><b>Wai Wai</b><small>Rs 25 · 340 left</small></div>
+          <div class="tile"><b>Coke 500ml</b><small>Rs 70 · 96 left</small></div>
+          <div class="tile"><b>Lays</b><small>Rs 50 · 58 left</small></div>
+          <div class="tile"><b>Rice loose</b><small>Rs 95/kg</small></div>
+        </div>
+        <p class="note">Optional favourites row for loose items without a barcode.</p>
+      </div>
+      <div class="right">
+        <div class="cart-h"><b>Current bill · 4 items</b><span class="minor"><span>Walk-in customer</span></span></div>
+        <div class="row"><div class="n">Wai Wai<small>Rs 25 × 4</small></div><div class="qty"><span>−</span><b>4</b><span>+</span></div><div class="amt">100.00</div><div class="x">×</div></div>
+        <div class="row"><div class="n">Coke 500ml<small>Rs 70 × 2</small></div><div class="qty"><span>−</span><b>2</b><span>+</span></div><div class="amt">140.00</div><div class="x">×</div></div>
+        <div class="row"><div class="n">Rice loose<small>Rs 95 × 1.5 kg</small></div><div class="qty"><span>−</span><b>1.5</b><span>+</span></div><div class="amt">142.50</div><div class="x">×</div></div>
+        <div class="row"><div class="n">Lays<small>Rs 50 × 1</small></div><div class="qty"><span>−</span><b>1</b><span>+</span></div><div class="amt">50.00</div><div class="x">×</div></div>
+        <div class="sum"><span>Items total</span><span>432.50</span></div>
+        <div class="sum"><span>Discount (Rs)</span><span>−12.50</span></div>
+        <div class="sum"><span>incl. VAT 13%</span><span>48.32</span></div>
+        <div class="total"><span>Total</span><span>Rs 420.00</span></div>
+        <div class="pay">
+          <div class="btn primary">Cash<small>F9</small></div>
+          <div class="btn">QR / eSewa<small>F8</small></div>
+          <div class="btn">Credit<small>F7</small></div>
+        </div>
+        <div class="minor"><span>Reprint last bill · F4</span><span>Last: SI-0390 · Rs 316.40</span></div>
+      </div>
+    </div>
+  </div>
+
+  <h2>2. Cash payment, then the receipt that prints</h2>
+  <div class="pair">
+    <div class="screen">
+      <div class="overlay">
+        <div class="modal">
+          <h3>Cash payment</h3>
+          <div class="sum" style="font-size:15px;color:var(--text)"><span>Total</span><b>Rs 420.00</b></div>
+          <div class="lbl" style="font-size:13px;color:var(--muted);margin:12px 0 4px">Tendered</div>
+          <div class="field">500</div>
+          <div class="quick"><span>Exact</span><span>500</span><span>1000</span></div>
+          <div class="change"><span>Change</span><span>Rs 80.00</span></div>
+          <div class="btn primary">Confirm and print <span class="kbd">Enter</span></div>
+        </div>
+      </div>
+    </div>
+    <div>
+      <div class="receipt">
+        <div class="c big">Bibek Kirana Pasal</div>
+        <div class="c">Kathmandu · 98XXXXXXXX</div>
+        <div class="c">PAN/VAT 123456789</div>
+        <hr>
+        <div class="l"><span>Bill: SI-0391</span><span>14:32</span></div>
+        <div>Date: 2083/07/10</div>
+        <hr>
+        <div>Wai Wai</div><div class="l"><span>  4 x 25.00</span><span>100.00</span></div>
+        <div>Coke 500ml</div><div class="l"><span>  2 x 70.00</span><span>140.00</span></div>
+        <div>Rice loose</div><div class="l"><span>  1.5 x 95.00</span><span>142.50</span></div>
+        <div>Lays</div><div class="l"><span>  1 x 50.00</span><span>50.00</span></div>
+        <hr>
+        <div class="l"><span>Taxable</span><span>371.68</span></div>
+        <div class="l"><span>VAT 13%</span><span>48.32</span></div>
+        <div class="l big"><span>TOTAL</span><span>420.00</span></div>
+        <hr>
+        <div class="l"><span>Paid: Cash</span><span>500.00</span></div>
+        <div class="l"><span>Change</span><span>80.00</span></div>
+        <hr>
+        <div class="c">Thank you, visit again</div>
+      </div>
+      <p class="note" style="text-align:center">80mm thermal receipt, printed automatically after every bill.</p>
+    </div>
+  </div>
+
+  <h2>3. Where it lives in the ERP: sidebar link and the new POS settings</h2>
+  <div class="screen" style="display:flex">
+    <div class="nav">
+      <div class="g">Overview</div><div>Dashboard</div>
+      <div class="g">Transactions</div>
+      <div class="new">POS counter <span class="kbd">F10</span></div>
+      <div>Sales Invoices</div><div>Purchase Bills</div><div>Receipts</div><div>Payments</div><div>Other vouchers</div>
+      <div class="g">Accounts and items</div><div>Items and stock</div>
+    </div>
+    <div class="settings" style="flex:1">
+      <b style="font-size:16px">Settings · POS</b>
+      <div class="lbl">QR payment ledger</div>
+      <div class="input"><span>eSewa – Bibek Kirana</span><span>▾</span></div>
+      <div class="hint">QR bills are posted to this ledger instead of Cash.</div>
+      <div class="lbl">Receipt footer</div>
+      <div class="input"><span>Thank you, visit again</span><span class="hint" style="margin:0">22/200</span></div>
+      <div class="lbl">Item barcode (already in Items → Edit item)</div>
+      <div class="input"><span>8901725121259</span><span class="hint" style="margin:0">scan into this field</span></div>
+      <div class="msg warn" style="margin-top:18px">Editing a POS QR bill from Sales Invoices shows: "POS QR bill. Cancel it and re-ring it at the POS."</div>
+    </div>
+  </div>
+</div>
+</body>
+</html>
