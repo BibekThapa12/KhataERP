@@ -554,6 +554,7 @@ export interface InvoiceEntryInput {
 interface InvoiceParams {
   party_account_id: string | null
   is_cash: boolean
+  settlement_account_id?: string | null
   items: InvoiceEntryInput[]
   vat_rate: number
   discount?: number
@@ -585,7 +586,7 @@ export function buildSalesVoucherData(p: InvoiceParams) {
   const vat_amount = round2(taxable * (p.vat_rate / 100))
   const total = round2(taxable + vat_amount)
   const lines: Omit<VoucherLine, 'id' | 'voucher_id'>[] = [
-    { account_id: p.is_cash ? sys(p.system_accounts, 'cash') : p.party_account_id!, debit: total, credit: 0 },
+    { account_id: p.is_cash ? (p.settlement_account_id || sys(p.system_accounts, 'cash')) : p.party_account_id!, debit: total, credit: 0 },
     { account_id: sys(p.system_accounts, 'sales'), debit: 0, credit: taxable },
   ]
   if (vat_amount > 0) lines.push({ account_id: sys(p.system_accounts, 'vat_payable'), debit: 0, credit: vat_amount })

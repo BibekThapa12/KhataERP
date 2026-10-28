@@ -15,6 +15,17 @@ describe('accounting engine integrity', () => {
     expect(validateBalanced(result.lines)).toMatchObject({ valid: true, total_debit: 214.7, total_credit: 214.7 })
   })
 
+  it('debits the settlement ledger for a QR sale', () => {
+    const data = buildSalesVoucherData({ party_account_id: null, is_cash: true, settlement_account_id: 'c:esewa', items: [{ item_id: 'i1', qty: 2, rate: 100 }], vat_rate: 13, system_accounts: accounts })
+    expect(data.lines[0]).toEqual({ account_id: 'c:esewa', debit: 226, credit: 0 })
+    expect(validateBalanced(data.lines as VoucherLine[]).valid).toBe(true)
+  })
+
+  it('still debits cash when no settlement ledger is given', () => {
+    const data = buildSalesVoucherData({ party_account_id: null, is_cash: true, items: [{ item_id: 'i1', qty: 1, rate: 100 }], vat_rate: 0, system_accounts: accounts })
+    expect(data.lines[0].account_id).toBe('c:cash')
+  })
+
   it('posts purchases, receipts, and payments as balanced journals', () => {
     const purchase = buildPurchaseVoucherData({ party_account_id: 'supplier', is_cash: false, items: [{ item_id: 'tea', qty: 3, rate: 50 }], vat_rate: 13, system_accounts: accounts })
     expect(validateBalanced(purchase.lines).valid).toBe(true)
